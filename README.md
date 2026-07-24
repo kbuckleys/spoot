@@ -68,18 +68,18 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>Alt+Return</kbd></td><td>Jump to main menu</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+Backspace</kbd></td><td>Back one level</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+Space</kbd></td><td>Exit to main menu</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+/</kbd></td><td>Search all</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+l</kbd></td><td>Liked tracks</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+q</kbd></td><td>Your queue</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+v</kbd></td><td>Volume</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+a</kbd></td><td>Album art of current track</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Alt+c</kbd></td><td>Jump to playing track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
-      <tr><td><kbd>Alt+s</kbd></td><td>Seek current track</td><td>List / Lyrics</td></tr>
-      <tr><td><kbd>Return</kbd></td><td>Select</td><td>Anywhere</td></tr>
-      <tr><td><kbd>Escape</kbd></td><td>Close</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + return</kbd></td><td>Jump to main menu</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + backspace</kbd></td><td>Back one level</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + space</kbd></td><td>Exit to main menu</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + /</kbd></td><td>Search all</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + l</kbd></td><td>Liked tracks</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + q</kbd></td><td>Your queue</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + v</kbd></td><td>Volume</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + a</kbd></td><td>Album art of current track</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + c</kbd></td><td>Jump to playing track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
+      <tr><td><kbd>alt + s</kbd></td><td>Seek current track</td><td>List / Lyrics</td></tr>
+      <tr><td><kbd>return</kbd></td><td>Select</td><td>Anywhere</td></tr>
+      <tr><td><kbd>escape</kbd></td><td>Close</td><td>Anywhere</td></tr>
     </tbody>
   </table>
 </body>
