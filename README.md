@@ -47,7 +47,7 @@ The script's first run will automatically take you to Spotify's authentication p
 - lua 5.4+
 - playerctl
 - curl
-- wl-clipboard
+- wl-clipboard OR xclip ```depending on your session```
 - notify-send
 - perl
 - pgrep
