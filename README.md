@@ -76,6 +76,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + q</kbd></td><td>Your queue</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + r</kbd></td><td>Recently Played</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + v</kbd></td><td>Volume</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + y</kbd></td><td>Current track's lyrics</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>Album art of current track</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + c</kbd></td><td>Jump to current track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
       <tr><td><kbd>alt + s</kbd></td><td>Seek current track</td><td>Anywhere</td></tr>
