@@ -76,7 +76,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + q</kbd></td><td>Your queue</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + v</kbd></td><td>Volume</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>Album art of current track</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + c</kbd></td><td>Jump to playing track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
+      <tr><td><kbd>alt + c</kbd></td><td>Jump to current track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
       <tr><td><kbd>alt + s</kbd></td><td>Seek current track</td><td>Anywhere</td></tr>
       <tr><td><kbd>return</kbd></td><td>Select</td><td>Anywhere</td></tr>
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Anywhere</td></tr>
@@ -84,7 +84,3 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
   </table>
 </body>
 </html>
-
-
-> [!NOTE]
-> Made For You is a dedicated place for your own followed Spotify's curated playlists. if it's empty, it's because you didn't add any of these lists.
