@@ -74,6 +74,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + /</kbd></td><td>Search all</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + l</kbd></td><td>Liked tracks</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + q</kbd></td><td>Your queue</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + r</kbd></td><td>Recently Played</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + v</kbd></td><td>Volume</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>Album art of current track</td><td>Anywhere</td></tr>
       <tr><td><kbd>alt + c</kbd></td><td>Jump to current track / Jump to current lyric line</td><td>List / Lyrics</td></tr>
@@ -84,3 +85,6 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
   </table>
 </body>
 </html>
+
+> [~NOTE]
+> Recently Played is purely local. The live counterpart seems to suffer issues through Spotify's Web API, even with the activity sharing setting enabled. May be revisited in future iterations.
