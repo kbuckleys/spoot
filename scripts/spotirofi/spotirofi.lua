@@ -68,7 +68,11 @@ local function shell_quote(s)
 end
 
 local function copy_to_clipboard(text)
-    os.execute("echo " .. shell_quote(text) .. " | wl-copy 2>/dev/null")
+    if os.getenv("WAYLAND_DISPLAY") then
+        os.execute("echo " .. shell_quote(text) .. " | wl-copy 2>/dev/null")
+    else
+        os.execute("echo " .. shell_quote(text) .. " | xclip -selection clipboard 2>/dev/null")
+    end
 end
 
 local function url_encode(s)
