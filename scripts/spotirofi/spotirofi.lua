@@ -28,7 +28,6 @@ local THEME_LYR  = DIR .. "/lyrics.rasi"
 local THEME_MSG  = DIR .. "/message.rasi"
 local THEME_SUB  = DIR .. "/sub.rasi"
 local THEME_BINDS = DIR .. "/binds.rasi"
-local THEME_ART   = DIR .. "/art.rasi"
 
 local MAX_RESULTS = 20
 local CACHE_TTL  = 43200
@@ -37,10 +36,8 @@ local WEEKLY_ID   = "37i9dQZEVXcQHbTJZxVQMH"
 local RADAR_ID    = "37i9dQZEVXbxxd7f2YoHEu"
 local FRIDAY_ID   = "37i9dQZF1DWXJfnUiYjUKT"
 local EXIT_BACK, EXIT_MAIN, EXIT_SEARCH = 10, 11, 12
-local EXIT_JUMP, EXIT_JUMP_KP = 13, 14
-local EXIT_LIKED, EXIT_QUEUE, EXIT_VOLUME = 15, 16, 17
-local EXIT_TRACK, EXIT_SEEK, EXIT_ART = 18, 19, 20
-local EXIT_RECENT = 21
+local EXIT_JUMP, EXIT_JUMP_KP, EXIT_LIKED, EXIT_QUEUE, EXIT_VOLUME = 13, 14, 15, 16, 17
+local EXIT_TRACK, EXIT_SEEK, EXIT_ART, EXIT_RECENT, EXIT_LYRICS = 18, 19, 20, 21, 22
 local SEP = " \u{F01D8} "
 local ICON_PREFIX = {
     tracks    = "\u{F0387} ",
@@ -50,13 +47,8 @@ local ICON_PREFIX = {
 }
 local liked = {}  -- set of liked track IDs
 
-local current_track = nil
-local current_id    = nil
-local previous_id   = nil
-local is_playing    = false
-local is_shuffle    = false
-local repeat_state  = "off"
-local last_playback = 0
+local current_track, current_id, previous_id, last_playback = nil, nil, nil, 0
+local is_playing, is_shuffle, repeat_state = false, false, "off"
 
 local json = require("cjson")
 
@@ -267,13 +259,9 @@ end
 
 local search_pending  = false
 local main_pending    = false
-local liked_pending   = false
-local queue_pending   = false
-local volume_pending  = false
-local seek_pending    = false
-local jump_to_track_pending = false
-local recent_pending  = false
-local pending_message = nil
+local liked_pending, queue_pending, volume_pending = false, false, false
+local seek_pending, jump_to_track_pending = false, false
+local recent_pending, pending_message = false, nil
 local view_actions, view_artist, view_lyrics, view_add_pl, view_art
 local browse_album, view_browse
 local get_playback
@@ -302,7 +290,8 @@ local function rofi_dmenu(entries, opts)
                       "-kb-custom-9","Alt+c",
                       "-kb-custom-10","Alt+s",
                       "-kb-custom-11","Alt+a",
-                      "-kb-custom-12","Alt+r"}
+                      "-kb-custom-12","Alt+r",
+                      "-kb-custom-13","Alt+y"}
         if opts.custom == false then args[#args+1] = "-no-custom" end
         if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
         if by_index then args[#args+1] = "-format"; args[#args+1] = "i" end
@@ -346,6 +335,12 @@ local function rofi_dmenu(entries, opts)
             else rofi_message("No track playing") end
             return nil
         elseif exit_code == EXIT_RECENT then recent_pending = true; return nil
+        elseif exit_code == EXIT_LYRICS then
+            last_playback = 0
+            get_playback()
+            if current_track then view_lyrics(current_track)
+            else rofi_message("No track playing") end
+            return nil
         elseif exit_code == EXIT_JUMP or exit_code == EXIT_JUMP_KP then
             last_playback = 0
             get_playback()
@@ -1419,7 +1414,7 @@ view_art = function(item)
         ef:write("\0icon\x1f" .. art_path .. "\n")
         ef:close()
     end
-    os.execute("rofi -dmenu -theme " .. shell_quote(THEME_ART)
+    os.execute("rofi -dmenu -theme " .. shell_quote(DIR .. "/art.rasi")
         .. " -mesg " .. shell_quote(mesg)
         .. " -markup-rows -no-custom"
         .. " < " .. shell_quote(entry_tf)
@@ -2168,7 +2163,7 @@ local function view_system()
         if not sel then break end
         local clean = sel:gsub("<[^>]+>", "")
         if clean == "Keybinds" then
-            rofi_message("<b>Alt+Return      </b> Jump to main menu\n<b>Alt+Backspace   </b> Back one level\n<b>Alt+Space       </b> Exit to main menu\n<b>Alt+/           </b> Search all\n<b>Alt+l           </b> Liked tracks\n<b>Alt+q           </b> Your queue\n<b>Alt+r           </b> Recently played\n<b>Alt+v           </b> Volume\n<b>Alt+a           </b> Album art of current track\n<b>Alt+c           </b> Jump to playing track (list)\n                 Jump to current lyric line (lyrics)\n<b>Alt+s           </b> Seek current track\n<b>Return          </b> Select\n<b>Escape          </b> Close", THEME_BINDS)
+            rofi_message("<b>Alt+Return      </b> Jump to main menu\n<b>Alt+Backspace   </b> Back one level\n<b>Alt+Space       </b> Exit to main menu\n<b>Alt+/           </b> Search all\n<b>Alt+l           </b> Liked tracks\n<b>Alt+q           </b> Your queue\n<b>Alt+r           </b> Recently played\n<b>Alt+v           </b> Volume\n<b>Alt+a           </b> Album art of current track\n<b>Alt+y           </b> Lyrics of current track\n<b>Alt+c           </b> Jump to playing track (list)\n                 Jump to current lyric line (lyrics)\n<b>Alt+s           </b> Seek current track\n<b>Return          </b> Select\n<b>Escape          </b> Close", THEME_BINDS)
         elseif clean:match("^Volume") then
             view_volume()
             cur_vol = get_playerctl_volume()
