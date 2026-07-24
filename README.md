@@ -86,5 +86,5 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
 </body>
 </html>
 
-> [~NOTE]
-> Recently Played is purely local. The live counterpart seems to suffer issues through Spotify's Web API, even with the activity sharing setting enabled. May be revisited in future iterations.
+> [!NOTE]
+> Recently Played is purely local. The live counterpart seems to suffer issues through Spotify's Web API, even with the activity sharing setting enabled. May be revisited in future iterations but it's highly unlikely.
