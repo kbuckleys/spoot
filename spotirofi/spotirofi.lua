@@ -4,7 +4,6 @@
 -- ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
 -- └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
 -- https://github.com/kbuckleys/
--- spotirofi v3 — rofi interface for spotifyd
 
 local P = {
     home      = os.getenv("HOME"),
