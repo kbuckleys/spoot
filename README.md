@@ -31,13 +31,10 @@ But as spotirofi's development pressed on, it became mature enough to be its own
 
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
----
- 
-The script's first run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, it will notify you that it's building cache and will automatically run the daemons and display the main menu, at that point you can start using the rofi interface right away.
-
 # Functionality
+- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spotirofi will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away.
+- Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client/connect device. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this feature.
 - Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels.
-- Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this feature.
 
 # Dependencies
 - Spotify Premium
