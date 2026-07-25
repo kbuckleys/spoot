@@ -7,7 +7,7 @@
 -- spotirofi v3 — rofi interface for spotifyd
 
 local HOME       = os.getenv("HOME")
-local DIR        = HOME .. "/.config/rofi/scripts/spotirofi"
+local DIR        = debug.getinfo(1, "S").source:match("^@(.*/)")
 local CACHE      = HOME .. "/.cache/spotirofi"
 local MASS_DIR   = CACHE .. "/mass"
 local LYRICS_DIR = CACHE .. "/lyrics"
@@ -2233,7 +2233,7 @@ local function view_system()
             inv_playback()
             os.execute("spotifyd --no-daemon --device-name spotirofi --backend pulseaudio --use-mpris --initial-volume " .. get_saved_volume() .. " --bitrate " .. get_saved_bitrate() .. " > /dev/null 2>&1 &")
             os.execute("sleep 3")
-            os.execute(HOME .. "/.config/rofi/scripts/spotirofi/spotirofi.lua --daemon &")
+            os.execute("lua " .. DIR .. "/spotirofi.lua --daemon &")
         elseif clean == "Kill Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null")
             os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
@@ -2405,7 +2405,7 @@ local function main()
         daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
     end
     if not daemon_alive then
-        os.execute(HOME .. "/.config/rofi/scripts/spotirofi/spotirofi.lua --daemon &")
+        os.execute("lua " .. DIR .. "/spotirofi.lua --daemon &")
     end
 
     local rate_cool = read_file("/tmp/spotirofi_rate_cooldown")

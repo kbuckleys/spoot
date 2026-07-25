@@ -7,8 +7,8 @@
 @import "ZENON"
 
 configuration {
-    kb-remove-char-back: "BackSpace";
-    kb-remove-to-sol: "";
+    kb-remove-to-sol: "BackSpace";
+    kb-remove-char-back: "";
 }
 
 window {
