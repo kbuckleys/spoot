@@ -28,10 +28,10 @@ But most importantly, a music player should pretty much know its place. It's not
 - Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels.
 
 # Limitations:
-Third-party Spotify clients are inherently bound to what Spotify's Web API allows, and spotirofi is no exception.
+Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spotirofi is no exception.
 - Remove from queue (Spotify Web API limitation)
   > Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
-  > - It adds complexity and relative blaot for what it's supposed to do.
+  > - It adds complexity and relative bloat for what it's supposed to do.
   > - Local implementation inherently means zero sync with other Spotify clients/connect devices if you use any.
 - Podcast management
   > Not that spotirofi can't do it, I simply didn't implement support for it, for two primary reasons;
