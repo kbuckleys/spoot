@@ -54,8 +54,8 @@ The script's first run will automatically take you to Spotify's authentication p
 - A nerd font
 
 # Installation
-- Drop both directories in ```~/.config/rofi/``` and assign a keybind for ```spotirofi.lua``` in your compositor's config
-- chmod +x ```spotirofi.lua``` to make it executable
+- Drop the ```scripts``` dir in ```~/.config/rofi/``` and assign a keybind for ```spotirofi.lua``` in your compositor's config
+- chmod ```spotirofi.lua``` to make it executable
 - Run ```spotirofi.lua``` and enjoy
 
 # Controls
