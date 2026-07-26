@@ -39,7 +39,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
   > - This may sound subjective, but it's a relatively niche medium to cover.
 
 # Dependencies
-- Spotify Premium
+- Spotify Premium ```no way around it```
 - spotifyd
 - rofi
 - cjson
@@ -50,7 +50,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - notify-send
 - perl
 - pgrep
-- A nerd font
+- A nerd font ```without one, icons will appear as artifacts```
 
 # Installation
 - Drop the ```spotirofi``` directory anywhere inside ```~/.config/rofi/``` and assign a keybind pointing to ```spotirofi.lua``` in your compositor's config
