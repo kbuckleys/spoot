@@ -50,7 +50,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - notify-send
 - perl
 - pgrep
-- A nerd font ```without one, icons will appear as artifacts```
+- A nerd font ```without one, icons will appear artifacted```
 
 # Installation
 - Drop the ```spotirofi``` directory anywhere inside ```~/.config/rofi/``` and assign a keybind pointing to ```spotirofi.lua``` in your compositor's config
