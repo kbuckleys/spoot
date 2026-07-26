@@ -67,22 +67,22 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>alt + return</kbd></td><td>Jump to current track's Action Menu</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + backspace</kbd></td><td>Back one level</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + /</kbd></td><td>Search all</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + q</kbd></td><td>Jump to Queue List</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + v</kbd></td><td>Jump to Volume</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + y</kbd></td><td>Jump to current track's lyrics</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + a</kbd></td><td>View albumart of current track</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + backspace</kbd></td><td>Back one level</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + /</kbd></td><td>Search all</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + q</kbd></td><td>Jump to Queue List</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + v</kbd></td><td>Jump to Volume</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + y</kbd></td><td>Jump to current track's lyrics</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + a</kbd></td><td>View albumart of current track</td><td>Universal</td></tr>
       <tr><td><kbd>alt + c</kbd></td><td>Jump to current track in list / Jump to current lyric line</td><td>List / Lyrics</td></tr>
-      <tr><td><kbd>alt + r</kbd></td><td>Cycle through Repeat states</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + s</kbd></td><td>Toggle Shuffle</td><td>Anywhere</td></tr>
-      <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Anywhere</td></tr>
-      <tr><td><kbd>return</kbd></td><td>Select</td><td>Anywhere</td></tr>
-      <tr><td><kbd>escape</kbd></td><td>Close</td><td>Anywhere</td></tr>
+      <tr><td><kbd>alt + r</kbd></td><td>Cycle through Repeat states</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + s</kbd></td><td>Toggle Shuffle</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
+      <tr><td><kbd>return</kbd></td><td>Select</td><td>Universal</td></tr>
+      <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
     </tbody>
   </table>
 </body>
