@@ -4,7 +4,7 @@
 </picture>
 
 <h3><p align="center">
-A launcher for your tunes!</b> An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface
+A launcher for your tunes!</b> An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface powered by <a href="https://github.com/Spotifyd/spotifyd">spotifyd</a>
 <br>
 Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 </p></h3>
