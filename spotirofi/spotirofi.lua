@@ -1275,6 +1275,7 @@ local function recover_playback(direction)
     local r = shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/me/player/play%s' -H %s -H 'Content-Type: application/json' -d %s", dparam, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
     if r and r:match("2..") then
         queue_idx = new_idx
+        flush_queue()
         last_playback = 0; get_playback()
         return true
     end
@@ -1568,9 +1569,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id)
                 entries = format_entries(items)
                 pre_sel = idx - 1
             elseif st == "albums" then
-                local action = rofi_dmenu({"Open Album", "Save Album"}, {prompt=item.name or "Album", mesg=artist_names(item), custom=false, theme=THEME_SUB})
+                local action = rofi_dmenu({"Open Album", "Save Album", "Copy URL"}, {prompt=item.name or "Album", mesg=artist_names(item), custom=false, theme=THEME_SUB})
                 if action == "Save Album" then
                     rofi_message(do_save_album(item.id) and "Album saved" or "Failed to save album")
+                elseif action == "Copy URL" then
+                    copy_spotify_url("album", item.id)
+                    rofi_message("Copied URL")
                 elseif action == "Open Album" then
                     if browse_album(item.id, (item.name or "Unknown") .. SEP .. artist_names(item)) then
                         if seek_pending then return end
@@ -1645,16 +1649,14 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id)
             entries[idx] = display_artist(item)
         elseif is_playlist_list then
             local do_open = true
-            if ctx == "search-playlist" then
-                local action = rofi_dmenu({"Open Playlist", "Save Playlist", "Copy URL"}, {prompt=display_playlist(item), mesg=artist_names(item), custom=false, theme=THEME_SUB})
-                if action == "Save Playlist" then
-                    rofi_message(do_save_playlist(item.id) and "Playlist saved" or "Failed to save playlist")
-                    do_open = false
-                elseif action == "Copy URL" then
-                    copy_spotify_url("playlist", item.id)
-                    rofi_message("Copied URL")
-                    do_open = false
-                end
+            local action = rofi_dmenu({"Open Playlist", "Save Playlist", "Copy URL"}, {prompt=display_playlist(item), mesg=artist_names(item), custom=false, theme=THEME_SUB})
+            if action == "Save Playlist" then
+                rofi_message(do_save_playlist(item.id) and "Playlist saved" or "Failed to save playlist")
+                do_open = false
+            elseif action == "Copy URL" then
+                copy_spotify_url("playlist", item.id)
+                rofi_message("Copied URL")
+                do_open = false
             end
             if do_open then
                 local tracks = api_get_playlist_tracks(item.id)
@@ -1789,7 +1791,15 @@ view_actions = function(item, ctx, ctx_type, ctx_id, all_items, cidx, entries)
         elseif sel == "Go to Album" then
             local album = item.album
             if album and album.id then
-                browse_album(album.id, album.name .. SEP .. artist_names(album))
+                local action = rofi_dmenu({"Open Album", "Save Album", "Copy URL"}, {prompt=album.name or "Album", mesg=artist_names(album), custom=false, theme=THEME_SUB})
+                if action == "Save Album" then
+                    rofi_message(do_save_album(album.id) and "Album saved" or "Failed to save album")
+                elseif action == "Copy URL" then
+                    copy_spotify_url("album", album.id)
+                    rofi_message("Copied URL")
+                elseif action == "Open Album" or not action then
+                    browse_album(album.id, album.name .. SEP .. artist_names(album))
+                end
             end
         elseif sel == "Go to Artist" then
             if item.artists and #item.artists > 0 then view_artist(item.artists[1]) end
@@ -1911,7 +1921,8 @@ view_artist = function(artist)
     local is_followed = api_check_following(artist.id)
     local actions = {"View All Albums", "View Liked Tracks", "View Top Tracks",
                      "Related Artists",
-                     is_followed and "Unfollow Artist" or "Follow Artist"}
+                     is_followed and "Unfollow Artist" or "Follow Artist",
+                     "Copy URL"}
 
     while true do
         local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=(artist.name or "") .. SEP .. "Artist Options", sel=0, custom=false, use_menu=true})
@@ -1929,8 +1940,17 @@ view_artist = function(artist)
                     local aidx = rofi_dmenu(ae, {prompt=artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true})
                     if not aidx then if seek_pending or jump_to_track_pending then session_pop() end; break end
                     if aidx >= 1 and aidx <= #items then
-                        if browse_album(items[aidx].id, (items[aidx].name or "Unknown") .. SEP .. artist_names(items[aidx])) then
-                            if seek_pending then return end
+                        local al = items[aidx]
+                        local action = rofi_dmenu({"Open Album", "Save Album", "Copy URL"}, {prompt=al.name or "Album", mesg=artist_names(al), custom=false, theme=THEME_SUB})
+                        if action == "Save Album" then
+                            rofi_message(do_save_album(al.id) and "Album saved" or "Failed to save album")
+                        elseif action == "Copy URL" then
+                            copy_spotify_url("album", al.id)
+                            rofi_message("Copied URL")
+                        elseif action == "Open Album" or not action then
+                            if browse_album(al.id, (al.name or "Unknown") .. SEP .. artist_names(al)) then
+                                if seek_pending then return end
+                            end
                         end
                     end
                 end
@@ -1969,6 +1989,9 @@ view_artist = function(artist)
             else
                 rofi_message("Failed to " .. (sel == "Follow Artist" and "follow" or "unfollow") .. " artist")
             end
+        elseif sel == "Copy URL" then
+            copy_spotify_url("artist", artist.id)
+            rofi_message("Copied URL")
         end
     end
 end
@@ -2132,7 +2155,7 @@ local function view_playlists()
         elseif idx >= 2 and idx - 1 <= #pls then
             local pl = pls[idx - 1]
             session_push({view="playlist-actions", playlist_id=pl.id, playlist_name=pl.name or "Playlist"})
-            local acts = {"Open Playlist", "Rename Playlist", "Delete Playlist"}
+            local acts = {"Open Playlist", "Rename Playlist", "Delete Playlist", "Copy URL"}
             ::pl_act::
             local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), sel=0, custom=false, use_menu=true})
             if not asel then
@@ -2177,6 +2200,10 @@ local function view_playlists()
                         break
                     else rofi_message("Failed to delete") end
                 end
+                goto pl_act
+            elseif asel == "Copy URL" then
+                copy_spotify_url("playlist", pl.id)
+                rofi_message("Copied URL")
                 goto pl_act
             end
         end
@@ -2296,8 +2323,17 @@ local function view_new_releases()
             return
         end
         if idx >= 1 and idx <= #albums then
-            if browse_album(albums[idx].id, albums[idx].name .. SEP .. artist_names(albums[idx])) then
-                if seek_pending then return end
+            local al = albums[idx]
+            local action = rofi_dmenu({"Open Album", "Save Album", "Copy URL"}, {prompt=al.name or "Album", mesg=artist_names(al), custom=false, theme=THEME_SUB})
+            if action == "Save Album" then
+                rofi_message(do_save_album(al.id) and "Album saved" or "Failed to save album")
+            elseif action == "Copy URL" then
+                copy_spotify_url("album", al.id)
+                rofi_message("Copied URL")
+            elseif action == "Open Album" or not action then
+                if browse_album(al.id, al.name .. SEP .. artist_names(al)) then
+                    if seek_pending then return end
+                end
             end
         end
     end
@@ -2316,12 +2352,21 @@ local function view_made_for_you()
             return
         end
         if idx >= 1 and idx <= #playlists then
-            local tracks = api_get_playlist_tracks(playlists[idx].id)
-            if tracks and #tracks > 0 then
-                session_push({view="playlist", playlist_id=playlists[idx].id})
-                local te = format_entries(tracks)
-                view_browse(te, tracks, playlists[idx].name .. SEP .. #tracks .. " tracks", "playlist", "playlist", playlists[idx].id)
-                if seek_pending or jump_to_track_pending then session_pop(); return end
+            local pl = playlists[idx]
+            local action = rofi_dmenu({"Open Playlist", "Save Playlist", "Copy URL"}, {prompt=display_playlist(pl), mesg=artist_names(pl), custom=false, theme=THEME_SUB})
+            if action == "Save Playlist" then
+                rofi_message(do_save_playlist(pl.id) and "Playlist saved" or "Failed to save playlist")
+            elseif action == "Copy URL" then
+                copy_spotify_url("playlist", pl.id)
+                rofi_message("Copied URL")
+            elseif action == "Open Playlist" or not action then
+                local tracks = api_get_playlist_tracks(pl.id)
+                if tracks and #tracks > 0 then
+                    session_push({view="playlist", playlist_id=pl.id})
+                    local te = format_entries(tracks)
+                    view_browse(te, tracks, pl.name .. SEP .. #tracks .. " tracks", "playlist", "playlist", pl.id)
+                    if seek_pending or jump_to_track_pending then session_pop(); return end
+                end
             end
         end
     end
@@ -2423,11 +2468,15 @@ local function view_playback()
             if r == true or r == 0 then is_playing = true else rofi_message("Failed to resume") end
         elseif si == "Next Track" then
             local r = do_playback_cmd("next")
-            if r and r:match("2..") then last_playback = 0; get_playback()
+            if r and r:match("2..") then
+                last_playback = 0; get_playback()
+                if queue_idx < #queue_tracks then queue_idx = queue_idx + 1 end
             elseif not recover_playback(1) then rofi_message("Failed to skip") end
         elseif si == "Previous Track" then
             local r = do_playback_cmd("previous")
-            if r and r:match("2..") then last_playback = 0; get_playback()
+            if r and r:match("2..") then
+                last_playback = 0; get_playback()
+                if queue_idx > 1 then queue_idx = queue_idx - 1 end
             elseif not recover_playback(-1) then rofi_message("Failed to go back") end
         elseif si:find("^Shuffle") then
             local token = get_token()
@@ -2568,8 +2617,17 @@ local function replay_session()
                     local aidx = rofi_dmenu(ae, {prompt=s.artist_name or "", mesg=mesg, custom=false, by_index=true, use_menu=true})
                     if not aidx then break end
                     if aidx >= 1 and aidx <= #items then
-                        if browse_album(items[aidx].id, (items[aidx].name or "Unknown") .. SEP .. artist_names(items[aidx])) then
-                            if seek_pending then return end
+                        local al = items[aidx]
+                        local action = rofi_dmenu({"Open Album", "Save Album", "Copy URL"}, {prompt=al.name or "Album", mesg=artist_names(al), custom=false, theme=THEME_SUB})
+                        if action == "Save Album" then
+                            rofi_message(do_save_album(al.id) and "Album saved" or "Failed to save album")
+                        elseif action == "Copy URL" then
+                            copy_spotify_url("album", al.id)
+                            rofi_message("Copied URL")
+                        elseif action == "Open Album" or not action then
+                            if browse_album(al.id, (al.name or "Unknown") .. SEP .. artist_names(al)) then
+                                if seek_pending then return end
+                            end
                         end
                     end
                 end
@@ -2618,7 +2676,7 @@ local function replay_session()
             local token = get_token()
             if not token then goto rnext end
             local pl = {id=s.playlist_id, name=s.playlist_name or "Playlist"}
-            local acts = {"Open Playlist", "Rename Playlist", "Delete Playlist"}
+            local acts = {"Open Playlist", "Rename Playlist", "Delete Playlist", "Copy URL"}
             while true do
             ::rp_act::
             local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), sel=0, custom=false, use_menu=true})
@@ -2644,6 +2702,10 @@ local function replay_session()
                     if r and r:match("2..") then bust_my_playlists(); disk_bust(P.mass .. "/playlist_tracks_" .. pl.id .. ".json"); mem_bust("playlist_tracks_" .. pl.id); rofi_message("Deleted"); break
                     else rofi_message("Failed to delete") end
                 end
+                goto rp_act
+            elseif asel == "Copy URL" then
+                copy_spotify_url("playlist", pl.id)
+                rofi_message("Copied URL")
                 goto rp_act
             end
             end
