@@ -52,6 +52,7 @@ local current_track, current_id, previous_id, last_playback = nil, nil, nil, 0
 local is_playing, is_shuffle, repeat_state = false, false, "off"
 local _local_toggle_time = 0
 local _action_theme_tmpl = nil
+local _recovering = false
 
 local json = require("cjson")
 
@@ -989,6 +990,12 @@ get_playback = function()
     last_playback = os.time()
     local d = api_get("me/player")
     if not d or not d.item then
+        if not _recovering and queue_tracks and #queue_tracks > 0 then
+            _recovering = true
+            local ok = recover_playback(0, true)
+            _recovering = false
+            if ok then return end
+        end
         inv_playback()
         return
     end
@@ -1311,14 +1318,15 @@ local function do_playback_cmd(cmd)
     return r
 end
 
-local function recover_playback(direction)
+local function recover_playback(direction, force)
     if not queue_tracks or #queue_tracks == 0 then return false end
     local new_idx = queue_idx + direction
     if new_idx < 1 then new_idx = 1 end
     if new_idx > #queue_tracks then new_idx = #queue_tracks end
-    if new_idx == queue_idx then return false end
+    if not force and new_idx == queue_idx then return false end
     local token = get_token()
     if not token then return false end
+    mem_bust("spotifyd_device")
     local device_id = get_spotifyd_device()
     local dparam = device_id and "?device_id=" .. device_id or ""
     local body
@@ -2746,7 +2754,6 @@ local function replay_session()
         ::rnext::
         s = session_peek()
     end
-    inv_playback()
 end
 
 -- MAIN
