@@ -1780,25 +1780,6 @@ view_actions = function(item, ctx, ctx_type, ctx_id, all_items, cidx, entries)
     local is_liked = liked[item.id]
     local in_pl    = ctx_type == "playlist" and ctx_id
 
-        local art_url = item.album and item.album.images and #item.album.images > 0
-        and item.album.images[1].url or nil
-    local art_path = ensure_art(art_url) or ""
-    local tmp_theme = os.tmpname() .. ".rasi"
-    local tf = io.open(tmp_theme, "w")
-    if tf then
-        if not _action_theme_tmpl then
-            local raw = read_file(P.dir .. "/style/action.rasi") or ""
-            _action_theme_tmpl = raw:gsub('@import "ZENON"', '@import "' .. P.dir .. '/style/ZENON"')
-        end
-        local rasi_content = _action_theme_tmpl:gsub("%%s", art_path)
-        if art_path == "" then
-            rasi_content = rasi_content:gsub("background%-image:%s*url%(\"\",%s*both%);", "")
-        end
-        tf:write(rasi_content)
-        tf:close()
-    end
-    local action_theme = tmp_theme
-
     local play_label = item.id == current_id and (is_playing and "Pause" or "Resume") or "Play"
     local actions = {play_label}
     actions[#actions+1] = "Seek"
@@ -1815,6 +1796,24 @@ view_actions = function(item, ctx, ctx_type, ctx_id, all_items, cidx, entries)
     actions[#actions+1] = "Album Art"
 
     while true do
+        local art_url = item.album and item.album.images and #item.album.images > 0
+            and item.album.images[1].url or nil
+        local art_path = ensure_art(art_url) or ""
+        local tmp_theme = P.cache .. "/action_theme.rasi"
+        local tf = io.open(tmp_theme, "w")
+        if tf then
+            if not _action_theme_tmpl then
+                local raw = read_file(P.dir .. "/style/action.rasi") or ""
+                _action_theme_tmpl = raw:gsub('@import "ZENON"', '@import "' .. P.dir .. '/style/ZENON"')
+            end
+            local rasi_content = _action_theme_tmpl:gsub("%%s", art_path)
+            if art_path == "" then
+                rasi_content = rasi_content:gsub("background%-image:%s*url%(\"\",%s*both%);", "")
+            end
+            tf:write(rasi_content)
+            tf:close()
+        end
+        local action_theme = tmp_theme
         actions[2] = item.id == current_id and "Seek" or '<span color="#6a707f">Seek</span>'
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=track_mesg(item), sel=0, custom=false, theme=action_theme, markup=true})
