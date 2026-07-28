@@ -54,5 +54,6 @@ element-text selected {
 
 message {
     background-color: #20242a;
-    padding: 4px;
+    padding: 5px;
+    margin: -1px;
 }

@@ -13,7 +13,7 @@ configuration {
 window {
     location: center;
     anchor: center;
-    width: 640px;
+    width: 644px;
 }
 
 mainbox {
@@ -28,7 +28,8 @@ textbox {
 
 message {
     background-color: #20242a;
-    padding: 4px;
+    padding: 5px;
+    margin: -2px;
 }
 
 inputbar {
