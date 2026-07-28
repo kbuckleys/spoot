@@ -4,7 +4,7 @@
 </picture>
 
 <h3><p align="center">
-A launcher for your tunes!</b> An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface powered by <a href="https://github.com/Spotifyd/spotifyd">spotifyd</a>
+A keyboard-centric Spotify client</b> --  An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface powered by <a href="https://github.com/Spotifyd/spotifyd">spotifyd</a>
 <br>
 Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 </p></h3>
@@ -13,7 +13,7 @@ Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 
 https://github.com/user-attachments/assets/f0d46590-c18e-4a06-9ac5-4488df955887
 
-This is a full-fledged, standalone Spotify client in a single Lua file (yes, you read that correctly), almost everything you can do in the official Spotify client can be done from within this interface. It's meant to be a quick and convenient way to manage your listening on the fly, much like a program launcher, except for your music.
+This is a full-fledged, standalone Spotify client in a single Lua file (yes, you read that correctly), almost everything you can do in the official Spotify client can be done from within this interface. It's meant to be a quick and convenient way to manage your listening on the fly, much like a program launcher, except for your tunes.
 
 # The philosophy behind spotirofi
 Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spotirofi was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. Spotirofi was meant to bridge that gap, think of it as a remote control for your stereo system.
