@@ -1,7 +1,7 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/cfedabca-5deb-4834-845f-44aaca207619">
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/b9685bb8-e951-492a-bdbc-75367c8a6045">
   <img src="image-light.png" alt="">
-</picture>
+</picture></p>
 
 <h3><p align="center">
 A keyboard-centric Spotify client</b> --  An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface powered by <a href="https://github.com/Spotifyd/spotifyd">spotifyd</a>
