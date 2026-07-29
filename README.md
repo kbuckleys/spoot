@@ -53,7 +53,8 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - A nerd font ```without one, icons will appear artifacted```
 
 # How to use
-Place the spotirofi directory wherever you want, it doesn't need to be in your rofi's config directory. In fact, you don't even need to configure rofi nor spotifyd, all you have to do is make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config. Really, that's it. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files.
+Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config.
+> Really, that's it. No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files.
 
 # Controls
 Given the scope, you can be easily multiple levels deep as you navigate through menus, so it was important to set some keybinds in place for convenience and faster -hopefully organic- interactions.
