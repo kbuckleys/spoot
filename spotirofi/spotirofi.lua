@@ -517,6 +517,7 @@ get_token = function()
                     if rd.refresh_token then data.refresh_token = rd.refresh_token end
                     data.expires_at = os.time() + (rd.expires_in or 3600) - 60
                     write_file(P.token, json.encode(data))
+                    os.execute("chmod 600 " .. shell_quote(P.token) .. " 2>/dev/null")
                     local ttl = math.max(data.expires_at - os.time() - 120, 60)
                     mem_set("token", data.access_token, ttl)
                     return data.access_token
@@ -892,7 +893,7 @@ local function load_saved_albums()
     local cached = mem_get("saved_albums")
     if cached then return cached end
     local c = safe_decode(read_file(P.albums))
-    if c and c.items and type(c.items) == "table" and #c.items > 0 then
+    if c and c.items and type(c.items) == "table" then
         if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
             mem_set("saved_albums", c.items, P.ttl)
             return c.items
@@ -910,9 +911,7 @@ local function load_saved_albums()
         offset = offset + 50
     end
     table.sort(items, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
-    if #items > 0 then
-        write_file(P.albums, json.encode({fetched_at=os.time(), items=items}))
-    end
+    write_file(P.albums, json.encode({fetched_at=os.time(), items=items}))
     mem_set("saved_albums", items, P.ttl)
     return items
 end
@@ -921,7 +920,7 @@ local function load_followed_artists()
     local cached = mem_get("followed_artists")
     if cached then return cached end
     local c = safe_decode(read_file(P.artists))
-    if c and c.items and type(c.items) == "table" and #c.items > 0 then
+    if c and c.items and type(c.items) == "table" then
         if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
             mem_set("followed_artists", c.items, P.ttl)
             return c.items
@@ -939,9 +938,7 @@ local function load_followed_artists()
         after = d.artists.cursors and d.artists.cursors.after
     end
     table.sort(items, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
-    if #items > 0 then
-        write_file(P.artists, json.encode({fetched_at=os.time(), items=items}))
-    end
+    write_file(P.artists, json.encode({fetched_at=os.time(), items=items}))
     mem_set("followed_artists", items, P.ttl)
     return items
 end
@@ -971,24 +968,18 @@ local function save_library_cache(tracks, albums, artists)
     if tracks then
         mem_set("liked_tracks", tracks, P.ttl)
         build_liked_artist_index(tracks)
-        if #tracks > 0 then
-            write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
-            local ids = {}
-            for _, t in ipairs(tracks) do if t.id then ids[#ids+1] = t.id end end
-            write_file(P.liked_ids, json.encode(ids))
-        end
+        write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
+        local ids = {}
+        for _, t in ipairs(tracks) do if t.id then ids[#ids+1] = t.id end end
+        write_file(P.liked_ids, json.encode(ids))
     end
     if albums then
         mem_set("saved_albums", albums, P.ttl)
-        if #albums > 0 then
-            write_file(P.albums, json.encode({fetched_at=os.time(), items=albums}))
-        end
+        write_file(P.albums, json.encode({fetched_at=os.time(), items=albums}))
     end
     if artists then
         mem_set("followed_artists", artists, P.ttl)
-        if #artists > 0 then
-            write_file(P.artists, json.encode({fetched_at=os.time(), items=artists}))
-        end
+        write_file(P.artists, json.encode({fetched_at=os.time(), items=artists}))
     end
 end
 
@@ -999,7 +990,7 @@ local function load_liked_tracks()
         return cached
     end
     local c = safe_decode(read_file(P.liked))
-    if c and c.tracks and type(c.tracks) == "table" and #c.tracks > 0 then
+    if c and c.tracks and type(c.tracks) == "table" then
         if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
             mem_set("liked_tracks", c.tracks, P.ttl)
             build_liked_artist_index(c.tracks)
@@ -1007,12 +998,10 @@ local function load_liked_tracks()
         end
     end
     local tracks = load_liked_tracks_full()
-    if #tracks > 0 then
-        write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
-        local ids = {}
-        for _, t in ipairs(tracks) do if t.id then ids[#ids+1] = t.id end end
-        write_file(P.liked_ids, json.encode(ids))
-    end
+    write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
+    local ids = {}
+    for _, t in ipairs(tracks) do if t.id then ids[#ids+1] = t.id end end
+    write_file(P.liked_ids, json.encode(ids))
     mem_set("liked_tracks", tracks, P.ttl)
     build_liked_artist_index(tracks)
     return tracks
@@ -1272,7 +1261,7 @@ local function do_play(item, ctx, ctx_type, ctx_id, all_items, idx)
         body = json.encode({uris={"spotify:track:" .. item.id}})
     end
     if body then
-        shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/me/player/play%s' -H %s -H 'Content-Type: application/json' -d %s", dparam, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+        shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X PUT %s -H %s -H 'Content-Type: application/json' -d %s", shell_quote("https://api.spotify.com/v1/me/player/play" .. dparam), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
     end
 end
 
@@ -1318,7 +1307,8 @@ local function do_like(item, unlike)
     local token = get_token()
     if not token then rofi_message("Cannot like: no token"); return false end
     local verb = unlike and "DELETE" or "PUT"
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -o /dev/null -X %s 'https://api.spotify.com/v1/me/tracks?ids=%s' -H %s", verb, item.id, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/me/tracks?ids=" .. item.id
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -o /dev/null -X %s %s -H %s", verb, shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     if not r or not r:match("2..") then
         rofi_message(unlike and "Failed to unlike" or "Failed to like")
         return false
@@ -1340,14 +1330,16 @@ local function do_follow_artist(artist_id, follow)
     local token = get_token()
     if not token then return false end
     local verb = follow and "PUT" or "DELETE"
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -o /dev/null -X %s 'https://api.spotify.com/v1/me/following?type=artist&ids=%s' -H %s -H 'Content-Length: 0'", verb, artist_id, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/me/following?type=artist&ids=" .. artist_id
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -o /dev/null -X %s %s -H %s -H 'Content-Length: 0'", verb, shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     return r and r:match("2..")
 end
 
 local function do_add_queue(track_id)
     local token = get_token()
     if not token then rofi_message("Cannot add to queue: no token"); return end
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X POST 'https://api.spotify.com/v1/me/player/queue?uri=spotify:track:%s' -H %s -o /dev/null", track_id, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/me/player/queue?uri=spotify:track:" .. track_id
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X POST %s -H %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     if not r or not r:match("2..") then rofi_message("Failed to add to queue"); return end
     mem_bust("queue")
     -- also add to local queue tracking
@@ -1359,7 +1351,8 @@ end
 local function do_save_album(album_id)
     local token = get_token()
     if not token then rofi_message("Cannot save album: no token"); return false end
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/me/albums?ids=%s' -H %s -o /dev/null", album_id, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/me/albums?ids=" .. album_id
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT %s -H %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     if r and r:match("2..") then
         disk_bust(P.albums)
         return true
@@ -1370,7 +1363,8 @@ end
 local function do_save_playlist(playlist_id)
     local token = get_token()
     if not token then rofi_message("Cannot save playlist: no token"); return false end
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/playlists/%s/followers' -H %s -H 'Content-Length: 0' -o /dev/null", playlist_id, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/playlists/" .. playlist_id .. "/followers"
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT %s -H %s -H 'Content-Length: 0' -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     if r and r:match("2..") then
         bust_my_playlists()
         return true
@@ -1408,7 +1402,7 @@ local function recover_playback(direction, force)
         if #uris > 0 then body = json.encode({uris=uris, offset={position=0}}) end
     end
     if not body then return false end
-    local r = shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/me/player/play%s' -H %s -H 'Content-Type: application/json' -d %s", dparam, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+    local r = shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X PUT %s -H %s -H 'Content-Type: application/json' -d %s", shell_quote("https://api.spotify.com/v1/me/player/play" .. dparam), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
     if r and r:match("2..") then
         queue_idx = new_idx
         flush_queue()
@@ -1468,7 +1462,7 @@ local function api_get_playlist_tracks(playlist_id)
             if not d.next or #d.items < 100 then break end
             offset = offset + 100
         end
-        return #all_tracks > 0 and all_tracks or nil
+        return all_tracks
     end)
 end
 
@@ -1503,7 +1497,7 @@ local function api_get_my_playlists()
             if not d.next or #d.items < 50 then break end
             offset = offset + 50
         end
-        return #all > 0 and all or nil
+        return all
     end)
 end
 
@@ -1753,7 +1747,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id)
                 if action == "Remove from Library" then
                     local token = get_token()
                     if token then
-                        local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE 'https://api.spotify.com/v1/me/albums?ids=%s' -H %s -o /dev/null", item.id, shell_quote("Authorization: Bearer " .. token)))
+                        local url = "https://api.spotify.com/v1/me/albums?ids=" .. item.id
+                        local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
                         if r and r:match("2..") then
                             disk_bust(P.albums)
                             rofi_message("Removed from library")
@@ -1946,7 +1941,8 @@ view_actions = function(item, ctx, ctx_type, ctx_id, all_items, cidx, entries)
             local token = get_token()
             if token then
                 local body = json.encode({tracks={{uri="spotify:track:" .. item.id}}})
-                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE 'https://api.spotify.com/v1/playlists/%s/tracks' -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", ctx_id, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+                local url = "https://api.spotify.com/v1/playlists/" .. ctx_id .. "/tracks"
+                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
                 if r and r:match("2..") then
                     disk_bust(P.mass .. "/playlist_tracks_" .. ctx_id .. ".json"); mem_bust("playlist_tracks_" .. ctx_id)
                     if entries and cidx then
@@ -2205,7 +2201,7 @@ view_lyrics = function(item)
                         local dparam = device_id and "?device_id=" .. device_id or ""
                         local ms = math.floor(ts * 1000)
                         local body = json.encode({uris={"spotify:track:" .. item.id}, position_ms=ms})
-                        shell(string.format("curl -s --max-time 3 -o /dev/null -X PUT 'https://api.spotify.com/v1/me/player/play%s' -H %s -H 'Content-Type: application/json' -d %s", dparam, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+                        shell(string.format("curl -s --max-time 3 -o /dev/null -X PUT %s -H %s -H 'Content-Type: application/json' -d %s", shell_quote("https://api.spotify.com/v1/me/player/play" .. dparam), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
                         current_track = item
                         current_id = item.id
                         is_playing = true
@@ -2263,7 +2259,8 @@ view_add_pl = function(track_id)
     if ids[idx] == "__create__" then
         local pl_name = rofi_input("New Playlist", "")
         if pl_name == "" then session_pop(); return end
-        local r = shell(string.format("curl -s --max-time 5 -X POST 'https://api.spotify.com/v1/users/%s/playlists' -H %s -H 'Content-Type: application/json' -d %s", my_id, shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=pl_name}))))
+        local url = "https://api.spotify.com/v1/users/" .. my_id .. "/playlists"
+        local r = shell(string.format("curl -s --max-time 5 -X POST %s -H %s -H 'Content-Type: application/json' -d %s", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=pl_name}))))
         local cr = safe_decode(r)
         if not cr or not cr.id then session_pop(); rofi_message("Failed to create playlist"); return end
         target_id = cr.id
@@ -2273,7 +2270,8 @@ view_add_pl = function(track_id)
     end
 
     local body = json.encode({uris={"spotify:track:" .. track_id}})
-    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X POST 'https://api.spotify.com/v1/playlists/%s/tracks' -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", target_id, shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+    local add_url = "https://api.spotify.com/v1/playlists/" .. target_id .. "/tracks"
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X POST %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(add_url), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
     if r and r:match("2..") then disk_bust(P.mass .. "/playlist_tracks_" .. target_id .. ".json"); mem_bust("playlist_tracks_" .. target_id) end
     rofi_message(r and r:match("2..") and "Added to playlist" or "Failed to add track")
     session_pop()
@@ -2303,7 +2301,8 @@ local function view_playlists()
             if pl_name == "" then goto pl_loop end
             local me = api_get_me()
             if me and me.id then
-                local r = shell(string.format("curl -s --max-time 5 -X POST 'https://api.spotify.com/v1/users/%s/playlists' -H %s -H 'Content-Type: application/json' -d %s", me.id, shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=pl_name}))))
+                local url = "https://api.spotify.com/v1/users/" .. me.id .. "/playlists"
+                local r = shell(string.format("curl -s --max-time 5 -X POST %s -H %s -H 'Content-Type: application/json' -d %s", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=pl_name}))))
                 local cr = safe_decode(r)
                 if cr then pls[#pls+1] = cr; entries[#entries+1] = display_playlist(cr); bust_my_playlists()
                 else rofi_message("Failed to create") end
@@ -2337,7 +2336,8 @@ local function view_playlists()
             elseif asel == "Rename Playlist" then
                 local nn = rofi_input("New Name", pl.name or "")
                 if nn == "" or nn == (pl.name or "") then goto pl_act end
-                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/playlists/%s' -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", pl.id, shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=nn}))))
+                local url = "https://api.spotify.com/v1/playlists/" .. pl.id
+                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=nn}))))
                 if r and r:match("2..") then
                     pl.name = nn; bust_my_playlists()
                     table.sort(pls, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
@@ -2349,7 +2349,8 @@ local function view_playlists()
             elseif asel == "Delete Playlist" then
                 local c = rofi_dmenu({"Yes, delete","Cancel"}, {prompt="Delete", mesg="Delete '" .. (pl.name or "") .. "'?", custom=false, by_index=true, use_menu=true})
                 if c == 1 then
-                    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE 'https://api.spotify.com/v1/playlists/%s/followers' -H %s -o /dev/null", pl.id, shell_quote("Authorization: Bearer " .. token)))
+                    local url = "https://api.spotify.com/v1/playlists/" .. pl.id .. "/followers"
+                    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
                     if r and r:match("2..") then
                         bust_my_playlists()
                         disk_bust(P.mass .. "/playlist_tracks_" .. pl.id .. ".json"); mem_bust("playlist_tracks_" .. pl.id)
@@ -2819,13 +2820,15 @@ local function replay_session()
             elseif asel == "Rename Playlist" then
                 local nn = rofi_input("New Name", pl.name or "")
                 if nn == "" or nn == (pl.name or "") then goto rp_act end
-                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT 'https://api.spotify.com/v1/playlists/%s' -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", pl.id, shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=nn}))))
+                local url = "https://api.spotify.com/v1/playlists/" .. pl.id
+                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X PUT %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(json.encode({name=nn}))))
                 if r and r:match("2..") then pl.name = nn; bust_my_playlists(); rofi_message("Renamed") else rofi_message("Failed") end
                 goto rp_act
             elseif asel == "Delete Playlist" then
                 local c = rofi_dmenu({"Yes, delete","Cancel"}, {prompt="Delete", mesg="Delete '" .. (pl.name or "") .. "'?", custom=false, by_index=true, use_menu=true})
                 if c == 1 then
-                    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE 'https://api.spotify.com/v1/playlists/%s/followers' -H %s -o /dev/null", pl.id, shell_quote("Authorization: Bearer " .. token)))
+                    local url = "https://api.spotify.com/v1/playlists/" .. pl.id .. "/followers"
+                    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
                     if r and r:match("2..") then bust_my_playlists(); disk_bust(P.mass .. "/playlist_tracks_" .. pl.id .. ".json"); mem_bust("playlist_tracks_" .. pl.id); rofi_message("Deleted"); break
                     else rofi_message("Failed to delete") end
                 end
