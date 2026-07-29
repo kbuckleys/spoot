@@ -29,14 +29,18 @@ But most importantly, a music player should pretty much know its place. It's not
 
 # Limitations:
 Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spotirofi is no exception.
-- Remove from queue (Spotify Web API limitation)
+- **Remove from queue (Spotify Web API limitation)**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
     - It adds complexity and relative bloat for what it's supposed to do.
-    - Local implementation inherently means zero sync with other Spotify clients/connect devices if you use any.
-- Podcast management
+    - Local implementation also means zero sync with other Spotify clients/connect devices.
+
+- **Podcast management**
   - Not that spotirofi can't do it, I simply didn't implement support for it, for two primary reasons;
     - Spotify's API doesn't expose some of the key features that help make listening to podcasts accessible, like chapter management.
     - This may sound subjective, but it's a relatively niche medium to cover.
+
+- **Recently Played is purely local**
+  - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely.
 
 # Dependencies
 - Spotify Premium ```no way around it```
@@ -86,6 +90,3 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
   </table>
 </body>
 </html>
-
-> [!NOTE]
-> Recently Played is purely local. The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely.
