@@ -45,15 +45,13 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 - Spotify Premium ```no way around it```
 - spotifyd
-- rofi
-- cjson
+- rofi 1.7+
 - lua 5.4+
+- lua-cjson
 - playerctl
 - curl
-- wl-clipboard OR xclip ```depending on your session```
-- notify-send
 - perl
-- pgrep
+- wl-clipboard / xclip ```depending on your session```
 - A nerd font ```without one, icons will appear artifacted```
 
 # How to use
