@@ -20,18 +20,6 @@ mainbox {
     children: [ message, listview ];
 }
 
-textbox {
-    text-color: #b6e0a4;
-    horizontal-align: 0.5;
-    font: "0xProto Nerd Font Bold 12";
-}
-
-message {
-    background-color: #20242a;
-    padding: 5px;
-    margin: -2px;
-}
-
 inputbar {
     enabled: false;
 }
@@ -49,4 +37,15 @@ element-icon {
 
 element-text {
     enabled: false;
+}
+
+message {
+    background-color: #20242a;
+    margin: 0px 0px -2px 0px;
+    padding: 5px;
+}
+textbox {
+    text-color: #b6e0a4;
+    horizontal-align: 0.5;
+    font: "0xProto Nerd Font Bold 12";
 }

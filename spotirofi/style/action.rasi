@@ -39,12 +39,6 @@ listview {
     scrollbar: false;
 }
 
-textbox {
-    text-color: #b6e0a4;
-    horizontal-align: 0.5;
-    font: "0xProto Nerd Font Bold 12";
-}
-
 element {
     padding: 2px 8px;
 }
@@ -58,8 +52,9 @@ element-text {
 message {
     background-color: #20242a;
     padding: 5px;
-    margin: -1px;
+}
+textbox {
+    text-color: #b6e0a4;
     horizontal-align: 0.5;
     font: "0xProto Nerd Font Bold 12";
-    text-color: #b6e0a4;
 }

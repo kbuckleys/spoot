@@ -25,12 +25,6 @@ inputbar {
     enabled: false;
 }
 
-textbox {
-    text-color: #b6e0a4;
-    horizontal-align: 0.5;
-    font: "0xProto Nerd Font Bold 12";
-}
-
 listview {
     fixed-columns: false;
     fixed-height: false;
@@ -51,6 +45,11 @@ element-text selected {
 
 message {
     background-color: #20242a;
+    margin: 0px 0px -1px 0px;
     padding: 5px;
-    margin: -1px;
+}
+textbox {
+    text-color: #b6e0a4;
+    horizontal-align: 0.5;
+    font: "0xProto Nerd Font Bold 12";
 }

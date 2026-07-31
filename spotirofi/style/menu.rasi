@@ -23,17 +23,6 @@ inputbar {
     spacing: 4px;
 }
 
-textbox {
-    text-color: #b6e0a4;
-    horizontal-align: 0.5;
-    font: "0xProto Nerd Font Bold 12";
-}
-textbox-prompt-colon {
-    str: "";
-    color: #b6e0a4;
-    padding: 0px 8px 0px 2px;
-}
-
 listview {
     fixed-columns: false;
     fixed-height: false;
@@ -54,6 +43,19 @@ element-text selected {
 
 message {
     background-color: #20242a;
+    margin: 0px 0px -1px 0px;
     padding: 5px;
-    margin: -1px;
+}
+textbox {
+    text-color: #b6e0a4;
+    horizontal-align: 0.5;
+    font: "0xProto Nerd Font Bold 12";
+}
+textbox-prompt-colon {
+    str: "";
+    color: #b6e0a4;
+    padding: 0px 8px 0px 2px;
+}
+entry {
+    text-color: #b6e0a4;
 }
