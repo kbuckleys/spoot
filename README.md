@@ -45,7 +45,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - **Crossfade**
   - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat.
     
-    > This was already tested in an internal build, and the cons vastly outweighed the pros, thus scrapped
+    > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
 - Spotify Premium ```no way around it```
