@@ -44,6 +44,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
  
 - **Crossfade**
   - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat.
+  > This was already tested in an internal build, and the cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
 - Spotify Premium ```no way around it```
