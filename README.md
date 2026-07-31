@@ -41,6 +41,9 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 
 - **Recently Played is purely local**
   - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely.
+ 
+- **Crossfade**
+  - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat.
 
 # Dependencies
 - Spotify Premium ```no way around it```
