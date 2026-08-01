@@ -9,7 +9,7 @@
 window {
     location: south;
     anchor: south;
-    width: 540px;
+    width: 640px;
 }
 
 mainbox {
@@ -17,9 +17,8 @@ mainbox {
 }
 
 textbox {
-    text-color: #b6e0a4;
+    text-color: #dfdfdd;
     horizontal-align: 0;
-    font: "0xProto Nerd Font 12";
-    padding: 8px 8px 8px 8px;
-    background-color: #000000;
+    font: "0xProto Nerd Font 13";
+    padding: 15px 20px 30px 30px;
 }

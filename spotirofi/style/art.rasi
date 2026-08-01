@@ -34,7 +34,6 @@ element-icon {
     size: 640px;
     expand: false;
 }
-
 element-text {
     enabled: false;
 }

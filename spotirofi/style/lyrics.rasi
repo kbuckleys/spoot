@@ -37,7 +37,7 @@ element {
     padding: 2px 8px;
 }
 element-text {
-    font: "0xProto Nerd Font 14";
+    font: "0xProto Nerd Font 13";
     horizontal-align: 0.5;
     highlight: bold #b6e0a4;
 }

@@ -1322,10 +1322,10 @@ end
 
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b}  " or "\u{f04c}  ") or ""
-    local l = item.id and liked[item.id] and "\u{f05d} " or ""
+    local l = item.id and liked[item.id] and " \u{f05d} " or ""
     local e = item.explicit and " \u{f071} " or ""
     local s = Util.has_synced_lyrics(item.id) and " \u{f46a}" or ""
-    return p .. (item.name or "") .. SEP .. artist_names(item) .. "  " .. l .. e .. s
+    return p .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -2406,7 +2406,7 @@ view_artist = function(artist)
             else
                 while true do
                     ::rel_next::
-                    local ridx = rofi_dmenu(ae, {prompt="Related to " .. artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true})
+                    local ridx = rofi_dmenu(ae, {prompt="Related to " .. artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true, no_status=true})
                     if not ridx then if consume_pending_toggle() then goto rel_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; session_pop(); break end
                     if ridx >= 1 and ridx <= #artists then
                         view_artist(artists[ridx])
@@ -2755,7 +2755,7 @@ local function view_saved_albums()
     session_push({view="saved-albums"})
     local entries = {}
     for i, a in ipairs(al) do entries[i] = display_album(a) end
-    view_browse(entries, al, "Saved Albums" .. SEP .. #al .. " albums", "album-list", "album", nil)
+    view_browse(entries, al, "Saved Albums" .. SEP .. #al .. " albums", "album-list", "album", nil, true)
     session_pop()
     if seek_pending or jump_to_track_pending then return end
 end
@@ -2766,7 +2766,7 @@ local function view_followed_artists()
     session_push({view="followed-artists"})
     local entries = {}
     for i, a in ipairs(ar) do entries[i] = display_artist(a) end
-    view_browse(entries, ar, "Followed Artists" .. SEP .. #ar .. " artists", "artist-list", nil, nil)
+    view_browse(entries, ar, "Followed Artists" .. SEP .. #ar .. " artists", "artist-list", nil, nil, true)
     session_pop()
     if seek_pending or jump_to_track_pending then return end
 end
@@ -2947,7 +2947,31 @@ local function view_system()
         if not sel then if consume_pending_toggle() then goto sys_next end; break end
         local clean = sel:gsub("<[^>]+>", "")
         if clean == "Keybinds" then
-            rofi_message("<b>Alt+Return      </b> Jump to current track's action menu\n<b>Alt+Backspace   </b> Back one level\n<b>Alt+Space       </b> Jump to main menu\n<b>Alt+l           </b> Liked tracks\n<b>Alt+q           </b> Your queue\n<b>Alt+p           </b> Recently played\n<b>Alt+v           </b> Volume\n<b>Alt+a           </b> Album art of current track\n<b>Alt+y           </b> Lyrics of current track\n<b>Alt+c           </b> Jump to playing track (list)\n                 Jump to current lyric line (lyrics)\n<b>Alt+e           </b> Seek current track\n<b>Alt+r           </b> Cycle through repeat modes\n<b>Alt+s           </b> Toggle shuffle\n<b>Alt+g           </b> Open Spotify URL from clipboard\n<b>Return          </b> Select\n<b>Escape          </b> Close", THEME_BINDS)
+            local function row(desc, key)
+                local k = 15
+                if not key then return string.rep(" ", k + 2) .. desc end
+                return string.rep(" ", k - #key) .. '<span foreground="#eebebe">' .. key .. "</span>"
+                    .. "  " .. desc
+            end
+            rofi_message(table.concat({
+                row("Select", "return"),
+                row("Close", "escape"),
+                row("Back one level", "alt + backspace"),
+                row("Jump to current track's action menu", "alt + return"),
+                row("Jump to main menu", "alt + space"),
+                row("Liked tracks", "alt + l"),
+                row("Your queue", "alt + q"),
+                row("Recently played", "alt + p"),
+                row("Volume", "alt + v"),
+                row("Album art of current track", "alt + a"),
+                row("Lyrics of current track", "alt + y"),
+                row("Seek current track", "alt + e"),
+                row("Cycle repeat modes", "alt + r"),
+                row("Toggle shuffle", "alt + s"),
+                row("Open Spotify URL from clipboard", "alt + g"),
+                row("Jump to playing track (list)", "alt + c"),
+                row("Jump to current lyric line (lyrics)"),
+            }, "\n"), THEME_BINDS)
         elseif clean:match("^Volume") then
             view_volume()
             cur_vol = get_playerctl_volume()
@@ -3075,7 +3099,7 @@ local function replay_session()
             local artists, ae, mesg = fetch_related_artists(s.artist_id, s.artist_name)
             if artists then
                 while true do
-                    local ridx = rofi_dmenu(ae, {prompt="Related to " .. (s.artist_name or ""), mesg=mesg, custom=false, by_index=true, use_menu=true})
+                    local ridx = rofi_dmenu(ae, {prompt="Related to " .. (s.artist_name or ""), mesg=mesg, custom=false, by_index=true, use_menu=true, no_status=true})
                     if not ridx then break end
                     if ridx >= 1 and ridx <= #artists then
                         view_artist(artists[ridx])

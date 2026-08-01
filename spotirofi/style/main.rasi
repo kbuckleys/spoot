@@ -18,11 +18,7 @@ window {
 }
 
 mainbox {
-    children: [ inputbar, message, listview ];
-}
-
-inputbar {
-    enabled: false;
+    children: [ message, listview ];
 }
 
 listview {

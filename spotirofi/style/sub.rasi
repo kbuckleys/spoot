@@ -6,11 +6,6 @@
 
 @import "ZENON"
 
-configuration {
-    kb-remove-to-sol: "BackSpace";
-    kb-remove-char-back: "";
-}
-
 window {
     location: south;
     anchor: south;
@@ -18,11 +13,7 @@ window {
 }
 
 mainbox {
-    children: [ inputbar, message, listview ];
-}
-
-inputbar {
-    enabled: false;
+    children: [ message, listview ];
 }
 
 textbox {
