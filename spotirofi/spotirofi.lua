@@ -140,6 +140,10 @@ function Util.pango_escape(s)
     if not s then return s end
     s = tostring(s)
     local esc = {["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;"}
+    local function safe(tag)
+        return tag == "<b>" or tag == "</b>" or tag == "</span>"
+            or tag:match("^<span [fc]%a*=\"#[0-9a-fA-F]+\">$")
+    end
     local out = {}
     local pos = 1
     while pos <= #s do
@@ -149,7 +153,8 @@ function Util.pango_escape(s)
             break
         end
         out[#out + 1] = s:sub(pos, ts - 1):gsub("[&<>]", esc)
-        out[#out + 1] = s:sub(ts, te)
+        local tag = s:sub(ts, te)
+        out[#out + 1] = safe(tag) and tag or tag:gsub("[&<>]", esc)
         pos = te + 1
     end
     return table.concat(out)
@@ -196,7 +201,9 @@ local function write_file(p, d)
     if not f then return false end
     if not f:write(d) then f:close(); os.remove(t); return false end
     if not f:close() then os.remove(t); return false end
-    return os.rename(t, p)
+    local ok = os.rename(t, p)
+    if not ok then os.remove(t) end
+    return ok
 end
 
 -- Normalize an MPRIS mpris:trackid (which comes as a DBus object path or a
@@ -274,7 +281,7 @@ local function disk_get(path, ttl)
     local raw = read_file(path)
     if not raw then return nil end
     local d = safe_decode(raw)
-    if not d or type(d) ~= "table" or not d.fetched_at then return nil end
+    if not d or type(d) ~= "table" or type(d.fetched_at) ~= "number" then return nil end
     if ttl and os.time() - d.fetched_at >= ttl then return nil end
     return d.data
 end
@@ -485,7 +492,7 @@ local function rofi_dmenu(entries, opts)
     local exit_code = tonumber((raw or ""):match("__EXIT__(%d+)__")) or 0
     local result    = trim((raw or ""):match("^(.-)\n__EXIT__%d+__") or "")
 
-    if exit_code == EXIT.back then session_pop(); return nil end
+    if exit_code == EXIT.back then return nil end
     if exit_code == EXIT.main then session_clear(); main_pending = true; return nil end
     if exit_code == EXIT.liked then session_clear(); liked_pending = true; return nil end
     if exit_code == EXIT.queue then session_clear(); queue_pending = true; return nil end
@@ -496,14 +503,20 @@ local function rofi_dmenu(entries, opts)
         else rofi_message("No track playing"); return nil end
     end
     if exit_code == EXIT.art then
-        if current_track then view_art(current_track)
+        local target = opts.current or current_track
+        if target then
+            view_art(target)
+            if opts.current then view_actions(target) end
         else rofi_message("No track playing") end
         return nil
-    elseif exit_code == EXIT.recent then session_pop(); recent_pending = true; return nil
+    elseif exit_code == EXIT.recent then recent_pending = true; return nil
     elseif exit_code == EXIT.lyrics then
         last_playback = 0
         get_playback()
-        if current_track then view_lyrics(current_track)
+        local target = opts.current or current_track
+        if target then
+            view_lyrics(target)
+            if opts.current then view_actions(target) end
         else rofi_message("No track playing") end
         return nil
     elseif exit_code == EXIT.jump or exit_code == EXIT.jump_kp then
@@ -521,7 +534,6 @@ local function rofi_dmenu(entries, opts)
             else rofi_message("Clipboard is empty") end
         end)
         if not ok then rofi_message("open_url error: " .. tostring(err)) end
-        session_pop()
         return nil
     else
         if result == "" then
@@ -766,7 +778,9 @@ local function api_get(path, params, _retry)
         local secs = string.match(headers, "[Rr]etry%-[Aa]fter:%s*(%d+)") or "30"
         os.remove(hdr)
         local cool = tonumber((read_file("/tmp/spotirofi_rate_cooldown") or ""):match("%d+"))
-        write_file("/tmp/spotirofi_rate_cooldown", os.time() + math.min(tonumber(secs), 5) + 5)
+        if not Util.detached then
+            write_file("/tmp/spotirofi_rate_cooldown", os.time() + math.min(tonumber(secs), 5) + 5)
+        end
         if not (cool and os.time() < cool) and not Util.detached then
             rofi_message("Spotify API rate limit reached (429). Retry after " .. secs .. "s.")
         end
@@ -975,7 +989,7 @@ local function load_saved_albums()
     if cached then return cached, true end
     local c = safe_decode(read_file(P.albums))
     if c and c.items and type(c.items) == "table" then
-        if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
+        if type(c.fetched_at) ~= "number" or os.time() - c.fetched_at < P.ttl then
             mem_set("saved_albums", c.items, P.ttl)
             return c.items, true
         end
@@ -1003,7 +1017,7 @@ local function load_followed_artists()
     if cached then return cached, true end
     local c = safe_decode(read_file(P.artists))
     if c and c.items and type(c.items) == "table" then
-        if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
+        if type(c.fetched_at) ~= "number" or os.time() - c.fetched_at < P.ttl then
             mem_set("followed_artists", c.items, P.ttl)
             return c.items, true
         end
@@ -1028,10 +1042,23 @@ end
 
 local function fetch_library_with_fallback()
     local tracks, albums, artists = parallel_fetch_library()
-    if not tracks  then tracks  = load_liked_tracks_full() end
-    if not albums  then local a, ok = load_saved_albums(); albums  = ok and a or nil end
-    if not artists then local a, ok = load_followed_artists(); artists = ok and a or nil end
-    return tracks, albums, artists
+    local from_cache = {}
+    local failed = {}
+    if not tracks then
+        tracks = load_liked_tracks_full()
+        if tracks then from_cache[#from_cache+1] = "tracks" else failed[#failed+1] = "tracks" end
+    end
+    if not albums then
+        local a, ok = load_saved_albums()
+        albums = ok and a or nil
+        if albums then from_cache[#from_cache+1] = "albums" else failed[#failed+1] = "albums" end
+    end
+    if not artists then
+        local a, ok = load_followed_artists()
+        artists = ok and a or nil
+        if artists then from_cache[#from_cache+1] = "artists" else failed[#failed+1] = "artists" end
+    end
+    return tracks, albums, artists, from_cache, failed
 end
 
 local function build_liked_artist_index(tracks)
@@ -1074,7 +1101,7 @@ local function load_liked_tracks()
     end
     local c = safe_decode(read_file(P.liked))
     if c and c.tracks and type(c.tracks) == "table" then
-        if not c.fetched_at or os.time() - c.fetched_at < P.ttl then
+        if type(c.fetched_at) ~= "number" or os.time() - c.fetched_at < P.ttl then
             mem_set("liked_tracks", c.tracks, P.ttl)
             build_liked_artist_index(c.tracks)
             return c.tracks
@@ -1208,7 +1235,7 @@ end
 display_track = function(item, hide_artist)
     local an = hide_artist and "" or artist_names(item)
     local p  = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    local l  = liked[item.id] and "\u{f05d}  " or ""
+    local l  = item.id and liked[item.id] and "\u{f05d}  " or ""
     local e  = item.explicit and "\u{f071} " or ""
     local txt = p .. l .. e .. (item.name or "Unknown") .. (hide_artist and "" or SEP .. an)
     if item.id == current_id then txt = "<span foreground=\"#b6e0a4\">" .. txt .. "</span>" end
@@ -1296,7 +1323,7 @@ end
 
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b}  " or "\u{f04c}  ") or ""
-    local l = liked[item.id] and "\u{f05d} " or ""
+    local l = item.id and liked[item.id] and "\u{f05d} " or ""
     local e = item.explicit and " \u{f071} " or ""
     local s = Util.has_synced_lyrics(item.id) and " \u{f46a}" or ""
     return p .. (item.name or "") .. SEP .. artist_names(item) .. "  " .. l .. e .. s
@@ -1334,9 +1361,16 @@ local function load_queue()
     if not raw then return end
     local d = safe_decode(raw)
     if d then
-        queue_tracks  = d.tracks
-        queue_idx     = d.idx or 0
-        queue_context = d.context or nil
+        if type(d.tracks) == "table" then
+            local clean = {}
+            for _, t in ipairs(d.tracks) do if type(t) == "table" then clean[#clean+1] = t end end
+            queue_tracks = clean
+        else
+            queue_tracks = {}
+        end
+        queue_idx = type(d.idx) == "number" and d.idx or 0
+        if queue_idx < 0 or queue_idx > #queue_tracks then queue_idx = 0 end
+        queue_context = type(d.context) == "string" and d.context or nil
     end
 end
 
@@ -1552,8 +1586,9 @@ local function do_playback_cmd(cmd)
     local token = get_token()
     if not token then return nil end
     local device_id = get_spotifyd_device()
-    local dparam = device_id and "?device_id=" .. device_id or ""
-    local r = shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X POST 'https://api.spotify.com/v1/me/player/%s%s' -H %s -H 'Content-Length: 0'", cmd, dparam, shell_quote("Authorization: Bearer " .. token)))
+    local url = "https://api.spotify.com/v1/me/player/" .. cmd
+        .. (device_id and ("?device_id=" .. device_id) or "")
+    local r = shell(string.format("curl -s --max-time 3 -o /dev/null -w '%%{http_code}' -X POST %s -H %s -H 'Content-Length: 0'", shell_quote(url), shell_quote("Authorization: Bearer " .. token)))
     if r and r:match("2..") then mem_bust("queue"); P.recent_cmd_at = os.time() end
     return r
 end
@@ -1724,6 +1759,7 @@ local function api_get_tracks(ids)
 end
 
 local function api_get_recommendations(track_id)
+    if not track_id then return nil end
     local d = api_get("recommendations", "seed_tracks=" .. track_id .. "&limit=20")
     if not d or not d.tracks or #d.tracks == 0 then return nil end
     local stubs = {}
@@ -1764,7 +1800,8 @@ local function api_get_top_tracks()
     for _, rng in ipairs({"medium_term","long_term","short_term"}) do
         local tracks = cached_fetch("top_tracks_" .. rng, P.cache .. "/top_tracks_" .. rng .. ".json", CACHE_TTL_MED, function()
             local d = api_get("me/top/tracks", "limit=50&time_range=" .. rng)
-            return (d and d.items and #d.items > 0) and d.items
+            if not d or type(d.items) ~= "table" or #d.items == 0 then return nil end
+            return d.items
         end)
         if tracks then return tracks end
     end
@@ -2046,11 +2083,12 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     session_push({view="action", track_id=item.id, track_name=item.name or "",
                   track_artists=item.artists or {}, track_album=item.album or {},
                   track_duration_ms=item.duration_ms or 0})
-    local is_liked = liked[item.id]
+    local is_liked = item.id and liked[item.id]
     local in_pl    = ctx_type == "playlist" and ctx_id
 
     local play_label = item.id == current_id and (is_playing and "Pause" or "Resume") or "Play"
     local actions = {play_label}
+    actions[#actions+1] = item.id == current_id and "Seek" or '<span color="#6a707f">Seek</span>'
     actions[#actions+1] = "Add to Queue"
     local like_idx = #actions + 1
     actions[#actions+1] = is_liked and "Unlike" or "Like"
@@ -2082,9 +2120,8 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             tf:close()
         end
         local action_theme = tmp_theme
-        actions[2] = item.id == current_id and "Seek" or '<span color="#6a707f">Seek</span>'
         local sel = rofi_dmenu(actions,
-            {prompt="Action", mesg=track_mesg(item), sel=0, custom=false, theme=action_theme, markup=true})
+            {prompt="Action", mesg=track_mesg(item), sel=0, custom=false, theme=action_theme, markup=true, current=item})
         if not sel then
             if seek_pending then
                 seek_pending = false
@@ -2096,6 +2133,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             elseif consume_pending_toggle() then
                 -- continue loop
             else
+                session_pop()
                 if tmp_theme then os.remove(tmp_theme) end
                 return
             end
@@ -2143,6 +2181,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                         view_artist(arts[aidx])
                         if seek_pending or jump_to_track_pending then
                             if tmp_theme then os.remove(tmp_theme) end
+                            session_pop()
                             return
                         end
                     end
@@ -2274,7 +2313,7 @@ view_artist = function(artist)
         local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist", sel=0, custom=false, use_menu=true, theme=THEME_SUB})
         if not sel then
             if consume_pending_toggle() then goto artist_next end
-            if seek_pending or jump_to_track_pending then session_pop() end
+            session_pop()
             return
         end
 
@@ -2286,7 +2325,7 @@ view_artist = function(artist)
                 while true do
                     ::alb_next::
                     local aidx = rofi_dmenu(ae, {prompt=artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true})
-                    if not aidx then if consume_pending_toggle() then goto alb_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; break end
+                    if not aidx then if consume_pending_toggle() then goto alb_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; session_pop(); break end
                     if aidx >= 1 and aidx <= #items then
                         local al = items[aidx]
                         if album_action_menu(al) then
@@ -2322,7 +2361,7 @@ view_artist = function(artist)
                 while true do
                     ::rel_next::
                     local ridx = rofi_dmenu(ae, {prompt="Related to " .. artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true})
-                    if not ridx then if consume_pending_toggle() then goto rel_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; break end
+                    if not ridx then if consume_pending_toggle() then goto rel_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; session_pop(); break end
                     if ridx >= 1 and ridx <= #artists then
                         view_artist(artists[ridx])
                         if seek_pending then session_pop(); session_pop(); return end
@@ -2386,7 +2425,7 @@ view_lyrics = function(item)
                 end
                 goto lr_next
             end
-            if not sel_line then if consume_pending_toggle() then goto lr_next end; if seek_pending or jump_to_track_pending then session_pop(); return end; break end
+            if not sel_line then if consume_pending_toggle() then goto lr_next end; if seek_pending or jump_to_track_pending then session_pop(); return end; session_pop(); break end
             local found_idx
             for i, l in ipairs(display_lines) do
                 if Util.pango_escape(l) == sel_line then found_idx = i; break end
@@ -2427,12 +2466,14 @@ view_lyrics = function(item)
             ::lr_next_plain::
             rofi_dmenu(display_lines,
                 {prompt="Lyrics", mesg=mesg_base, custom=false, use_menu=true, theme=THEME_LYR})
+            if consume_pending_toggle() then goto lr_next_plain end
             if jump_to_track_pending then
                 jump_to_track_pending = false
                 rofi_message("No synced lyrics — cannot jump to a line")
                 goto lr_next_plain
             end
             if seek_pending or jump_to_track_pending then session_pop(); return end
+            session_pop()
             break
         end
     end
@@ -2458,10 +2499,17 @@ view_add_pl = function(track_id)
         end
     end
 
-    local idx = rofi_dmenu(names, {prompt="Add to Playlist", mesg="Select a playlist", custom=false, by_index=true, use_menu=true})
-    if not idx then
-        if seek_pending or jump_to_track_pending then session_pop(); return end
-        return
+    local idx
+    while true do
+        ::add_pl_next::
+        idx = rofi_dmenu(names, {prompt="Add to Playlist", mesg="Select a playlist", custom=false, by_index=true, use_menu=true})
+        if not idx then
+            if consume_pending_toggle() then goto add_pl_next end
+            if seek_pending or jump_to_track_pending then session_pop(); return end
+            session_pop()
+            return
+        end
+        break
     end
 
     local target_id
@@ -2501,7 +2549,7 @@ local function view_playlists()
         local idx = rofi_dmenu(entries, {prompt="Playlists", mesg="Playlists" .. SEP .. #pls, custom=false, by_index=true, use_menu=true})
         if not idx then
             if consume_pending_toggle() then goto pl_next end
-            if seek_pending or jump_to_track_pending then session_pop() end
+            session_pop()
             return
         end
         if idx == 1 then
@@ -2528,6 +2576,7 @@ local function view_playlists()
                     session_pop()
                     return
                 end
+                session_pop()
                 goto pl_loop
             end
             if asel == "Open Playlist" then
@@ -2565,7 +2614,7 @@ local function view_playlists()
                         local del_idx = nil
                         for i, p in ipairs(pls) do if p.id == pl.id then del_idx = i; break end end
                         if del_idx then table.remove(entries, del_idx + 1); table.remove(pls, del_idx) end
-                        session_clear()
+                        session_pop()
                         break
                     else rofi_message("Failed to delete") end
                 end
@@ -2614,7 +2663,7 @@ local function view_categories()
         local idx = rofi_dmenu(ce, {prompt="Categories", mesg="Categories" .. SEP .. #cats, custom=false, by_index=true, use_menu=true})
         if not idx then
             if consume_pending_toggle() then goto cat_loop end
-            if seek_pending or jump_to_track_pending then session_pop(); return end
+            session_pop()
             return
         end
         if idx < 1 or idx > #cats then goto cat_loop end
@@ -2684,7 +2733,7 @@ local function view_new_releases()
         local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true})
         if not idx then
             if consume_pending_toggle() then goto nr_next end
-            if seek_pending or jump_to_track_pending then session_pop(); return end
+            session_pop()
             return
         end
         if idx >= 1 and idx <= #albums then
@@ -2756,7 +2805,7 @@ view_seek = function(item)
     while true do
         ::seek_next::
         local si = rofi_dmenu(seeks, {prompt="Seek", mesg=seek_mesg(item), sel=0, custom=false, theme=THEME_SUB, markup=true})
-        if not si then if consume_pending_toggle() then goto seek_next end; if seek_pending or jump_to_track_pending then session_pop(); return end; break end
+        if not si then if consume_pending_toggle() then goto seek_next end; if seek_pending or jump_to_track_pending then session_pop(); return end; session_pop(); break end
         local sign, secs = si:match("^([%+%-])(%d+)s$")
         if sign then
             local cur = get_playerctl_position()
@@ -2879,11 +2928,18 @@ local function view_system()
             end
         elseif clean == "Refresh Library" then
             os.execute("notify-send -t 5000 --app-name=spotirofi 'Spotirofi' 'Refreshing library...' &")
-            local tracks, albums, artists = fetch_library_with_fallback()
+            local tracks, albums, artists, from_cache, failed = fetch_library_with_fallback()
             if tracks then
                 save_library_cache(tracks, albums, artists)
                 populate_liked_ids()
-                os.execute("notify-send -t 3000 --app-name=spotirofi 'Spotirofi' 'Library refreshed' &")
+                local msg = "Library refreshed"
+                if #from_cache > 0 or #failed > 0 then
+                    local parts = {}
+                    for _, s in ipairs(from_cache) do parts[#parts+1] = s .. " from cache" end
+                    for _, s in ipairs(failed) do parts[#parts+1] = s .. " unavailable" end
+                    msg = "Library refresh: " .. table.concat(parts, ", ")
+                end
+                os.execute("notify-send -t 3000 --app-name=spotirofi 'Spotirofi' '" .. msg .. "' &")
             else
                 os.execute("notify-send -t 5000 --app-name=spotirofi 'Spotirofi' 'Library refresh failed' &")
             end
@@ -2894,7 +2950,7 @@ local function view_system()
             inv_playback()
             ensure_spotifyd()
             os.execute("sleep 3")
-            os.execute("lua " .. P.dir .. "/spotirofi.lua --daemon &")
+            os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
         elseif clean == "Kill Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null")
             os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
@@ -3080,7 +3136,7 @@ local function ensure_daemon()
         daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
     end
     if not daemon_alive then
-        os.execute("lua " .. P.dir .. "/spotirofi.lua --daemon &")
+        os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
     end
 end
 
@@ -3153,8 +3209,11 @@ local function main()
         flush_liked_cache()
         flush_recent_play()
         if not first_loop or not P.had_snapshot then get_playback() end
+        local is_first = first_loop
         first_loop = false
-        if current_id and current_id ~= previous_id then
+        if is_first then
+            previous_id = current_id
+        elseif current_id and current_id ~= previous_id then
             record_recent_play(current_track)
             previous_id = current_id
         end
