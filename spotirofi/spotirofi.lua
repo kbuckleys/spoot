@@ -1320,11 +1320,22 @@ function Util.has_synced_lyrics(id)
     return type(d) == "table" and type(d.times) == "table" and #d.times > 0
 end
 
+function Util.has_lyrics(id)
+    if not id then return false end
+    local d = disk_get(P.lyrics .. "/lyrics_" .. id .. ".json")
+    return type(d) == "table" and type(d.lines) == "table" and #d.lines > 0
+end
+
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b}  " or "\u{f04c}  ") or ""
     local l = item.id and liked[item.id] and " \u{f05d} " or ""
     local e = item.explicit and " \u{f071} " or ""
-    local s = Util.has_synced_lyrics(item.id) and " \u{f46a}" or ""
+    local s = ""
+    if Util.has_lyrics(item.id) then
+        s = Util.has_synced_lyrics(item.id)
+            and ' <span foreground="#fab387">\u{F0189}</span>'
+            or " \u{F0189}"
+    end
     return p .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
 end
 
