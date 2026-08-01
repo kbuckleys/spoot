@@ -17,7 +17,10 @@ mainbox {
 }
 
 inputbar {
-    enabled: false;
+    enabled: true;
+    children: [textbox-prompt-colon, entry];
+    padding: 4px 8px;
+    spacing: 4px;
 }
 
 listview {
@@ -47,4 +50,12 @@ textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
     font: "0xProto Nerd Font Bold 12";
+}
+textbox-prompt-colon {
+    str: "";
+    color: #b6e0a4;
+    padding: 0px 8px 0px 2px;
+}
+entry {
+    text-color: #b6e0a4;
 }
