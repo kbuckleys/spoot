@@ -45,7 +45,7 @@ local CACHE_TTL_LONG = 86400
 local PROGRESS_BAR_W = 20
 local ICON_PREFIX = {
     tracks    = "\u{F0387} ",
-    albums    = "\u{F0025} ",
+    albums    = "\u{F405} ",
     artists   = "\u{F415} ",
     playlists = "\u{F0411} ",
 }
@@ -406,7 +406,7 @@ local function status_mesg()
     elseif repeat_state == "context" then r = "\u{F0456}"
     else r = '<span foreground="' .. DIM .. '">\u{F0457}</span>' end
     local s = is_shuffle and "\u{F074}" or '<span foreground="' .. DIM .. '">\u{F049D}</span>'
-    return r .. "\u{2002}\u{2002}" .. s
+    return r .. " " .. s
 end
 
 toggle_repeat = function()
@@ -1231,10 +1231,10 @@ end
 
 -- DISPLAY HELPERS
 
-display_track = function(item, hide_artist)
+display_track = function(item, hide_artist, hide_liked)
     local an = hide_artist and "" or artist_names(item)
     local p  = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    local l  = item.id and liked[item.id] and "\u{f05d}  " or ""
+    local l  = (not hide_liked) and item.id and liked[item.id] and "\u{f05d} " or ""
     local e  = item.explicit and "\u{f071} " or ""
     local txt = p .. l .. e .. (item.name or "Unknown") .. (hide_artist and "" or SEP .. an)
     if item.id == current_id then txt = "<span foreground=\"#b6e0a4\">" .. txt .. "</span>" end
@@ -1250,7 +1250,7 @@ local function display_artist(item)
 end
 
 local function display_playlist(item)
-    local prefix = (item.owner and item.owner.id == "spotify") and "\u{f1bc}  " or ""
+    local prefix = (item.owner and item.owner.id == "spotify") and "\u{f1bc} " or ""
     return prefix .. (item.name or "Unknown")
 end
 
@@ -1266,13 +1266,13 @@ local _fmt_cache_entries = nil
 local _fmt_cache_tracks  = nil
 local _fmt_cache_key     = nil
 
-format_entries = function(tracks, hide_artist)
-    local key = (current_id or "") .. tostring(is_playing) .. tostring(hide_artist)
+format_entries = function(tracks, hide_artist, hide_liked)
+    local key = (current_id or "") .. tostring(is_playing) .. tostring(hide_artist) .. tostring(hide_liked)
     if _fmt_cache_tracks == tracks and _fmt_cache_key == key then
         return _fmt_cache_entries
     end
     local entries = {}
-    for i, t in ipairs(tracks) do entries[i] = string.format("%2d. %s", i, display_track(t, hide_artist)) end
+    for i, t in ipairs(tracks) do entries[i] = string.format("%2d. %s", i, display_track(t, hide_artist, hide_liked)) end
     _fmt_cache_entries = entries
     _fmt_cache_tracks  = tracks
     _fmt_cache_key     = key
@@ -1327,16 +1327,14 @@ function Util.has_lyrics(id)
 end
 
 local function track_mesg(item)
-    local p = item.id == current_id and (is_playing and "\u{f04b}  " or "\u{f04c}  ") or ""
-    local l = item.id and liked[item.id] and " \u{f05d} " or ""
-    local e = item.explicit and " \u{f071} " or ""
+    local p = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
+    local l = item.id and liked[item.id] and " \u{f05d}" or ""
+    local e = item.explicit and " \u{f071}" or ""
     local s = ""
     if Util.has_lyrics(item.id) then
-        s = Util.has_synced_lyrics(item.id)
-            and ' <span foreground="#fab387">\u{F0189}</span>'
-            or " \u{F0189}"
+        s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
     end
-    return p .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
+    return p .. " " .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -2465,6 +2463,12 @@ view_lyrics = function(item)
     local mesg_base = track_mesg(item)
     if timestamps then
         local pre_sel = 0
+        if current_id == item.id then
+            local pos = get_playerctl_position()
+            for i, ts in ipairs(timestamps) do
+                if ts <= pos then pre_sel = i - 1 end
+            end
+        end
         while true do
             ::lr_next::
             local sel_line = rofi_dmenu(display_lines,
@@ -2520,11 +2524,15 @@ view_lyrics = function(item)
     else
         while true do
             ::lr_next_plain::
-            rofi_dmenu(display_lines,
+            local sel_line = rofi_dmenu(display_lines,
                 {prompt="Lyrics", mesg=mesg_base, custom=false, use_menu=true, theme=THEME_LYR})
             if consume_pending_toggle() then goto lr_next_plain end
             if jump_to_track_pending then
                 jump_to_track_pending = false
+                rofi_message("No synced lyrics — cannot jump to a line")
+                goto lr_next_plain
+            end
+            if sel_line then
                 rofi_message("No synced lyrics — cannot jump to a line")
                 goto lr_next_plain
             end
@@ -2754,7 +2762,7 @@ local function view_liked_tracks()
     local tracks = load_liked_tracks()
     if #tracks == 0 then rofi_message("No liked tracks"); return end
     session_push({view="liked"})
-    local entries = format_entries(tracks)
+    local entries = format_entries(tracks, nil, true)
     view_browse(entries, tracks, "Liked Tracks" .. SEP .. #tracks .. " tracks", "liked", nil, nil)
     session_pop()
     if seek_pending or jump_to_track_pending then return end
@@ -2993,7 +3001,7 @@ local function view_system()
             for _, v in ipairs({96, 160, 320}) do
                 if v == cur_br then
                     table.insert(br_opts, "<span foreground=\"#b6e0a4\">"
-                        .. "\u{f00c}  " .. v .. " kbps" .. (v == 160 and " (default)" or "") .. "</span>")
+                        .. "\u{f00c} " .. v .. " kbps" .. (v == 160 and " (default)" or "") .. "</span>")
                 else
                     local label = v .. " kbps"
                     if v == 160 then label = label .. " (default)" end
@@ -3385,18 +3393,54 @@ local function daemon_mode()
     local last_title = nil
     local last_track_id = nil
 
+    local function wait_for_track_cache(id)
+        if not id then return end
+        for _ = 1, 30 do
+            local rt = safe_decode(read_file(P.now_track))
+            if rt and rt.item and rt.item.id == id then return end
+            os.execute("sleep 0.05")
+        end
+    end
+
+    local function notify_icons(track_id)
+        if not track_id then return "" end
+        local icons = {}
+        local ids = safe_decode(read_file(P.liked_ids))
+        if ids and type(ids) == "table" then
+            for _, id in ipairs(ids) do
+                if id == track_id then icons[#icons+1] = "\u{f05d}"; break end
+            end
+        end
+        local rt = safe_decode(read_file(P.now_track))
+        if rt and rt.item and rt.item.id == track_id and rt.item.explicit then
+            icons[#icons+1] = "\u{f071}"
+        end
+        if Util.has_lyrics(track_id) then
+            if Util.has_synced_lyrics(track_id) then
+                icons[#icons+1] = "\u{F0188}"
+            else
+                icons[#icons+1] = "\u{F0189}"
+            end
+        end
+        local res = ""
+        for _, ic in ipairs(icons) do res = res .. " " .. ic end
+        return res
+    end
+
     local function daemon_notify(title, artist, art_url, track_id)
         if not title or #trim(title) == 0 then return end
         if track_id and #track_id > 0 then
             local prev_id = read_file(NOTIFY_FILE)
             if prev_id and trim(prev_id) == track_id then return end
             write_file(NOTIFY_FILE, track_id)
+            wait_for_track_cache(track_id)
         end
         local art_path = ensure_art(art_url) or ""
         local icon = #art_path > 0 and ("--icon=" .. shell_quote(art_path)) or ""
+        local suffix = notify_icons(track_id)
         os.execute("notify-send --app-name=spotirofi " .. icon
-            .. " " .. shell_quote(title)
-            .. " " .. shell_quote(artist or "") .. " &")
+            .. " " .. shell_quote(title .. suffix)
+            .. " " .. shell_quote(Util.pango_escape(artist or "")) .. " &")
     end
 
     local FIELD_SEP = "\x1f"
@@ -3411,7 +3455,6 @@ local function daemon_mode()
         local track_changed = track_id and #track_id > 0 and track_id ~= last_track_id
         local title_changed = title and title ~= "" and title ~= last_title
         if not track_changed and not title_changed then return end
-        daemon_notify(title, artist, art_url, track_id)
         if track_id and #track_id > 0 then
             write_file(P.now, json.encode({ id=track_id, name=title,
                 artists={{name=artist or ""}}, album={name=album or ""},
@@ -3434,6 +3477,7 @@ local function daemon_mode()
                 .. " --prefetch-track " .. shell_quote(track_id)
                 .. " > /dev/null 2>&1 &")
         end
+        daemon_notify(title, artist, art_url, track_id)
     end
 
     local function daemon_loop()

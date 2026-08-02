@@ -54,5 +54,5 @@ message {
 textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
-    font: "0xProto Nerd Font Bold 12";
+    font: "0xProto Nerd Font Propo Bold 12";
 }

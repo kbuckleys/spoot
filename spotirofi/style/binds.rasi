@@ -19,6 +19,6 @@ mainbox {
 textbox {
     text-color: #dfdfdd;
     horizontal-align: 0;
-    font: "0xProto Nerd Font 13";
+    font: "0xProto Nerd Font Propo 13";
     padding: 15px 20px 30px 30px;
 }
