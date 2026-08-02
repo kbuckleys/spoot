@@ -37,6 +37,8 @@
 }
 
 window {
+    location: south;
+    anchor: south;
     background-color: @background;
     padding: 0;
     border: 1px;

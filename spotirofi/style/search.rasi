@@ -7,8 +7,6 @@
 @import "ZENON"
 
 window {
-    location: south;
-    anchor: south;
     width: 1000px;
 }
 
@@ -42,9 +40,8 @@ element-text selected {
 }
 
 message {
-    background-color: #20242a;
-    margin: 0px 0px -1px 0px;
-    padding: 5px;
+    background-color: #16191d;
+    padding: 5px 5px 5px 5px;
 }
 textbox {
     text-color: #b6e0a4;

@@ -7,8 +7,6 @@
 @import "ZENON"
 
 window {
-    location: south;
-    anchor: south;
     width: 640px;
 }
 

@@ -39,9 +39,9 @@ element-text {
 }
 
 message {
-    background-color: #20242a;
+    background-color: #16191d;
     margin: 0px 0px -2px 0px;
-    padding: 5px;
+    padding: 5px 5px 5px 5px;
 }
 textbox {
     text-color: #b6e0a4;
