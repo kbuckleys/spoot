@@ -58,7 +58,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - perl
 - wl-clipboard / xclip ```depending on your session```
 - A nerd font ```without one, icons will appear artifacted```
-  > I highly recommend 0xProto, the typeface spotirofi uses
+  > I highly recommend <b>0xProto</b>, spotirofi's defined typeface
 
 # How to use
 Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config.
