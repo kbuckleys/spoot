@@ -699,6 +699,11 @@ local function artist_names(item)
     return table.concat(a, ", ")
 end
 
+local function album_suffix(item)
+    if #(item.artists or {}) <= 1 then return "" end
+    return SEP .. artist_names(item)
+end
+
 local function ensure_art(art_url)
     if not art_url or #art_url == 0 then return nil end
     local hash = art_url:match("/image/([%w]+)") or art_url:match("/([%w_%-]+)$")
@@ -1183,7 +1188,7 @@ open_url = function(url)
         else rofi_message("Track not found") end
     elseif kind == "album" then
         local d = api_get("albums/" .. id)
-        if d then browse_album(id, (d.name or "Album") .. SEP .. artist_names(d))
+        if d then browse_album(id, (d.name or "Album") .. album_suffix(d))
         else rofi_message("Album not found") end
     elseif kind == "artist" then
         local d = api_get("artists/" .. id)
@@ -1237,18 +1242,19 @@ end
 
 -- DISPLAY HELPERS
 
-display_track = function(item, hide_artist, hide_liked)
-    local an = hide_artist and "" or artist_names(item)
+display_track = function(item, hide_artist, hide_liked, hide_single_artist)
+    local hide = hide_artist or (hide_single_artist and #(item.artists or {}) <= 1)
+    local an = hide and "" or artist_names(item)
     local p  = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
     local l  = (not hide_liked) and item.id and liked[item.id] and "\u{f05d} " or ""
     local e  = item.explicit and "\u{f071} " or ""
-    local txt = p .. l .. e .. (item.name or "Unknown") .. (hide_artist and "" or SEP .. an)
+    local txt = p .. l .. e .. (item.name or "Unknown") .. (hide and "" or SEP .. an)
     if item.id == current_id then txt = "<span foreground=\"#b6e0a4\">" .. txt .. "</span>" end
     return txt
 end
 
-local function display_album(item, hide_single_artist)
-    if hide_single_artist and #(item.artists or {}) <= 1 then
+local function display_album(item, show_artist)
+    if not show_artist and #(item.artists or {}) <= 1 then
         return item.name or "Unknown"
     end
     return (item.name or "Unknown") .. SEP .. artist_names(item)
@@ -1266,22 +1272,25 @@ end
 function Util.format_mixed_item(t, i)
     local st = t._stype or "track"
     local pfx = ICON_PREFIX[st] or ""
-    local df = st == "tracks" and display_track or st == "albums" and display_album
-            or st == "artists" and display_artist or display_playlist
-    return string.format("%2d. %s", i, pfx .. df(t))
+    local body
+    if st == "tracks" then body = display_track(t)
+    elseif st == "albums" then body = display_album(t, true)
+    elseif st == "artists" then body = display_artist(t)
+    else body = display_playlist(t) end
+    return string.format("%2d. %s", i, pfx .. body)
 end
 
 local _fmt_cache_entries = nil
 local _fmt_cache_tracks  = nil
 local _fmt_cache_key     = nil
 
-format_entries = function(tracks, hide_artist, hide_liked)
-    local key = (current_id or "") .. tostring(is_playing) .. tostring(hide_artist) .. tostring(hide_liked)
+format_entries = function(tracks, hide_artist, hide_liked, hide_single_artist)
+    local key = (current_id or "") .. tostring(is_playing) .. tostring(hide_artist) .. tostring(hide_liked) .. tostring(hide_single_artist)
     if _fmt_cache_tracks == tracks and _fmt_cache_key == key then
         return _fmt_cache_entries
     end
     local entries = {}
-    for i, t in ipairs(tracks) do entries[i] = string.format("%2d. %s", i, display_track(t, hide_artist, hide_liked)) end
+    for i, t in ipairs(tracks) do entries[i] = string.format("%2d. %s", i, display_track(t, hide_artist, hide_liked, hide_single_artist)) end
     _fmt_cache_entries = entries
     _fmt_cache_tracks  = tracks
     _fmt_cache_key     = key
@@ -1349,7 +1358,7 @@ local function track_mesg(item)
     if Util.has_lyrics(item.id) then
         s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
     end
-    return p .. " " .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -1618,7 +1627,7 @@ end
 -- item (via browse_album / api_get_playlist_tracks) themselves, since the
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
-local function album_action_menu(album)
+local function album_action_menu(album, show_artist)
     local acts = {"Open Album", "Save Album", "Copy URL"}
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
@@ -1626,8 +1635,9 @@ local function album_action_menu(album)
     if type(saved) == "string" then
         for i, a in ipairs(acts) do if a == saved then pre_sel = i - 1; break end end
     end
+    local mesg = (album.name or "Album") .. (show_artist and (SEP .. artist_names(album)) or album_suffix(album))
     local action = rofi_dmenu(acts,
-        {prompt=album.name or "Album", mesg=(album.name or "Album") .. SEP .. artist_names(album), custom=false, theme=THEME_SUB, no_status=true, sel=pre_sel})
+        {prompt=album.name or "Album", mesg=mesg, custom=false, theme=THEME_SUB, no_status=true, sel=pre_sel})
     if action then
         do local vp = disk_get(P.view_pos) or {}; vp[al_ac_key] = action; disk_set(P.view_pos, vp) end
     end
@@ -2022,6 +2032,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
     local is_playlist_list = (ctx_type == "playlist" and not ctx_id) or ctx == "search-playlist"
     local is_search_all   = ctx == "all"
     local is_search_ctx   = is_search_all or (ctx and ctx:match("^search%-")) or ctx == "track" or ctx == "artist"
+    local hide_single_artist = ctx == "album" or ctx == "liked-by-artist" or ctx == "top-by-artist"
 
     local v_key = ctx .. "|" .. (ctx_type or "") .. "|" .. (ctx_id or "")
     local pre_sel = 0
@@ -2056,7 +2067,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 if #items == 0 then return nil end
             else
                 get_playback()
-                entries = format_entries(items)
+                entries = format_entries(items, nil, nil, hide_single_artist)
                 pre_sel = idx - 1
                 do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
             end
@@ -2081,7 +2092,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 pre_sel = idx - 1
                 do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
             elseif st == "albums" then
-                if album_action_menu(item) then
+                if album_action_menu(item, true) then
                     local ok = browse_album(item.id, (item.name or "Unknown") .. SEP .. artist_names(item))
                     if not ok then rofi_message("Failed to load album") end
                     if seek_pending or jump_to_track_pending then return end
@@ -2106,15 +2117,14 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 end
             end
             if st ~= "tracks" then
-                local pf = ICON_PREFIX[st] or ""
-                entries[idx] = string.format("%2d. %s", idx, pf .. (item.name or "Unknown"))
+                entries[idx] = Util.format_mixed_item(item, idx)
                 pre_sel = idx - 1
                 do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
             end
         elseif is_album_list then
             local do_open = false
             if ctx == "search-album" then
-                do_open = album_action_menu(item)
+                do_open = album_action_menu(item, true)
             elseif ctx == "album-list" then
                 local action = rofi_dmenu({"Open Album", "Remove from Library", "Copy URL"}, {prompt=item.name or "Album", mesg=(item.name or "Album") .. SEP .. artist_names(item), custom=false, theme=THEME_SUB, no_status=true})
                 if action == "Open Album" then
@@ -2130,7 +2140,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                             rofi_message("Removed from library")
                             table.remove(items, idx)
                             entries = {}
-                            for i, a in ipairs(items) do entries[i] = display_album(a) end
+                            for i, a in ipairs(items) do entries[i] = display_album(a, true) end
                             mesg = "Saved Albums" .. SEP .. #items .. " albums"
                             if #items == 0 then return end
                             goto br_next
@@ -2181,7 +2191,7 @@ browse_album = function(album_id, mesg)
     local ad = api_get_album(album_id)
     if not ad or not ad.tracks or #ad.tracks == 0 then return false end
     session_push({view="album", album_id=album_id})
-    local te = format_entries(ad.tracks, true)
+    local te = format_entries(ad.tracks, nil, nil, true)
     view_browse(te, ad.tracks, mesg, "album", "album", album_id)
     session_pop()
     return true
@@ -2317,7 +2327,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         elseif sel == "Go to Album" then
             local album = item.album
             if album and album.id and album_action_menu(album) then
-                browse_album(album.id, (album.name or "Unknown") .. SEP .. artist_names(album))
+                browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
             end
         elseif sel == "Go to Artist" then
             local arts = item.artists or {}
@@ -2393,7 +2403,7 @@ local function fetch_artist_albums(artist_id, artist_name)
     local items = api_get_artist_albums(artist_id)
     if not items or #items == 0 then return nil end
     local ae = {}
-    for i, a in ipairs(items) do ae[i] = display_album(a, true) end
+    for i, a in ipairs(items) do ae[i] = display_album(a) end
     return items, ae, (artist_name or "") .. SEP .. #items .. " albums"
 end
 
@@ -2402,14 +2412,14 @@ local function fetch_liked_by_artist(artist_id, artist_name)
     local tracks = get_liked_by_artist(artist_id)
     if #tracks == 0 then return nil end
     table.sort(tracks, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
-    local te = format_entries(tracks, true)
+    local te = format_entries(tracks, nil, nil, true)
     return tracks, te, (artist_name or "") .. SEP .. #tracks .. " liked tracks"
 end
 
 local function fetch_artist_top_tracks(artist_id, artist_name)
     local d = api_get_artist_top_tracks(artist_id)
     if not d or not d.tracks or #d.tracks == 0 then return nil end
-    local te = format_entries(d.tracks, true)
+    local te = format_entries(d.tracks, nil, nil, true)
     return d.tracks, te, (artist_name or "") .. SEP .. #d.tracks .. " top tracks"
 end
 
@@ -2450,8 +2460,12 @@ local function format_search_results(results, category, query)
         if not items or type(items) ~= "table" or #items == 0 then return nil end
         local n = math.min(#items, P.max); local entries = {}
         for i = 1, n do
-            local df = category == "track" and display_track or category == "artist" and display_artist or category == "album" and display_album or display_playlist
-            entries[#entries+1] = string.format("%2d. %s", i, df(items[i]))
+            local body
+            if category == "track" then body = display_track(items[i])
+            elseif category == "artist" then body = display_artist(items[i])
+            elseif category == "album" then body = display_album(items[i], true)
+            else body = display_playlist(items[i]) end
+            entries[#entries+1] = string.format("%2d. %s", i, body)
         end
         local sctx = (category == "album" or category == "playlist") and "search-" .. category or category
         return items, entries, n .. " " .. key .. " for " .. query, sctx,
@@ -2508,7 +2522,7 @@ view_artist = function(artist)
                         do local vp = disk_get(P.view_pos) or {}; vp[alb_key] = aidx - 1; disk_set(P.view_pos, vp) end
                         local al = items[aidx]
                         if album_action_menu(al) then
-                            browse_album(al.id, (al.name or "Unknown") .. SEP .. artist_names(al))
+                            browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
                             if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end
                         end
                     end
@@ -2933,7 +2947,7 @@ local function view_saved_albums()
     if #al == 0 then rofi_message("No saved albums"); return end
     session_push({view="saved-albums"})
     local entries = {}
-    for i, a in ipairs(al) do entries[i] = display_album(a) end
+    for i, a in ipairs(al) do entries[i] = display_album(a, true) end
     view_browse(entries, al, "Saved Albums" .. SEP .. #al .. " albums", "album-list", "album", nil, true)
     session_pop()
     if seek_pending or jump_to_track_pending then return end
@@ -2975,7 +2989,7 @@ local function view_new_releases()
             do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
             local al = albums[idx]
             if album_action_menu(al) then
-                browse_album(al.id, (al.name or "Unknown") .. SEP .. artist_names(al))
+                browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
                 if seek_pending or jump_to_track_pending then session_pop(); return end
             end
         end
@@ -3304,7 +3318,7 @@ local function replay_session()
             session_push({view="album", album_id=s.album_id})
             local ad = api_get_album(s.album_id)
             if ad and ad.tracks and #ad.tracks > 0 then
-                local te = format_entries(ad.tracks, true)
+                local te = format_entries(ad.tracks, nil, nil, true)
                 view_browse(te, ad.tracks, "", "album", "album", s.album_id)
             end
             session_pop()
@@ -3333,7 +3347,7 @@ local function replay_session()
                     if aidx >= 1 and aidx <= #items then
                         local al = items[aidx]
                         if album_action_menu(al) then
-                            browse_album(al.id, (al.name or "Unknown") .. SEP .. artist_names(al))
+                            browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
                             if seek_pending or jump_to_track_pending then return end
                         end
                     end
