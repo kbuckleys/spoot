@@ -23,6 +23,7 @@ P.liked      = P.cache .. "/liked_tracks.json"
 P.albums     = P.cache .. "/saved_albums.json"
 P.artists    = P.cache .. "/followed_artists.json"
 P.session    = P.cache .. "/session.json"
+P.trails     = P.cache .. "/trails.json"
 P.view_pos   = P.cache .. "/view_pos.json"
 P.queue      = P.cache .. "/playback_queue.json"
 P.art        = P.cache .. "/art"
@@ -35,9 +36,9 @@ P.now        = P.cache .. "/now.json"
 P.now_track  = P.cache .. "/now_track.json"
 local EXIT = {
     back = 10, main = 11,
-    open_url = 12, jump = 13, jump_kp = 14, liked = 15, queue = 16,
+    open_url = 12, jump = 13, jump_kp = 14, liked = 15, trail_jump = 16,
     track = 17, seek = 18, art = 19, repeat_toggle = 20, lyrics = 21,
-    recent = 22, shuffle_toggle = 23,
+    recent = 22, shuffle_toggle = 23, clear_trail = 24,
 }
 local SEP = " \u{F01D8} "
 local CACHE_TTL_SHORT = 300
@@ -183,6 +184,7 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART
     end
     local d = P.dir .. "/style"
     P.THEME_SEARCH = resolve(d.."/search.rasi","search")
+    Util.THEME_TRAIL = resolve(d.."/trail.rasi","trail")
     return resolve(d.."/main.rasi","main"), resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
            resolve(d.."/message.rasi","message"), resolve(d.."/sub.rasi","sub"), resolve(d.."/binds.rasi","binds"),
            resolve(d.."/art.rasi","art")
@@ -344,6 +346,26 @@ end
 
 local _session_stack = nil
 
+function Util.trail_load()
+    Util.trail_history = {}
+    local d = safe_decode(read_file(P.trails))    if d and type(d.trails) == "table" then
+        for _, t in ipairs(d.trails) do
+            if #Util.trail_history < 2 then
+                if type(t) == "table" and type(t.stack) == "table" then
+                    Util.trail_history[#Util.trail_history + 1] = t
+                elseif type(t) == "string" then
+                    Util.trail_history[#Util.trail_history + 1] = {label=t, stack={}}
+                end
+            end
+        end
+    end
+end
+
+function Util.trail_save()
+    write_file(P.trails, json.encode({trails=Util.trail_history}))
+end
+Util.trail_history = Util.trail_history or {}
+
 local function session_load()
     local d = safe_decode(read_file(P.session))
     if d and type(d.stack) == "table" then
@@ -377,8 +399,25 @@ local function session_pop()
 end
 
 local function session_clear()
+    local parts = Util.breadcrumb_parts()
+    if #parts > 1 then
+        local copy = json.decode(json.encode(_session_stack)) or {}
+        Util.trail_history[#Util.trail_history + 1] = {
+            label = table.concat(parts, " > "),
+            stack = copy,
+        }
+        if #Util.trail_history > 2 then table.remove(Util.trail_history, 1) end
+        Util.trail_save()
+    end
     _session_stack = {}
     os.remove(P.session)
+end
+
+function Util.clear_trail()
+    _session_stack = {}
+    Util.trail_history = {}
+    os.remove(P.session)
+    os.remove(P.trails)
 end
 
 -- BREADCRUMB
@@ -408,11 +447,11 @@ local function crumb_name(entry)
     return nil
 end
 
-local function breadcrumb(extra)
+function Util.parts_from_stack(stack, extra)
     local parts = {"Main"}
     local last_name = nil
-    if _session_stack then
-        for _, e in ipairs(_session_stack) do
+    if stack then
+        for _, e in ipairs(stack) do
             local name = crumb_name(e)
             if name and name ~= last_name then
                 parts[#parts+1] = name
@@ -423,13 +462,24 @@ local function breadcrumb(extra)
         end
     end
     if extra and extra ~= "" then parts[#parts+1] = extra end
-    return table.concat(parts, " > ")
+    return parts
+end
+
+function Util.breadcrumb_parts(extra)
+    return Util.parts_from_stack(_session_stack, extra)
+end
+
+local function breadcrumb(extra)
+    local parts = {}
+    for _, t in ipairs(Util.trail_history) do parts[#parts+1] = type(t) == "table" and t.label or t end
+    parts[#parts+1] = table.concat(Util.breadcrumb_parts(extra), " > ")
+    return table.concat(parts, "  <span foreground=\"#a3a9bd\">\u{F17B7}</span>  ")
 end
 
 -- ROFI
 
 local main_pending    = false
-local liked_pending, queue_pending = false, false
+local liked_pending = false
 local seek_pending, jump_to_track_pending = false, false
 local recent_pending = false
 local shuffle_pending, repeat_pending = false, false
@@ -487,7 +537,8 @@ toggle_shuffle = function()
 end
 
 local function rofi_dmenu(entries, opts)
-    if main_pending or liked_pending or queue_pending or recent_pending then return nil end
+    Util.back_pressed = false
+    if main_pending or liked_pending or recent_pending or Util.trail_jump_pending then return nil end
     opts = opts or {}
     local prompt   = opts.prompt or ""
     local mesg     = opts.mesg
@@ -499,18 +550,21 @@ local function rofi_dmenu(entries, opts)
 
     if seek_pending or jump_to_track_pending then return nil end
     local args = {"rofi","-dmenu","-config",P.dir.."/style/config.rasi","-theme",theme,"-p",prompt,"-i",
-                   "-kb-custom-1","Alt+BackSpace","-kb-custom-2","Alt+space",
-                   "-kb-custom-3","Alt+g","-kb-custom-4","Alt+Return",
-                   "-kb-custom-5","Alt+KP_Enter",
-                   "-kb-custom-6","Alt+l",
-                   "-kb-custom-7","Alt+q",
-                   "-kb-custom-8","Alt+c",
-                   "-kb-custom-9","Alt+e",
-                   "-kb-custom-10","Alt+a",
-                   "-kb-custom-11","Alt+r",
-                   "-kb-custom-12","Alt+y",
-                   "-kb-custom-13","Alt+p",
-                   "-kb-custom-14","Alt+s"}
+                   "-kb-custom-1","Alt+BackSpace"}
+    if not opts.no_alt_space then args[#args+1] = "-kb-custom-2"; args[#args+1] = "Alt+space" end
+    args[#args+1] = "-kb-custom-3"; args[#args+1] = "Alt+g"
+    args[#args+1] = "-kb-custom-4"; args[#args+1] = "Alt+Return"
+    args[#args+1] = "-kb-custom-5"; args[#args+1] = "Alt+KP_Enter"
+    args[#args+1] = "-kb-custom-6"; args[#args+1] = "Alt+l"
+    args[#args+1] = "-kb-custom-7"; args[#args+1] = "Alt+t"
+    args[#args+1] = "-kb-custom-8"; args[#args+1] = "Alt+c"
+    args[#args+1] = "-kb-custom-9"; args[#args+1] = "Alt+e"
+    args[#args+1] = "-kb-custom-10"; args[#args+1] = "Alt+a"
+    args[#args+1] = "-kb-custom-11"; args[#args+1] = "Alt+r"
+    args[#args+1] = "-kb-custom-12"; args[#args+1] = "Alt+y"
+    args[#args+1] = "-kb-custom-13"; args[#args+1] = "Alt+p"
+    args[#args+1] = "-kb-custom-14"; args[#args+1] = "Alt+s"
+    args[#args+1] = "-kb-custom-15"; args[#args+1] = "Alt+k"
     if opts.custom == false then args[#args+1] = "-no-custom" end
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
     if by_index then args[#args+1] = "-format"; args[#args+1] = "i" end
@@ -547,10 +601,15 @@ local function rofi_dmenu(entries, opts)
     local exit_code = tonumber((raw or ""):match("__EXIT__(%d+)__")) or 0
     local result    = trim((raw or ""):match("^(.-)\n__EXIT__%d+__") or "")
 
-    if exit_code == EXIT.back then return nil end
+    if exit_code == EXIT.back then Util.back_pressed = true; return nil end
     if exit_code == EXIT.main then session_clear(); main_pending = true; return nil end
+    if exit_code == EXIT.clear_trail then Util.clear_trail(); main_pending = true; return nil end
     if exit_code == EXIT.liked then liked_pending = true; return nil end
-    if exit_code == EXIT.queue then queue_pending = true; return nil end
+    if exit_code == EXIT.trail_jump then
+        Util.trail_jump_stack = _session_stack and json.decode(json.encode(_session_stack)) or {}
+        Util.trail_jump_pending = true
+        return nil
+    end
     if exit_code == EXIT.track then jump_to_track_pending = true; return nil end
     if exit_code == EXIT.seek then
         if current_track then seek_pending = true; return nil
@@ -1405,7 +1464,7 @@ local function track_mesg(item)
     if Util.has_lyrics(item.id) then
         s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
     end
-    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. l .. e .. s
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -3268,6 +3327,8 @@ local function view_system()
     local cur_vol = get_playerctl_volume()
     local vol_label = cur_vol == 0 and "Muted" or (cur_vol .. "%")
     local items = {"Keybinds", "Volume <b>" .. vol_label .. "</b>", "Bitrate <b>" .. cur_br .. " kbps</b>",
+                   "Jump to Trail Step",
+                   "Clear Session",
                    "Refresh Library",
                    "Restart Daemons",
                    "Kill Daemons"}
@@ -3302,8 +3363,9 @@ local function view_system()
                 row("Back one level", "alt + backspace"),
                 row("Jump to current track's action menu", "alt + return"),
                 row("Jump to main menu", "alt + space"),
+                row("Jump to trail step", "alt + t"),
+                row("Clear session trail", "alt + k"),
                 row("Liked tracks", "alt + l"),
-                row("Your queue", "alt + q"),
                 row("Recently played", "alt + p"),
                 row("Album art of current track", "alt + a"),
                 row("Lyrics of current track", "alt + y"),
@@ -3351,9 +3413,18 @@ local function view_system()
             else
                 os.execute("notify-send -t 5000 --app-name=spotirofi 'Spotirofi' 'Library refresh failed' &")
             end
+        elseif clean == "Jump to Trail Step" then
+            Util.view_trail_jump(_session_stack)
+            main_pending = true
+            break
+        elseif clean == "Clear Session" then
+            Util.clear_trail()
+            main_pending = true
+            break
         elseif clean == "Restart Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null"); os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
             mem_bust("spotifyd_device"); mem_bust("spotifyd_device_vol")
+            os.remove(P.trails); Util.trail_history = {}
             os.execute("sleep 1")
             inv_playback()
             ensure_spotifyd()
@@ -3362,6 +3433,7 @@ local function view_system()
         elseif clean == "Kill Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null")
             os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
+            os.remove(P.trails); Util.trail_history = {}
             os.execute("pkill -x rofi 2>/dev/null")
             Util.clean_exit()
         end
@@ -3536,6 +3608,77 @@ local function replay_session()
     end
 end
 
+function Util.restore_trail()
+    for i = #Util.trail_history, 1, -1 do
+        local t = Util.trail_history[i]
+        if type(t) == "table" and type(t.stack) == "table" and #t.stack > 0 then
+            table.remove(Util.trail_history, i)
+            _session_stack = t.stack
+            session_save()
+            Util.trail_save()
+            replay_session()
+            return true
+        end
+    end
+    return false
+end
+
+function Util.view_trail_jump(stack)
+    local SEP = "  \u{F17B7}  "
+    local opts = {}
+    local function push(prefix, name, ostack, depth)
+        opts[#opts+1] = {label=prefix .. name, stack=ostack, depth=depth}
+    end
+    local first = true
+    local function add_trail(stk, with_main)
+        if with_main then
+            push(first and "" or SEP, "Main", stk, 0)
+            first = false
+            if stk then
+                for i = 1, #stk do
+                    local e = stk[i]
+                    local name = crumb_name(e)
+                    if not name then name = VIEW_LABEL[e.view] or (e.view or "?") end
+                    push("> ", name, stk, i)
+                end
+            end
+            return
+        end
+        if not stk or #stk == 0 then return end
+        for i = 1, #stk do
+            local e = stk[i]
+            local name = crumb_name(e)
+            if not name then name = VIEW_LABEL[e.view] or (e.view or "?") end
+            push(i == 1 and (first and "" or SEP) or "> ", name, stk, i)
+        end
+        first = false
+    end
+    for _, t in ipairs(Util.trail_history) do
+        if type(t) == "table" and type(t.stack) == "table" then add_trail(t.stack) end
+    end
+    add_trail(stack, true)
+    if #opts <= 1 then rofi_message("You left no trail"); return end
+    local labels = {}
+    for i, o in ipairs(opts) do labels[i] = o.label end
+    local idx = rofi_dmenu(labels, {prompt="Jump to Trail Step", custom=false, by_index=true, use_menu=true, theme=Util.THEME_TRAIL, markup=true, no_status=true, no_alt_space=true, sel=#labels - 1})
+    if not idx or idx < 1 or idx > #opts then return end
+    local o = opts[idx]
+    local target = {}
+    for i = 1, o.depth do target[i] = o.stack[i] end
+    if o.stack ~= stack then
+        for i = #Util.trail_history, 1, -1 do
+            if Util.trail_history[i] and Util.trail_history[i].stack == o.stack then
+                table.remove(Util.trail_history, i)
+                break
+            end
+        end
+        Util.trail_save()
+    end
+    _session_stack = target
+    session_save()
+    replay_session()
+end
+
 -- MAIN
 
 local function init_instance_lock()
@@ -3558,6 +3701,7 @@ local function ensure_daemon()
         daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
     end
     if not daemon_alive then
+        os.remove(P.trails)
         os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
     end
 end
@@ -3602,6 +3746,7 @@ local function init_library()
         os.execute("notify-send -t 3000 --app-name=spotirofi 'spotirofi' 'Caching Complete' &")
     end
     populate_liked_ids()
+    Util.trail_load()
     session_load()
     replay_session()
     last_playback = os.time()
@@ -3659,8 +3804,15 @@ local function main()
 
         if main_pending   then main_pending   = false; goto m1 end
         if liked_pending  then liked_pending  = false; view_liked_tracks(); goto m1 end
-        if queue_pending  then queue_pending  = false; view_your_queue(); goto m1 end
         if recent_pending then recent_pending = false; view_recently_played(); goto m1 end
+        if Util.trail_jump_pending then
+            Util.trail_jump_pending = false
+            local snap = Util.trail_jump_stack
+            _session_stack = snap
+            session_save()
+            Util.view_trail_jump(snap)
+            goto m1
+        end
         if jump_to_track_pending then jump_to_track_pending = false; goto m1 end
         if repeat_pending then repeat_pending = false; goto m1 end
         if shuffle_pending then shuffle_pending = false; goto m1 end
@@ -3668,6 +3820,10 @@ local function main()
             last_playback = 0; get_playback()
             if current_track then view_seek(current_track) end
             goto m1
+        end
+        if Util.back_pressed then
+            Util.back_pressed = false
+            if Util.restore_trail() then goto m1 end
         end
         if not sel then goto m1 end
 
