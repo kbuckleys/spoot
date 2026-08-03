@@ -748,8 +748,9 @@ local function artist_names(item)
 end
 
 local function album_suffix(item)
-    if #(item.artists or {}) <= 1 then return "" end
-    return SEP .. artist_names(item)
+    local an = artist_names(item)
+    if an == "" then return "" end
+    return SEP .. an
 end
 
 local function ensure_art(art_url)
@@ -1223,7 +1224,7 @@ function Util.fast_now_track()
     if not (now and now.id and rich and rich.item and rich.item.id == now.id) then return false end
     current_track = rich.item
     current_id    = rich.item.id
-    is_playing    = now.playing == true
+    is_playing    = rich.playing ~= nil and rich.playing == true or now.playing == true
     return true
 end
 
@@ -1302,10 +1303,8 @@ display_track = function(item, hide_artist, hide_liked, hide_single_artist)
 end
 
 local function display_album(item, show_artist)
-    if not show_artist and #(item.artists or {}) <= 1 then
-        return item.name or "Unknown"
-    end
-    return (item.name or "Unknown") .. SEP .. artist_names(item)
+    if not show_artist and #(item.artists or {}) <= 1 then return item.name or "Unknown" end
+    return (item.name or "Unknown") .. album_suffix(item)
 end
 
 local function display_artist(item)
@@ -1678,7 +1677,7 @@ end
 -- item (via browse_album / api_get_playlist_tracks) themselves, since the
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
-local function album_action_menu(album, show_artist)
+local function album_action_menu(album)
     local acts = {"Open Album", "Save Album", "Copy URL"}
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
@@ -1686,7 +1685,7 @@ local function album_action_menu(album, show_artist)
     if type(saved) == "string" then
         for i, a in ipairs(acts) do if a == saved then pre_sel = i - 1; break end end
     end
-    local mesg = (album.name or "Album") .. (show_artist and (SEP .. artist_names(album)) or album_suffix(album))
+    local mesg = (album.name or "Album") .. album_suffix(album)
     local action = rofi_dmenu(acts,
         {prompt=album.name or "Album", mesg=mesg, custom=false, theme=THEME_SUB, no_status=true, sel=pre_sel, markup=true})
     if action then
@@ -2092,7 +2091,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         if v then pre_sel = math.max(0, math.min(v, #items - 1)) end
     end
     while true do
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx})
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2143,8 +2142,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 pre_sel = idx - 1
                 do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
             elseif st == "albums" then
-                if album_action_menu(item, true) then
-                    local ok = browse_album(item.id, (item.name or "Unknown") .. SEP .. artist_names(item))
+                if album_action_menu(item) then
+                    local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
                     if not ok then rofi_message("Failed to load album") end
                     if seek_pending or jump_to_track_pending then return end
                 end
@@ -2175,9 +2174,9 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         elseif is_album_list then
             local do_open = false
             if ctx == "search-album" then
-                do_open = album_action_menu(item, true)
+                do_open = album_action_menu(item)
             elseif ctx == "album-list" then
-                local action = rofi_dmenu({"Open Album", "Remove from Library", "Copy URL"}, {prompt=item.name or "Album", mesg=(item.name or "Album") .. SEP .. artist_names(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
+                local action = rofi_dmenu({"Open Album", "Remove from Library", "Copy URL"}, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
                 if action == "Open Album" then
                     do_open = true
                 elseif action == "Remove from Library" then
@@ -2203,7 +2202,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 end
             end
             if do_open then
-                local ok = browse_album(item.id, (item.name or "Unknown") .. SEP .. artist_names(item))
+                local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
                 if not ok then rofi_message("Failed to load album") end
                 if seek_pending or jump_to_track_pending then return end
             end
@@ -2356,6 +2355,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         if sel == "Resume" then
             os.execute("playerctl play 2>/dev/null")
             is_playing = true
+            last_playback = 0
             actions[1] = "Pause"
         elseif sel == "Play" then
             do_play(item, ctx_type, ctx_id, all_items, cidx)
@@ -2368,6 +2368,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         elseif sel == "Pause" then
             os.execute("playerctl pause 2>/dev/null")
             is_playing = false
+            last_playback = 0
             actions[1] = "Resume"
         elseif sel == "Add to Queue" then do_add_queue(item.id)
         elseif sel == "Like" or sel == "Unlike" then
@@ -3028,7 +3029,7 @@ local function view_new_releases()
     if #albums == 0 then rofi_message("No new releases"); return end
     session_push({view="new-releases"})
     local entries = {}
-    for i, a in ipairs(albums) do entries[i] = display_album(a) end
+    for i, a in ipairs(albums) do entries[i] = display_album(a, true) end
     local v_key = "new-releases||"
     local pre_sel = 0
     if #entries > 0 then
@@ -3130,7 +3131,7 @@ end
 -- VIEW: PLAYBACK CONTROLS
 
 view_seek = function(item)
-    session_push({view="seek", track_id=item.id, track_duration_ms=item.duration_ms or 0})
+    session_push({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0})
     local seeks = {"+10s", "-10s", "+30s", "-30s", '<span foreground="#20242a">────────────────────</span>', "1:00", "2:00", "0:00"}
     local seek_key = "seek:" .. (item.id or "")
     local disp_pos = get_playerctl_position()
@@ -3221,10 +3222,10 @@ local function view_playback()
         do local vp = disk_get(P.view_pos) or {}; vp[pb_key] = si; disk_set(P.view_pos, vp) end
         if si == "Pause" then
             local r = os.execute("playerctl pause 2>/dev/null")
-            if r == true or r == 0 then is_playing = false else rofi_message("Failed to pause") end
+            if r == true or r == 0 then is_playing = false; last_playback = 0 else rofi_message("Failed to pause") end
         elseif si == "Resume" then
             local r = os.execute("playerctl play 2>/dev/null")
-            if r == true or r == 0 then is_playing = true else rofi_message("Failed to resume") end
+            if r == true or r == 0 then is_playing = true; last_playback = 0 else rofi_message("Failed to resume") end
         elseif si == "Next Track" then
             local prev_id = current_id
             local r = do_playback_cmd("next")
@@ -3397,7 +3398,7 @@ local function replay_session()
             if ad and ad.tracks and #ad.tracks > 0 then
                 session_push({view="album", album_id=s.album_id, album_name=ad.name or "Album"})
                 local te = format_entries(ad.tracks, nil, nil, true)
-                view_browse(te, ad.tracks, "", "album", "album", s.album_id)
+                view_browse(te, ad.tracks, (ad.name or "Album") .. album_suffix(ad), "album", "album", s.album_id)
                 session_pop()
             end
         elseif v == "playlist" and s.playlist_id then
@@ -3406,7 +3407,7 @@ local function replay_session()
             if tracks and #tracks > 0 then
                 session_push({view="playlist", playlist_id=s.playlist_id, playlist_name=pl and pl.name or "Playlist"})
                 local te = format_entries(tracks)
-                view_browse(te, tracks, "", "playlist", "playlist", s.playlist_id)
+                view_browse(te, tracks, (pl and pl.name or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", s.playlist_id)
                 session_pop()
             end
         elseif v == "liked"              then view_liked_tracks()
@@ -3519,6 +3520,13 @@ local function replay_session()
                 goto rp_act
             end
             end
+        elseif v == "seek" and s.track_id then
+            if current_track and current_track.id == s.track_id then
+                view_seek(current_track)
+            else
+                view_seek({id=s.track_id, name=s.strack_name or "",
+                           duration_ms=s.track_duration_ms or 0})
+            end
         elseif v == "add-to-playlist" and s.track_id then
             view_add_pl(s.track_id)
         end
@@ -3582,9 +3590,6 @@ local function init_library()
             end
         end
     end)()
-    ;(function()
-        P.had_snapshot = true
-    end)()
     if not (cache_exists(P.liked) and cache_exists(P.albums) and cache_exists(P.artists)) then
         os.execute("notify-send -t 5000 --app-name=spotirofi 'spotirofi' 'Building Cache' &")
         local tracks, albums, artists = fetch_library_with_fallback()
@@ -3614,7 +3619,7 @@ local function main()
     while true do
         flush_liked_cache()
         flush_recent_play()
-        if not first_loop or not P.had_snapshot then get_playback() end
+        if not first_loop then get_playback() end
         local is_first = first_loop
         first_loop = false
         if is_first then
