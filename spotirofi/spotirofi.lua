@@ -456,7 +456,7 @@ function Util.parts_from_stack(stack, extra)
             if name and name ~= last_name then
                 parts[#parts+1] = name
                 last_name = name
-            elseif not name then
+            else
                 parts[#parts+1] = VIEW_LABEL[e.view] or (e.view or "?")
             end
         end
@@ -604,7 +604,11 @@ local function rofi_dmenu(entries, opts)
     if exit_code == EXIT.back then Util.back_pressed = true; return nil end
     if exit_code == EXIT.main then session_clear(); main_pending = true; return nil end
     if exit_code == EXIT.clear_trail then Util.clear_trail(); main_pending = true; return nil end
-    if exit_code == EXIT.liked then liked_pending = true; return nil end
+    if exit_code == EXIT.liked then
+        if not Util.jump_preserve_stack and #_session_stack > 0 then
+            Util.jump_preserve_stack = json.decode(json.encode(_session_stack))
+        end
+        liked_pending = true; return nil end
     if exit_code == EXIT.trail_jump then
         Util.trail_jump_stack = _session_stack and json.decode(json.encode(_session_stack)) or {}
         Util.trail_jump_pending = true
@@ -623,7 +627,11 @@ local function rofi_dmenu(entries, opts)
             if opts.current then view_actions(target) end
         else rofi_message("No track playing") end
         return nil
-    elseif exit_code == EXIT.recent then recent_pending = true; return nil
+    elseif exit_code == EXIT.recent then
+        if not Util.jump_preserve_stack and #_session_stack > 0 then
+            Util.jump_preserve_stack = json.decode(json.encode(_session_stack))
+        end
+        recent_pending = true; return nil
     elseif exit_code == EXIT.lyrics then
         if not Util.fast_now_track() then last_playback = 0; get_playback() end
         local target = opts.current or current_track
@@ -2150,7 +2158,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         if v then pre_sel = math.max(0, math.min(v, #items - 1)) end
     end
     while true do
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx})
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2172,6 +2180,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             if unliked and ctx == "liked" then
                 table.remove(entries, idx)
                 table.remove(items, idx)
+                entries = format_entries(items, nil, true)
                 mesg = "Liked Tracks" .. SEP .. #items .. " tracks"
                 if #items == 0 then return nil end
             else
@@ -2276,20 +2285,19 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         elseif is_playlist_list then
             local do_open = playlist_action_menu(item)
             if do_open then
-                    local tracks = api_get_playlist_tracks(item.id)
-                    if not tracks then
-                        rofi_message("Failed to load playlist")
-                    elseif #tracks == 0 then
-                        rofi_message("Playlist is empty")
-                    else
-                        session_push({view="playlist", playlist_id=item.id, playlist_name=item.name or "Playlist"})
-                        local te = format_entries(tracks)
-                        view_browse(te, tracks, (item.name or "Unknown") .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
-                        session_pop()
-                        if seek_pending then return end
-    end
-    session_pop()
-end
+                local tracks = api_get_playlist_tracks(item.id)
+                if not tracks then
+                    rofi_message("Failed to load playlist")
+                elseif #tracks == 0 then
+                    rofi_message("Playlist is empty")
+                else
+                    session_push({view="playlist", playlist_id=item.id, playlist_name=item.name or "Playlist"})
+                    local te = format_entries(tracks)
+                    view_browse(te, tracks, (item.name or "Unknown") .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
+                    session_pop()
+                    if seek_pending then return end
+                end
+            end
             pre_sel = idx - 1
             do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
         end end
@@ -2336,6 +2344,7 @@ end
 local view_seek  -- forward declaration
 
 view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
+    if session_peek() and session_peek().view == "action" then session_pop() end
     session_push({view="action", track_id=item.id, track_name=item.name or "",
                   track_artists=item.artists or {}, track_album=item.album or {},
                   track_duration_ms=item.duration_ms or 0})
@@ -2966,7 +2975,7 @@ local function view_playlists()
                         for i, p in ipairs(pls) do if p.id == pl.id then del_idx = i; break end end
                         if del_idx then table.remove(entries, del_idx + 1); table.remove(pls, del_idx) end
                         session_pop()
-                        break
+                        goto pl_loop
                     else rofi_message("Failed to delete") end
                 end
                 goto pl_act
@@ -3453,14 +3462,14 @@ local function replay_session()
         local v = s.view
 
         if v == "action" and s.track_id then
-            if current_track then
+            if current_track and current_track.id == s.track_id then
                 view_actions(current_track)
             else
                 view_actions({id=s.track_id, name=s.track_name or "", artists=s.track_artists or {},
                     album=s.track_album or {}, duration_ms=s.track_duration_ms or 0})
             end
         elseif v == "lyrics" and s.track_id then
-            if current_track then
+            if current_track and current_track.id == s.track_id then
                 view_lyrics(current_track)
             else
                 view_lyrics({id=s.track_id, name=s.lyrics_track_name or "", artists=s.lyrics_track_artists or {}})
@@ -3528,8 +3537,8 @@ local function replay_session()
                 end
             end
         elseif v == "recommendations" and s.track_id then
-            local rec_id = current_track and current_track.id or s.track_id
-            local rec_name = current_track and current_track.name or s.recs_track_name
+            local rec_id = s.track_id
+            local rec_name = s.recs_track_name
             local tracks = api_get_recommendations(rec_id)
             if tracks then
                 local te = format_entries(tracks)
@@ -3630,25 +3639,32 @@ function Util.view_trail_jump(stack)
         opts[#opts+1] = {label=prefix .. name, stack=ostack, depth=depth}
     end
     local first = true
+    local function step_name(e, last_name)
+        local name = crumb_name(e)
+        if name and name ~= last_name then return name, name end
+        return VIEW_LABEL[e.view] or (e.view or "?"), last_name
+    end
     local function add_trail(stk, with_main)
         if with_main then
             push(first and "" or SEP, "Main", stk, 0)
             first = false
             if stk then
+                local last_name = nil
                 for i = 1, #stk do
                     local e = stk[i]
-                    local name = crumb_name(e)
-                    if not name then name = VIEW_LABEL[e.view] or (e.view or "?") end
+                    local name, ln = step_name(e, last_name)
+                    last_name = ln
                     push("> ", name, stk, i)
                 end
             end
             return
         end
         if not stk or #stk == 0 then return end
+        local last_name = nil
         for i = 1, #stk do
             local e = stk[i]
-            local name = crumb_name(e)
-            if not name then name = VIEW_LABEL[e.view] or (e.view or "?") end
+            local name, ln = step_name(e, last_name)
+            last_name = ln
             push(i == 1 and (first and "" or SEP) or "> ", name, stk, i)
         end
         first = false
@@ -3701,7 +3717,6 @@ local function ensure_daemon()
         daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
     end
     if not daemon_alive then
-        os.remove(P.trails)
         os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
     end
 end
@@ -3803,8 +3818,24 @@ local function main()
         end
 
         if main_pending   then main_pending   = false; goto m1 end
-        if liked_pending  then liked_pending  = false; view_liked_tracks(); goto m1 end
-        if recent_pending then recent_pending = false; view_recently_played(); goto m1 end
+        if liked_pending then
+            liked_pending = false
+            local base = Util.jump_preserve_stack
+            Util.jump_preserve_stack = nil
+            if base and #base > 0 then _session_stack = base; session_save() end
+            view_liked_tracks()
+            if base and #base > 0 then replay_session() end
+            goto m1
+        end
+        if recent_pending then
+            recent_pending = false
+            local base = Util.jump_preserve_stack
+            Util.jump_preserve_stack = nil
+            if base and #base > 0 then _session_stack = base; session_save() end
+            view_recently_played()
+            if base and #base > 0 then replay_session() end
+            goto m1
+        end
         if Util.trail_jump_pending then
             Util.trail_jump_pending = false
             local snap = Util.trail_jump_stack

@@ -7,7 +7,7 @@
 @import "ZENON"
 
 window {
-    width: 900px;
+    width: 700px;
 }
 
 mainbox {
@@ -18,19 +18,18 @@ listview {
     fixed-columns: false;
     fixed-height: false;
     scrollbar: false;
-    columns: 10;
-    lines: 1;
+    columns: 1;
+    lines: 10;
 }
 
 element {
-    padding: 2px 10px;
+    padding: 2px 2px 2px 2px;
 }
 element-text {
-    font: "0xProto Nerd Font Propo 12";
+    font: "0xProto Nerd Font Propo, DejaVu Sans 12";
     horizontal-align: 0.5;
 }
 element-text selected {
-    background-color: transparent;
     text-color: #b6e0a4;
-    font: "0xProto Nerd Font Propo Bold 12";
+    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 12";
 }
