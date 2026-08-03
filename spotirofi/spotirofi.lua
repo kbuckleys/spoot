@@ -3735,11 +3735,20 @@ local function check_rate_cooldown()
     return false
 end
 
+local function clear_last_playback()
+    os.execute("playerctl pause 2>/dev/null")
+    os.remove(P.now); os.remove(P.now_track)
+    os.remove(P.session); _session_stack = {}
+    current_track = nil; current_id = nil; previous_id = nil
+    is_playing = false; last_playback = 0
+end
+
 local function init_library()
     ensure_spotifyd_auth()
     ensure_auth()
     ensure_spotifyd()
     load_queue()
+    clear_last_playback()
     ;(function()
         local raw = read_file(P.state)
         if raw then local d = safe_decode(raw)
