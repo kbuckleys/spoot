@@ -23,27 +23,27 @@ But as spotirofi's development pressed on, it became mature enough to be its own
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
 # Functionality
-- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spotirofi will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away.
-- Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this option.
-- Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels.
+- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spotirofi will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away
+- Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this option
+- Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels
 
 # Limitations:
-Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spotirofi is no exception.
+Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spotirofi is no exception
 - **Remove from queue (Spotify Web API limitation)**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
-    - It adds complexity and relative bloat for what it's supposed to do.
-    - Local implementation also means zero sync with other Spotify clients/connect devices.
+    - It adds complexity and relative bloat for what it's supposed to do
+    - Local implementation also means zero sync with other Spotify clients/connect devices
 
 - **Podcast management**
   - Not that spotirofi can't do it, I simply didn't implement support for it, for two primary reasons;
-    - Spotify's API doesn't expose some of the key features that help make listening to podcasts accessible, like chapter management.
-    - This may sound subjective, but it's a relatively niche medium to cover.
+    - Spotify's API doesn't expose some of the key features that help make listening to podcasts accessible, like chapter management
+    - This may sound subjective, but it's a relatively niche medium to cover
 
 - **Recently Played is purely local**
-  - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely.
+  - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely
  
 - **Crossfade**
-  - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat.
+  - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat
     
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
@@ -58,11 +58,11 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - perl
 - wl-clipboard / xclip ```depending on your session```
 - A nerd font ```without one, icons will appear artifacted```
-  > I highly recommend <b>0xProto</b>, spotirofi's defined typeface
+  > I highly recommend ```0xProto```, spotirofi's defined typeface. spotirofi recognizes ```Dejavu Sans``` as a fallback for non-Latin or unsupported languages due to its close similarities to ```0xProto```'s dimensions. Should neither typeface prove present; spotirofi will fallback to what you have installed, but it may exhibit padding drifts in some menus --i.e. sub-optimal layout
 
 # How to use
-Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config.
-> Really, that's it. No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files.
+Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config
+> Really, that's it. No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files
 
 # Controls
 Given the scope, you can be easily multiple levels deep as you navigate through menus, so it was important to set some keybinds in place for convenience and faster -hopefully organic- interactions.
