@@ -78,7 +78,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + backspace</kbd></td><td>Back one level</td><td>Universal</td></tr>
       <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + q</kbd></td><td>Jump to Queue List</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + t</kbd></td><td>Jump to trail step</td><td>Universal</td></tr>
       <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
       <tr><td><kbd>alt + y</kbd></td><td>Jump to current track's lyrics</td><td>Universal</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>View albumart of current track</td><td>Universal</td></tr>
