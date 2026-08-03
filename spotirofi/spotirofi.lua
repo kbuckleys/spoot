@@ -3452,7 +3452,7 @@ end
 
 -- SESSION REPLAY
 
-local function replay_session()
+local function replay_session(prefer_current)
     local s = session_peek()
     if not s then return end
 
@@ -3462,14 +3462,14 @@ local function replay_session()
         local v = s.view
 
         if v == "action" and s.track_id then
-            if current_track and current_track.id == s.track_id then
+            if current_track and (prefer_current or current_track.id == s.track_id) then
                 view_actions(current_track)
             else
                 view_actions({id=s.track_id, name=s.track_name or "", artists=s.track_artists or {},
                     album=s.track_album or {}, duration_ms=s.track_duration_ms or 0})
             end
         elseif v == "lyrics" and s.track_id then
-            if current_track and current_track.id == s.track_id then
+            if current_track and (prefer_current or current_track.id == s.track_id) then
                 view_lyrics(current_track)
             else
                 view_lyrics({id=s.track_id, name=s.lyrics_track_name or "", artists=s.lyrics_track_artists or {}})
@@ -3719,6 +3719,7 @@ local function ensure_daemon()
     if not daemon_alive then
         os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
     end
+    return daemon_alive
 end
 
 local function check_rate_cooldown()
@@ -3743,12 +3744,12 @@ local function clear_last_playback()
     is_playing = false; last_playback = 0
 end
 
-local function init_library()
+local function init_library(cold_start)
     ensure_spotifyd_auth()
     ensure_auth()
     ensure_spotifyd()
     load_queue()
-    clear_last_playback()
+    if cold_start then clear_last_playback() end
     ;(function()
         local raw = read_file(P.state)
         if raw then local d = safe_decode(raw)
@@ -3772,15 +3773,15 @@ local function init_library()
     populate_liked_ids()
     Util.trail_load()
     session_load()
-    replay_session()
+    replay_session(true)
     last_playback = os.time()
 end
 
 local function main()
     init_instance_lock()
-    ensure_daemon()
+    local cold_start = not ensure_daemon()
     if check_rate_cooldown() then Util.clean_exit() end
-    init_library()
+    init_library(cold_start)
 
     local first_loop = true
     local main_key = "main||"
