@@ -82,12 +82,12 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
       <tr><td><kbd>alt + y</kbd></td><td>Jump to current track's lyrics</td><td>Universal</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>View albumart of current track</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + k</kbd></td><td>Clear session trail</td><td>Universal</td></tr>
       <tr><td><kbd>alt + c</kbd></td><td>Jump to current track in list / Jump to current lyric line</td><td>List / Lyrics</td></tr>
       <tr><td><kbd>alt + r</kbd></td><td>Cycle through Repeat modes</td><td>Universal</td></tr>
       <tr><td><kbd>alt + s</kbd></td><td>Toggle Shuffle</td><td>Universal</td></tr>
       <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
       <tr><td><kbd>alt + g</kbd></td><td>Paste and go to a Spotify web link</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + k</kbd></td><td>Clear session</td><td>Universal</td></tr>
       <tr><td><kbd>return</kbd></td><td>Select</td><td>Universal</td></tr>
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
     </tbody>
