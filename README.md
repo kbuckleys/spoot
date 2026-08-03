@@ -58,6 +58,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - perl
 - wl-clipboard / xclip ```depending on your session```
 - A nerd font ```without one, icons will appear artifacted```
+  
   > I highly recommend ```0xProto```, spotirofi's defined typeface. spotirofi recognizes ```Dejavu Sans``` as a fallback for non-Latin or unsupported languages due to its close similarities to ```0xProto```'s dimensions. Should neither typeface prove present; spotirofi will fallback to what you have installed, but it may exhibit padding drifts in some menus --i.e. sub-optimal layout
 
 # How to use
