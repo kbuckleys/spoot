@@ -13,7 +13,7 @@ configuration {
 window {
     location: center;
     anchor: center;
-    width: 644px;
+    width: 1004px;
 }
 
 mainbox {
@@ -31,7 +31,7 @@ listview {
 }
 
 element-icon {
-    size: 640px;
+    size: 1000px;
     expand: false;
 }
 element-text {

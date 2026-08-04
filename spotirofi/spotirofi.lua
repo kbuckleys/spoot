@@ -193,7 +193,7 @@ end)()
 local _cache_ready = false
 local function ensure_cache()
     if _cache_ready then return end
-    os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics) .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art))
+    os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics) .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres"))
     _cache_ready = true
 end
 
@@ -820,12 +820,24 @@ local function album_suffix(item)
     return SEP .. an
 end
 
-local function ensure_art(art_url)
+Util.art_url = function(art_url, seed)
+    if not art_url or #art_url == 0 then return art_url end
+    local s = seed or "82c1"
+    return (art_url:gsub("(i%.scdn%.co/image/ab67616d0000)[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]", "%1" .. s))
+end
+
+local function ensure_art(art_url, subdir)
     if not art_url or #art_url == 0 then return nil end
     local hash = art_url:match("/image/([%w]+)") or art_url:match("/([%w_%-]+)$")
     if not hash then return nil end
     ensure_cache()
-    local art_path = P.art .. "/" .. hash .. ".jpg"
+    local art_path
+    if subdir then
+        os.execute("mkdir -p " .. shell_quote(P.art .. "/" .. subdir))
+        art_path = P.art .. "/" .. subdir .. "/" .. hash .. ".jpg"
+    else
+        art_path = P.art .. "/" .. hash .. ".jpg"
+    end
     local fh = io.open(art_path, "r")
     if fh then
         local size = fh:seek("end")
@@ -2322,7 +2334,7 @@ view_art = function(item)
         rofi_message("No album art available"); return
     end
     local art_url = item.album.images[1].url
-    local art_path = ensure_art(art_url)
+    local art_path = ensure_art(Util.art_url(art_url), "highres")
     if not art_path then rofi_message("No album art available"); return end
     local mesg = Util.pango_escape((item.name or "Unknown") .. SEP .. artist_names(item))
     local entry_tf = os.tmpname()
@@ -2379,7 +2391,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     while true do
         local art_url = item.album and item.album.images and #item.album.images > 0
             and item.album.images[1].url or nil
-        local art_path = ensure_art(art_url) or ""
+        local art_path = ensure_art(Util.art_url(art_url, "1e02")) or ""
         local tmp_theme = P.cache .. "/action_theme.rasi"
         local tf = io.open(tmp_theme, "w")
         if tf then
@@ -3977,7 +3989,7 @@ local function daemon_mode()
             Util.secure_write(NOTIFY_FILE, track_id)
             wait_for_prefetch(track_id)
         end
-        local art_path = ensure_art(art_url) or ""
+        local art_path = ensure_art(Util.art_url(art_url, "1e02")) or ""
         local icon = #art_path > 0 and ("--icon=" .. shell_quote(art_path)) or ""
         local body = Util.pango_escape(artist or "")
         local suffix = notify_icons(track_id):gsub("^%s+", "")
