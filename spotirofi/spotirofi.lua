@@ -167,6 +167,7 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART
         -- Non-interactive modes (--daemon, --prefetch-lyrics) never open rofi.
         -- Skip the shared /tmp theme files so background processes can't wipe
         -- the resolved themes the interactive app is already using.
+        Util.THEME_THUMBS = P.dir .. "/style/thumbs.rasi"
         return P.dir .. "/style/main.rasi", P.dir .. "/style/menu.rasi", P.dir .. "/style/lyrics.rasi",
                P.dir .. "/style/message.rasi", P.dir .. "/style/sub.rasi", P.dir .. "/style/binds.rasi",
                P.dir .. "/style/art.rasi"
@@ -185,6 +186,7 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART
     local d = P.dir .. "/style"
     P.THEME_SEARCH = resolve(d.."/search.rasi","search")
     Util.THEME_TRAIL = resolve(d.."/trail.rasi","trail")
+    Util.THEME_THUMBS = resolve(d.."/thumbs.rasi","thumbs")
     return resolve(d.."/main.rasi","main"), resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
            resolve(d.."/message.rasi","message"), resolve(d.."/sub.rasi","sub"), resolve(d.."/binds.rasi","binds"),
            resolve(d.."/art.rasi","art")
@@ -544,7 +546,7 @@ local function rofi_dmenu(entries, opts)
     local mesg     = opts.mesg
     local markup   = opts.markup
     local by_index = opts.by_index
-    local theme    = opts.theme or (opts.use_menu and THEME_MENU or THEME)
+    local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or (opts.use_menu and THEME_MENU or THEME))
     local eh       = opts.eh
     local sel      = opts.sel
 
@@ -569,6 +571,13 @@ local function rofi_dmenu(entries, opts)
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
     if by_index then args[#args+1] = "-format"; args[#args+1] = "i" end
     if eh then args[#args+1] = "-eh"; args[#args+1] = tostring(eh) end
+    if opts.thumbs then
+        local n = #(entries or {})
+        local rows = math.ceil(n / 5)
+        if rows > 3 then rows = 3 end
+        if rows < 1 then rows = 1 end
+        args[#args+1] = "-l"; args[#args+1] = tostring(rows)
+    end
     if sel and sel > 0 then args[#args+1] = "-selected-row"; args[#args+1] = tostring(sel) end
     if not opts.no_status then
         local status = status_mesg()
@@ -854,6 +863,58 @@ local function ensure_art(art_url, subdir)
         os.remove(art_path)
     end
     return nil
+end
+
+-- Album-list thumbnails: reuse the shared 300px art cache (seed "1e02") so the
+-- grid needs no extra network source. Fetches missing covers in parallel batches,
+-- then appends "\0icon\x1f<path>" to each entry that has art available.
+Util.album_thumbs = function(entries, items)
+    local pending = {}
+    local paths = {}
+    for i, it in ipairs(items or {}) do
+        local imgs = it.images or (it.album and it.album.images) or {}
+        local url = imgs[1] and imgs[1].url
+        if url and #url > 0 then
+            url = Util.art_url(url, "1e02")
+            local hash = url:match("/image/([%w]+)") or url:match("/([%w_%-]+)$")
+            if hash then
+                local p = P.art .. "/" .. hash .. ".jpg"
+                paths[i] = p
+                local fh = io.open(p, "r")
+                local ok = false
+                if fh then
+                    local sz = fh:seek("end")
+                    fh:close()
+                    ok = sz and sz > 0
+                end
+                if not ok then pending[#pending+1] = { url = url, path = p } end
+            end
+        end
+    end
+    if #pending > 0 then
+        ensure_cache()
+        local cmds = {}
+        for j, pd in ipairs(pending) do
+            cmds[#cmds+1] = "curl -s --max-time 5 -o " .. shell_quote(pd.path) .. " " .. shell_quote(pd.url)
+            if j % 8 == 0 or j == #pending then
+                os.execute(table.concat(cmds, " & ") .. " & wait")
+                cmds = {}
+            end
+        end
+    end
+    for i, e in ipairs(entries or {}) do
+        local p = paths[i]
+        if p and not e:find("\0icon", 1, true) then
+            local fh = io.open(p, "r")
+            local ok = false
+            if fh then
+                local sz = fh:seek("end")
+                fh:close()
+                ok = sz and sz > 0
+            end
+            if ok then entries[i] = e .. "\0icon\x1f" .. p end
+        end
+    end
 end
 
 -- SPOTIFYD MANAGEMENT
@@ -1758,6 +1819,7 @@ end
 -- by call site.
 local function album_action_menu(album)
     local acts = {"Open Album", "Save Album", "Copy URL"}
+    if (album.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
     local saved = (disk_get(P.view_pos) or {})[al_ac_key]
@@ -1775,6 +1837,9 @@ local function album_action_menu(album)
     elseif action == "Copy URL" then
         copy_spotify_url("album", album.id)
         rofi_message("Copied URL")
+    elseif action == "Go to Artist" then
+        local ar = (album.artists or {})[1]
+        if ar then view_artist({id=ar.id, name=ar.name or ""}) end
     end
     return action == "Open Album"
 end
@@ -2157,6 +2222,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                   or ctx == "recently-played"
                   or (ctx_type and ctx_id)
     local is_album_list   = ctx == "album-list" or (ctx_type == "album" and not ctx_id) or ctx == "album" or ctx == "search-album"
+    local is_album_grid   = ctx == "album-list" or (ctx_type == "album" and not ctx_id) or ctx == "search-album"
     local is_artist_list  = ctx == "artist-list" or ctx == "artist"
     local is_playlist_list = (ctx_type == "playlist" and not ctx_id) or ctx == "search-playlist"
     local is_search_all   = ctx == "all"
@@ -2170,7 +2236,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         if v then pre_sel = math.max(0, math.min(v, #items - 1)) end
     end
     while true do
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx})
+        if is_album_grid then Util.album_thumbs(entries, items) end
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx, thumbs=is_album_grid})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2256,7 +2323,9 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             if ctx == "search-album" then
                 do_open = album_action_menu(item)
             elseif ctx == "album-list" then
-                local action = rofi_dmenu({"Open Album", "Remove from Library", "Copy URL"}, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
+                local acts = {"Open Album", "Remove from Library", "Copy URL"}
+                if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
+                local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
                 if action == "Open Album" then
                     do_open = true
                 elseif action == "Remove from Library" then
@@ -2279,6 +2348,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 elseif action == "Copy URL" then
                     copy_spotify_url("album", item.id)
                     rofi_message("Copied URL")
+                elseif action == "Go to Artist" then
+                    local ar = (item.artists or {})[1]
+                    if ar then
+                        view_artist({id=ar.id, name=ar.name or ""})
+                        if seek_pending or jump_to_track_pending then return end
+                    end
                 end
             end
             if do_open then
@@ -2648,7 +2723,8 @@ view_artist = function(artist)
                 end
                 while true do
                     ::alb_next::
-                    local aidx = rofi_dmenu(ae, {prompt=artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true, no_status=true, sel=alb_pre, markup=true})
+                    Util.album_thumbs(ae, items)
+                    local aidx = rofi_dmenu(ae, {prompt=artist.name, mesg=mesg, custom=false, by_index=true, use_menu=true, no_status=true, sel=alb_pre, markup=true, thumbs=true})
                     if not aidx then if consume_pending_toggle() then goto alb_next end; if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end; session_pop(); break end
                     if aidx >= 1 and aidx <= #items then
                         alb_pre = aidx - 1
@@ -3118,7 +3194,8 @@ local function view_new_releases()
     end
     while true do
         ::nr_next::
-        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, markup=true})
+        Util.album_thumbs(entries, albums)
+        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, markup=true, thumbs=true})
         if not idx then
             if consume_pending_toggle() then goto nr_next end
             session_pop()
@@ -3519,7 +3596,8 @@ local function replay_session(prefer_current)
             local items, ae, mesg = fetch_artist_albums(s.artist_id, s.artist_name)
             if items then
                 while true do
-                    local aidx = rofi_dmenu(ae, {prompt=s.artist_name or "", mesg=mesg, custom=false, by_index=true, use_menu=true, markup=true})
+                    Util.album_thumbs(ae, items)
+                    local aidx = rofi_dmenu(ae, {prompt=s.artist_name or "", mesg=mesg, custom=false, by_index=true, use_menu=true, markup=true, thumbs=true})
                     if not aidx then break end
                     if aidx >= 1 and aidx <= #items then
                         local al = items[aidx]
