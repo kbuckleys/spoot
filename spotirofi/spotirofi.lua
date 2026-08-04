@@ -1818,7 +1818,7 @@ end
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
 local function album_action_menu(album)
-    local acts = {"Open Album", "Save Album", "Copy URL"}
+    local acts = {"Open Album", "Save Album", "View Album Art", "Copy URL"}
     if (album.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
@@ -1840,6 +1840,8 @@ local function album_action_menu(album)
     elseif action == "Go to Artist" then
         local ar = (album.artists or {})[1]
         if ar then view_artist({id=ar.id, name=ar.name or ""}) end
+    elseif action == "View Album Art" then
+        view_art({album=album, name=album.name, artists=album.artists})
     end
     return action == "Open Album"
 end
