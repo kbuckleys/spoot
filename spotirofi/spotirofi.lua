@@ -579,7 +579,7 @@ local function rofi_dmenu(entries, opts)
         args[#args+1] = "-l"; args[#args+1] = tostring(rows)
     end
     if sel and sel > 0 then args[#args+1] = "-selected-row"; args[#args+1] = tostring(sel) end
-    if not opts.no_status then
+    if not opts.no_status and not opts.thumbs then
         local status = status_mesg()
         if status then mesg = mesg and (status .. "  " .. mesg) or status end
     end
