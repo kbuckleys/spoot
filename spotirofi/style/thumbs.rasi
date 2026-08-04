@@ -6,10 +6,12 @@
 
 @import "ZENON"
 
+* {
+    selected-normal-background: none;
+}
 configuration {
     kb-remove-to-sol: "BackSpace";
     kb-remove-char-back: "";
-    show-icons: true;
 }
 
 window {
@@ -37,11 +39,12 @@ element {
     orientation: vertical;
     children: [ element-icon, element-text ];
     spacing: 4px;
-    padding: 4px;
+    padding: 8px;
 }
 element selected {
-    border: 1px;
-    border-color: #b6e0a4;
+    border: 2px;
+    border-radius: 2px;
+    border-color: #6a707f;
 }
 element-icon {
     size: 150px;
@@ -49,12 +52,8 @@ element-icon {
 }
 element-text {
     horizontal-align: 0.5;
-    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 11";
-    text-color: #DFDFDD;
+    font: "JetBrainsMono Nerd Font Bold 11";
     highlight: bold #b6e0a4;
-}
-element-text selected {
-    text-color: #DFDFDD;
 }
 
 message {
@@ -64,5 +63,5 @@ message {
 textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
-    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 12";
+    font: "JetBrainsMono Nerd Font Bold 12";
 }

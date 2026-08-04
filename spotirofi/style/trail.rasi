@@ -23,13 +23,12 @@ listview {
 }
 
 element {
-    padding: 2px 2px 2px 2px;
+    padding: 2px 20px 2px 20px;
 }
 element-text {
-    font: "0xProto Nerd Font Propo, DejaVu Sans 12";
     horizontal-align: 0.5;
 }
 element-text selected {
     text-color: #b6e0a4;
-    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 12";
+    font: "JetBrainsMono Nerd Font Bold 12";
 }

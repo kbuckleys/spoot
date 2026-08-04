@@ -17,7 +17,7 @@ mainbox {
 textbox {
     text-color: #000000;
     horizontal-align: 0.5;
-    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 12";
+    font: "JetBrainsMono Nerd Font Bold 12";
     padding: 8px;
     background-color: #fab387;
 }

@@ -23,10 +23,9 @@ listview {
 }
 
 element {
-    padding: 2px 8px;
+    padding: 2px 20px 2px 20px;
 }
 element-text {
-    font: "0xProto Nerd Font 12";
     horizontal-align: 0.5;
     highlight: bold #b6e0a4;
 }
@@ -41,5 +40,5 @@ message {
 textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
-    font: "0xProto Nerd Font Propo, DejaVu Sans Bold 12";
+    font: "JetBrainsMono Nerd Font Bold 12";
 }

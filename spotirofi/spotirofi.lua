@@ -56,7 +56,6 @@ local liked = {}  -- set of liked track IDs
 local current_track, current_id, previous_id, last_playback = nil, nil, nil, 0
 local is_playing, is_shuffle, repeat_state = false, false, "off"
 local _local_toggle_time = 0
-local _action_theme_tmpl = nil
 
 local json = require("cjson")
 
@@ -123,6 +122,7 @@ end
 -- Grouped into one table (rather than separate top-level locals) since the
 -- whole script body is a single function and Lua caps it at 200 locals.
 local Util = {}
+Util._art_theme_tmpls = {}
 
 function Util.get_own_pid()
     local f = io.open("/proc/self/stat")
@@ -138,28 +138,41 @@ function Util.get_clipboard()
     return trim(shell("xclip -selection clipboard -o 2>/dev/null") or "")
 end
 
+function Util.markup(t)
+    return "\1" .. tostring(t) .. "\2"
+end
+
 function Util.pango_escape(s)
     if not s then return s end
     s = tostring(s)
     local esc = {["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;"}
-    local function safe(tag)
-        return tag == "<b>" or tag == "</b>" or tag == "</span>"
-            or tag:match("^<span [fc]%a*=\"#[0-9a-fA-F]+\">$")
-    end
-    local out = {}
-    local pos = 1
-    while pos <= #s do
-        local ts, te = s:find("<[^>\n]*>", pos)
-        if not ts then
-            out[#out + 1] = s:sub(pos):gsub("[&<>]", esc)
-            break
+    local PROTECT = {}
+    s = s:gsub("\1(.-)\2", function(m) PROTECT[#PROTECT + 1] = m; return "\3" .. #PROTECT .. "\4" end)
+    s = s:gsub("&(#?%w+);", function(m)
+        if m:sub(1, 1) == "#" then
+            local n = m:sub(2)
+            if n:sub(1, 1):lower() == "x" then
+                if n:sub(2):match("^%x+$") then return "\3e" .. m .. "\4" end
+            elseif n:match("^%d+$") then return "\3e" .. m .. "\4" end
+            return "\3x" .. m .. "\4"
         end
-        out[#out + 1] = s:sub(pos, ts - 1):gsub("[&<>]", esc)
-        local tag = s:sub(ts, te)
-        out[#out + 1] = safe(tag) and tag or tag:gsub("[&<>]", esc)
-        pos = te + 1
-    end
-    return table.concat(out)
+        if m == "amp" or m == "lt" or m == "gt" or m == "quot" or m == "apos" or m == "nbsp" then
+            return "\3e" .. m .. "\4"
+        end
+        return "\3x" .. m .. "\4"
+    end)
+    s = s:gsub("&", "&amp;")
+    s = s:gsub("[<>]", esc)
+    s = s:gsub("\3e(%#?%w+)\4", "&%1;")
+    s = s:gsub("\3x(%#?%w+)\4", "&amp;%1;")
+    s = s:gsub("\3(%d+)\4", function(n) return PROTECT[tonumber(n)] end)
+    return s
+end
+
+function Util.strip_markup(s)
+    if not s then return s end
+    s = tostring(s):gsub("\1(.-)\2", "")
+    return s:gsub("<[^>]+>", "")
 end
 
 local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART = (function()
@@ -322,8 +335,11 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn)
     end
     v = fetch_fn()
     if v ~= nil then
-        mem_set(key, v, ttl)
-        if disk_path then disk_set(disk_path, v) end
+        local empty = type(v) == "table" and next(v) == nil
+        if not empty then
+            mem_set(key, v, ttl)
+            if disk_path then disk_set(disk_path, v) end
+        end
     end
     return v
 end
@@ -475,7 +491,7 @@ local function breadcrumb(extra)
     local parts = {}
     for _, t in ipairs(Util.trail_history) do parts[#parts+1] = type(t) == "table" and t.label or t end
     parts[#parts+1] = table.concat(Util.breadcrumb_parts(extra), " > ")
-    return table.concat(parts, "  <span foreground=\"#a3a9bd\">\u{F17B7}</span>  ")
+    return table.concat(parts, "  " .. Util.markup('<span foreground="#a3a9bd">\u{F17B7}</span>') .. "  ")
 end
 
 -- ROFI
@@ -505,10 +521,10 @@ local api_get_playlist_tracks
 local function status_mesg()
     local DIM = "#6a707f"
     local r
-    if repeat_state == "track" then r = '<span foreground="#fab387">\u{F0458}</span>'
+    if repeat_state == "track" then r = Util.markup('<span foreground="#fab387">\u{F0458}</span>')
     elseif repeat_state == "context" then r = "\u{F0456}"
-    else r = '<span foreground="' .. DIM .. '">\u{F0457}</span>' end
-    local s = is_shuffle and "\u{F074}" or '<span foreground="' .. DIM .. '">\u{F049D}</span>'
+    else r = Util.markup('<span foreground="' .. DIM .. '">\u{F0457}</span>') end
+    local s = is_shuffle and "\u{F074}" or Util.markup('<span foreground="' .. DIM .. '">\u{F049D}</span>')
     return r .. " " .. s
 end
 
@@ -585,7 +601,7 @@ local function rofi_dmenu(entries, opts)
     end
     local crumb = breadcrumb(opts.crumb)
     if crumb then
-        if markup then crumb = '<span foreground="#6a707f">' .. crumb .. '</span>' end
+        if markup then crumb = Util.markup('<span foreground="#6a707f">') .. crumb .. Util.markup('</span>') end
         mesg = (mesg and (mesg .. "\n") or "") .. crumb
     end
     if mesg then args[#args+1] = "-mesg"; args[#args+1] = Util.pango_escape(mesg) end
@@ -865,6 +881,23 @@ local function ensure_art(art_url, subdir)
     return nil
 end
 
+Util.write_art_theme = function(name, art_path)
+    local tmpl = Util._art_theme_tmpls[name]
+    if not tmpl then
+        local raw = read_file(P.dir .. "/style/" .. name .. ".rasi") or ""
+        tmpl = raw:gsub('@import "ZENON"', '@import "' .. P.dir .. '/style/ZENON"')
+        Util._art_theme_tmpls[name] = tmpl
+    end
+    local tmp = "/tmp/spotirofi_theme_" .. name .. ".rasi"
+    local rasi = tmpl:gsub("%%s", art_path or "")
+    if not art_path or art_path == "" then
+        rasi = rasi:gsub("background%-image:%s*url%(\"\",%s*both%);", "")
+    end
+    local f = io.open(tmp, "w")
+    if f then f:write(rasi); f:close() end
+    return tmp
+end
+
 -- Album-list thumbnails: reuse the shared 300px art cache (seed "1e02") so the
 -- grid needs no extra network source. Fetches missing covers in parallel batches,
 -- then appends "\0icon\x1f<path>" to each entry that has art available.
@@ -967,7 +1000,7 @@ local function api_get(path, params, _retry)
     local url = "https://api.spotify.com/v1/" .. path
     if params then url = url .. "?" .. params end
     local hdr = os.tmpname()
-    local r = shell("curl -s --max-time 5 -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}' -H " .. shell_quote("Authorization: Bearer " .. token) .. " " .. shell_quote(url))
+    local r = shell("curl -s --max-time 10 -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}' -H " .. shell_quote("Authorization: Bearer " .. token) .. " " .. shell_quote(url))
     local status = tonumber(string.match(r or "", "\n(%d+)\n?$")) or 0
     local body = string.match(r or "", "^(.-)\n%d+\n?$") or r or ""
     if status == 429 then
@@ -998,6 +1031,25 @@ local function api_get(path, params, _retry)
     end
     if status >= 400 then return nil end
     return safe_decode(body)
+end
+
+-- Offset-paginated fetch helper; any failed page returns nil so it is never
+-- cached as a partial/empty list from a transient error.
+Util.paged_fetch = function(path, mk_params, done, each)
+    local all, offset = {}, 0
+    while true do
+        local d = api_get(path, mk_params(offset))
+        if not d then return nil end
+        local items = d.items or {}
+        for _, it in ipairs(items) do
+            local v = it
+            if each then v = each(it) end
+            if v ~= nil then all[#all+1] = v end
+        end
+        if done(d, items) then break end
+        offset = offset + #items
+    end
+    return all
 end
 
 local liked_by_artist_id = nil
@@ -1438,7 +1490,7 @@ display_track = function(item, hide_artist, hide_liked, hide_single_artist)
     local l  = (not hide_liked) and item.id and liked[item.id] and "\u{f05d} " or ""
     local e  = item.explicit and "\u{f071} " or ""
     local txt = p .. l .. e .. (item.name or "Unknown") .. (hide and "" or SEP .. an)
-    if item.id == current_id then txt = "<span foreground=\"#b6e0a4\">" .. txt .. "</span>" end
+    if item.id == current_id then txt = Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>') end
     return txt
 end
 
@@ -1539,13 +1591,13 @@ end
 
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    local l = item.id and liked[item.id] and " \u{f05d}" or ""
-    local e = item.explicit and " \u{f071}" or ""
+    local l = item.id and liked[item.id] and "  \u{f05d}" or ""
+    local e = item.explicit and "  \u{f071}" or ""
     local s = ""
     if Util.has_lyrics(item.id) then
-        s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
+        s = Util.has_synced_lyrics(item.id) and "  \u{F0188}" or "  \u{F0189}"
     end
-    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -1818,7 +1870,7 @@ end
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
 local function album_action_menu(album)
-    local acts = {"Open Album", "Save Album", "View Album Art", "Copy URL"}
+    local acts = {"Open Album", "Save Album", "Albumart", "Copy URL"}
     if (album.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
@@ -1840,7 +1892,7 @@ local function album_action_menu(album)
     elseif action == "Go to Artist" then
         local ar = (album.artists or {})[1]
         if ar then view_artist({id=ar.id, name=ar.name or ""}) end
-    elseif action == "View Album Art" then
+    elseif action == "Albumart" then
         view_art({album=album, name=album.name, artists=album.artists})
     end
     return action == "Open Album"
@@ -1930,7 +1982,8 @@ local function api_get_album(album_id)
             while next_url and #tracks < (d.total_tracks or 999) do
                 local params = next_url:match("%?(.+)")
                 local page = api_get("albums/" .. album_id .. "/tracks", params)
-                if not page or not page.items or #page.items == 0 then break end
+                if not page then return nil end
+                if not page.items or #page.items == 0 then break end
                 for _, t in ipairs(page.items) do tracks[#tracks+1] = t end
                 next_url = page.next
             end
@@ -1950,22 +2003,16 @@ end
 
 api_get_playlist_tracks = function(playlist_id)
     return cached_fetch("playlist_tracks_" .. playlist_id, P.mass .. "/playlist_tracks_" .. playlist_id .. ".json", 1800, function()
-        local all_tracks = {}
-        local offset = 0
-        while true do
-            local params = "limit=100&offset=" .. offset .. "&fields=items(track(id,name,duration_ms,artists,album(id,name,images,artists)),added_at),next"
-            local d = api_get("playlists/" .. playlist_id .. "/tracks", params)
-            if not d or not d.items or #d.items == 0 then break end
-            for _, entry in ipairs(d.items) do
+        return Util.paged_fetch("playlists/" .. playlist_id .. "/tracks",
+            function(o) return "limit=100&offset=" .. o .. "&fields=items(track(id,name,duration_ms,artists,album(id,name,images,artists)),added_at),next" end,
+            function(d, items) return #items == 0 or not d.next end,
+            function(entry)
                 if entry.track and entry.track.id then
                     entry.track.added_at = entry.added_at
-                    all_tracks[#all_tracks+1] = entry.track
+                    return entry.track
                 end
-            end
-            if not d.next or #d.items < 100 then break end
-            offset = offset + 100
-        end
-        return all_tracks
+                return nil
+            end)
     end)
 end
 
@@ -1991,31 +2038,17 @@ end
 
 local function api_get_my_playlists()
     return cached_fetch("my_playlists", P.cache .. "/my_playlists.json", CACHE_TTL_SHORT, function()
-        local all = {}
-        local offset = 0
-        while true do
-            local d = api_get("me/playlists", "limit=50&offset=" .. offset)
-            if not d or not d.items or #d.items == 0 then break end
-            for _, pl in ipairs(d.items) do all[#all+1] = pl end
-            if not d.next or #d.items < 50 then break end
-            offset = offset + 50
-        end
-        return all
+        return Util.paged_fetch("me/playlists",
+            function(o) return "limit=50&offset=" .. o end,
+            function(d, items) return #items == 0 or not d.next end)
     end)
 end
 
 local function api_get_artist_albums(artist_id)
     return cached_fetch("artist_albums_" .. artist_id, P.mass .. "/artist_albums_" .. artist_id .. ".json", CACHE_TTL_LONG, function()
-        local all = {}
-        local offset = 0
-        while true do
-            local d = api_get("artists/" .. artist_id .. "/albums", "limit=50&offset=" .. offset .. "&include_groups=album,single,compilation")
-            if not d or not d.items or #d.items == 0 then break end
-            for _, al in ipairs(d.items) do all[#all+1] = al end
-            if not d.next or #d.items < 50 then break end
-            offset = offset + 50
-        end
-        return all
+        return Util.paged_fetch("artists/" .. artist_id .. "/albums",
+            function(o) return "limit=50&offset=" .. o .. "&include_groups=album,single,compilation" end,
+            function(d, items) return #items == 0 or not d.next end)
     end)
 end
 
@@ -2237,9 +2270,16 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         local v = (disk_get(P.view_pos) or {})[v_key]
         if v then pre_sel = math.max(0, math.min(v, #items - 1)) end
     end
+    local album_theme = nil
+    if ctx == "album" then
+        local a = items[1] and items[1].album
+        local art_url = a and a.images and a.images[1] and a.images[1].url or nil
+        local art_path = art_url and ensure_art(Util.art_url(art_url, "1e02")) or ""
+        album_theme = Util.write_art_theme("album", art_path)
+    end
     while true do
         if is_album_grid then Util.album_thumbs(entries, items) end
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx, thumbs=is_album_grid})
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx, thumbs=is_album_grid})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2325,7 +2365,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             if ctx == "search-album" then
                 do_open = album_action_menu(item)
             elseif ctx == "album-list" then
-                local acts = {"Open Album", "Remove from Library", "Copy URL"}
+                local acts = {"Open Album", "Remove from Library", "Albumart", "Copy URL"}
                 if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
                 local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
                 if action == "Open Album" then
@@ -2356,6 +2396,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                         view_artist({id=ar.id, name=ar.name or ""})
                         if seek_pending or jump_to_track_pending then return end
                     end
+                elseif action == "Albumart" then
+                    view_art({album=item, name=item.name, artists=item.artists})
                 end
             end
             if do_open then
@@ -2368,7 +2410,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         elseif is_artist_list then
             view_artist(item)
             if seek_pending then return end
-            entries[idx] = display_artist(item)
+            entries[idx] = ctx == "artist" and string.format("%2d. %s", idx, display_artist(item)) or display_artist(item)
             pre_sel = idx - 1
             do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
         elseif is_playlist_list then
@@ -2444,7 +2486,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     local play_label = item.id == current_id and (is_playing and "Pause" or "Resume") or "Play"
     local actions = {play_label}
     local seek_idx = #actions + 1
-    actions[seek_idx] = item.id == current_id and "Seek" or '<span color="#6a707f">Seek</span>'
+    actions[seek_idx] = item.id == current_id and "Seek" or Util.markup('<span color="#6a707f">Seek</span>')
     actions[#actions+1] = "Add to Queue"
     local like_idx = #actions + 1
     actions[#actions+1] = is_liked and "Unlike" or "Like"
@@ -2453,38 +2495,25 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     actions[#actions+1] = "Add to Playlist"
     if in_pl then actions[#actions+1] = "Remove from Playlist" end
     local lyrics_idx = #actions + 1
-    actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics" or '<span color="#6a707f">Lyrics</span>'
+    actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics" or Util.markup('<span color="#6a707f">Lyrics</span>')
     actions[#actions+1] = "Copy URL"
     actions[#actions+1] = "More Like This"
-    actions[#actions+1] = "Album Art"
+    actions[#actions+1] = "Albumart"
 
     local act_key = "action:" .. (item.id or "")
     local pre_sel = 0
     local act_saved = (disk_get(P.view_pos) or {})[act_key]
     if type(act_saved) == "string" then
-        for i, a in ipairs(actions) do if a == act_saved then pre_sel = i - 1; break end end
+        for i, a in ipairs(actions) do if Util.strip_markup(a) == Util.strip_markup(act_saved) then pre_sel = i - 1; break end end
     end
 
     while true do
         local art_url = item.album and item.album.images and #item.album.images > 0
             and item.album.images[1].url or nil
         local art_path = ensure_art(Util.art_url(art_url, "1e02")) or ""
-        local tmp_theme = P.cache .. "/action_theme.rasi"
-        local tf = io.open(tmp_theme, "w")
-        if tf then
-            if not _action_theme_tmpl then
-                local raw = read_file(P.dir .. "/style/action.rasi") or ""
-                _action_theme_tmpl = raw:gsub('@import "ZENON"', '@import "' .. P.dir .. '/style/ZENON"')
-            end
-            local rasi_content = _action_theme_tmpl:gsub("%%s", art_path)
-            if art_path == "" then
-                rasi_content = rasi_content:gsub("background%-image:%s*url%(\"\",%s*both%);", "")
-            end
-            tf:write(rasi_content)
-            tf:close()
-        end
+        local tmp_theme = Util.write_art_theme("action", art_path)
         local action_theme = tmp_theme
-        actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics" or '<span color="#6a707f">Lyrics</span>'
+        actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics" or Util.markup('<span color="#6a707f">Lyrics</span>')
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=track_mesg(item), sel=pre_sel, custom=false, theme=action_theme, markup=true, current=item})
         if not sel then
@@ -2505,7 +2534,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         end
 
         if sel then
-            for i, a in ipairs(actions) do if a == sel then pre_sel = i - 1; break end end
+            for i, a in ipairs(actions) do if Util.strip_markup(a) == Util.strip_markup(sel) then pre_sel = i - 1; break end end
             do local vp = disk_get(P.view_pos) or {}; vp[act_key] = sel; disk_set(P.view_pos, vp) end
         end
 
@@ -2599,7 +2628,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                 view_browse(te, tracks, "More Like " .. (item.name or ""), "recommendations", nil, nil)
                 session_pop()
             end
-        elseif sel == "Album Art" then view_art(item)
+        elseif sel == "Albumart" then view_art(item)
         elseif sel == "Seek" then
             if item.id == current_id then view_seek(item)
             else rofi_message("Not the current track") end
@@ -2697,7 +2726,7 @@ view_artist = function(artist)
     local pre_sel = 0
     local saved = (disk_get(P.view_pos) or {})[art_ac_key]
     if type(saved) == "string" then
-        for i, a in ipairs(actions) do if a == saved then pre_sel = i - 1; break end end
+        for i, a in ipairs(actions) do if Util.strip_markup(a) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
     end
 
     while true do
@@ -2709,7 +2738,7 @@ view_artist = function(artist)
             return
         end
 
-        for i, a in ipairs(actions) do if a == sel then pre_sel = i - 1; break end end
+        for i, a in ipairs(actions) do if Util.strip_markup(a) == Util.strip_markup(sel) then pre_sel = i - 1; break end end
         do local vp = disk_get(P.view_pos) or {}; vp[art_ac_key] = sel; disk_set(P.view_pos, vp) end
 
         if sel == "View All Albums" then
@@ -3245,13 +3274,13 @@ local function view_volume()
     session_push({view="volume"})
     while true do
         ::vol_next::
-        local vol_acts = {"Volume +5", "Volume -5", '<span foreground="#20242a">────────────────────</span>',
+        local vol_acts = {"Volume +5", "Volume -5", Util.markup('<span foreground="#20242a">────────────────────</span>'),
                                "Mute", "25%", "50%", "75%", "100%"}
         local vol_key = "volume:"
         local pre_sel = 0
         local saved = (disk_get(P.view_pos) or {})[vol_key]
         if type(saved) == "string" then
-            for i, a in ipairs(vol_acts) do if a == saved then pre_sel = i - 1; break end end
+            for i, a in ipairs(vol_acts) do if Util.strip_markup(a) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
         end
         local vi = rofi_dmenu(vol_acts,
             {prompt="Volume", mesg=vol_mesg(disp_vol), custom=false, theme=THEME_SUB, markup=true, no_status=not current_track, sel=pre_sel})
@@ -3291,7 +3320,7 @@ end
 
 view_seek = function(item)
     session_push({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0})
-    local seeks = {"+10s", "-10s", "+30s", "-30s", '<span foreground="#20242a">────────────────────</span>', "1:00", "2:00", "0:00"}
+    local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "1:00", "2:00", "0:00"}
     local seek_key = "seek:" .. (item.id or "")
     local disp_pos = get_playerctl_position()
     while true do
@@ -3299,7 +3328,7 @@ view_seek = function(item)
         local pre_sel = 0
         local saved = (disk_get(P.view_pos) or {})[seek_key]
         if type(saved) == "string" then
-            for i, a in ipairs(seeks) do if a == saved then pre_sel = i - 1; break end end
+            for i, a in ipairs(seeks) do if Util.strip_markup(a) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
         end
         local si = rofi_dmenu(seeks, {prompt="Seek", mesg=seek_mesg(item, disp_pos), sel=pre_sel, custom=false, theme=THEME_SUB, markup=true})
         if not si then
@@ -3360,18 +3389,18 @@ local function view_playback()
         local play_label = current_track and (is_playing and "Pause" or "Resume") or nil
         local items = {}
         if play_label then items[#items+1] = play_label end
-        items[#items+1] = current_track and "Seek" or '<span color="#6a707f">Seek</span>'
+        items[#items+1] = current_track and "Seek" or Util.markup('<span color="#6a707f">Seek</span>')
         items[#items+1] = "Next Track"
         items[#items+1] = "Previous Track"
-        items[#items+1] = is_shuffle and "Shuffle <b>ON</b>" or "Shuffle <b>OFF</b>"
-        items[#items+1] = repeat_state=="off" and "Repeat <b>OFF</b>" or (repeat_state=="track" and "Repeat <b>TRACK</b>" or "Repeat <b>CONTEXT</b>")
+        items[#items+1] = "Shuffle " .. (is_shuffle and Util.markup("<b>ON</b>") or Util.markup("<b>OFF</b>"))
+        items[#items+1] = "Repeat " .. (repeat_state=="off" and Util.markup("<b>OFF</b>") or (repeat_state=="track" and Util.markup("<b>TRACK</b>") or Util.markup("<b>CONTEXT</b>")))
         items[#items+1] = "Open URL"
         local mesg = current_track and track_mesg(current_track) or nil
         local pb_key = "playback:"
         local pre_sel = 0
         local saved = (disk_get(P.view_pos) or {})[pb_key]
         if type(saved) == "string" then
-            for i, it in ipairs(items) do if it == saved then pre_sel = i - 1; break end end
+            for i, it in ipairs(items) do if Util.strip_markup(it) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
         end
         local si = rofi_dmenu(items, {prompt="Playback", mesg=mesg, custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=not current_track, sel=pre_sel})
         if not si then
@@ -3426,7 +3455,7 @@ local function view_system()
     local cur_br = get_saved_bitrate()
     local cur_vol = get_playerctl_volume()
     local vol_label = cur_vol == 0 and "Muted" or (cur_vol .. "%")
-    local items = {"Keybinds", "Volume <b>" .. vol_label .. "</b>", "Bitrate <b>" .. cur_br .. " kbps</b>",
+    local items = {"Keybinds", "Volume " .. Util.markup("<b>") .. vol_label .. Util.markup("</b>"), "Bitrate " .. Util.markup("<b>") .. cur_br .. " kbps" .. Util.markup("</b>"),
                    "Jump to Trail Step",
                    "Clear Session",
                    "Refresh Library",
@@ -3440,7 +3469,7 @@ local function view_system()
         local saved = (disk_get(P.view_pos) or {})[sys_key]
         if type(saved) == "string" then
             for i, it in ipairs(items) do
-                if it:gsub("<[^>]+>", "") == saved then pre_sel = i - 1; break end
+                if Util.strip_markup(it) == saved then pre_sel = i - 1; break end
             end
         end
         local sel = rofi_dmenu(items, {prompt="System", custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=true, sel=pre_sel})
@@ -3448,13 +3477,13 @@ local function view_system()
             if consume_pending_toggle() then goto sys_next end
             break
         end
-        local clean = sel:gsub("<[^>]+>", "")
+        local clean = Util.strip_markup(sel)
         do local vp = disk_get(P.view_pos) or {}; vp[sys_key] = clean; disk_set(P.view_pos, vp) end
         if clean == "Keybinds" then
             local function row(desc, key)
                 local k = 15
                 if not key then return string.rep(" ", k + 2) .. desc end
-                return string.rep(" ", k - #key) .. '<span foreground="#eebebe">' .. key .. "</span>"
+                return string.rep(" ", k - #key) .. Util.markup('<span foreground="#eebebe">') .. key .. Util.markup("</span>")
                     .. "  " .. desc
             end
             rofi_message(table.concat({
@@ -3480,13 +3509,13 @@ local function view_system()
             view_volume()
             cur_vol = get_playerctl_volume()
             vol_label = cur_vol == 0 and "Muted" or (cur_vol .. "%")
-            items[2] = "Volume <b>" .. vol_label .. "</b>"
+            items[2] = "Volume " .. Util.markup("<b>") .. vol_label .. Util.markup("</b>")
         elseif clean:match("^Bitrate") then
             local br_opts = {}
             for _, v in ipairs({96, 160, 320}) do
                 if v == cur_br then
-                    table.insert(br_opts, "<span foreground=\"#b6e0a4\">"
-                        .. "\u{f00c} " .. v .. " kbps" .. (v == 160 and " (default)" or "") .. "</span>")
+                    table.insert(br_opts, Util.markup('<span foreground="#b6e0a4">')
+                        .. "\u{f00c} " .. v .. " kbps" .. (v == 160 and " (default)" or "") .. Util.markup("</span>"))
                 else
                     local label = v .. " kbps"
                     if v == 160 then label = label .. " (default)" end
@@ -3496,10 +3525,10 @@ local function view_system()
             local chosen = rofi_dmenu(br_opts,
                 {prompt="Bitrate", mesg="Current: " .. cur_br .. " kbps\nRestart daemons to apply", custom=false, markup=true, theme=THEME_SUB, no_status=true, crumb="Bitrate"})
             if chosen then
-                local n = tonumber(chosen:gsub("<[^>]+>", ""):match("(%d+)"))
+                local n = tonumber(Util.strip_markup(chosen):match("(%d+)"))
                 if n then
                     save_bitrate(n); cur_br = n
-                    items[3] = "Bitrate <b>" .. n .. " kbps</b>"
+                    items[3] = "Bitrate " .. Util.markup("<b>") .. n .. " kbps" .. Util.markup("</b>")
                     os.execute("notify-send -t 3000 --app-name=spotirofi 'Spotirofi' '" .. n .. " kbps — restart daemons to apply' &")
                 end
             end

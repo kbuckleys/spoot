@@ -13,32 +13,41 @@ configuration {
 
 window {
     width: 900px;
+    children: [ wrap, listview-split ];
 }
 
-mainbox {
-    children: [ inputbar, message, listview ];
+wrap {
+    expand: false;
+    children: [ inputbar, message ];
 }
 
 inputbar {
     enabled: false;
 }
 
-listview {
-    fixed-columns: false;
-    fixed-height: false;
-    scrollbar: false;
-    columns: 1;
-    lines: 14;
+listview-split {
+    orientation: horizontal;
+    children: [ icon-current-entry, listview ];
 }
 
+icon-current-entry {
+    background-image: url("%s", both);
+    size: 362px;
+}
+
+listview {
+    lines: 13;
+    scrollbar: false;
+}
+
+element {
+    padding: 2px 20px 2px 20px;
+}
 element-text {
-    font: "JetBrainsMono Nerd Font SemiBold 14";
-    horizontal-align: 0.5;
     highlight: bold #b6e0a4;
 }
 element-text selected {
     background-color: transparent;
-    text-color: #b6e0a4;
 }
 
 message {
