@@ -59,7 +59,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - wl-clipboard / xclip ```depending on your session```
 - JetBrainsMono Nerd Font
 
-> You may use whatever you want, really. However, spotirofi will fallback to what you have installed, and it may exhibit padding drifts in some menus --i.e. sub-optimal layout. The listed packages are all spotirofi's favored to specifically address a very important issue; broad language support while maintaining layout consistency
+> You may use whatever you want, really. However, spotirofi will fallback to what you have installed, and it may exhibit padding drifts in some menus -- i.e. sub-optimal layout. ```JetBrainsMono``` is spotirofi's defined typeface to specifically address a very important issue; broad language support while maintaining uniformity and layout consistency
 
 # How to use
 Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config
