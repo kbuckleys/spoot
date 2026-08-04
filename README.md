@@ -57,9 +57,10 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - curl
 - perl
 - wl-clipboard / xclip ```depending on your session```
-- A nerd font ```without one, icons will appear artifacted```
+- These font packages
+  > `ttf-0xproto`  `ttc-iosevka`  `ttf-sarasa-gothic`  `ttf-ibm-plex`
   
-  > I highly recommend ```0xProto```, spotirofi's defined typeface. spotirofi recognizes ```Dejavu Sans``` as a fallback for non-Latin or unsupported languages due to its close similarities to ```0xProto```'s dimensions. Should neither typeface prove present; spotirofi will fallback to what you have installed, but it may exhibit padding drifts in some menus --i.e. sub-optimal layout
+  > You may use whatever you want, really. However, spotirofi will fallback to what you have installed, and it may exhibit padding drifts in some menus --i.e. sub-optimal layout. The listed packages are all spotirofi's favored to specifically address a very important issue; broad language support while maintaining layout consistency
 
 # How to use
 Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config
