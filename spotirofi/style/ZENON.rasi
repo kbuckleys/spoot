@@ -5,7 +5,7 @@
 * https://github.com/kbuckleys/ */
 
 * {
-    selected-normal-background: #16191d;
+    font: "JetBrainsMono Nerd Font Propo Medium 12";
     alternate-normal-background: @normal-background;
     selected-urgent-background: @urgent-background;
     alternate-urgent-foreground: @urgent-foreground;
@@ -13,7 +13,6 @@
     selected-active-background: @normal-background;
     alternate-active-background: @normal-background;
     active-foreground: @selected-normal-foreground;
-    urgent-background: #e78284;
     alternate-normal-foreground: @foreground;
     border-color: rgba(155, 191, 191, 0.2);
     alternate-urgent-background: #e78284;
@@ -21,13 +20,14 @@
     selected-normal-foreground: #DFDFDD;
     selected-active-foreground: #0B0E0E;
     selected-urgent-foreground: #0B0E0E;
+    selected-normal-background: #16191d;
     active-background: @background;
     normal-foreground: @foreground;
     normal-background: #00000000;
     lightfg: @normal-background;
     background: rgba(0, 0, 0, 1);
     separatorcolor: @foreground;
-    font: "JetBrainsMono Nerd Font SemiBold 12";
+    urgent-background: #e78284;
     urgent-foreground: #e78284;
     foreground: #DFDFDD;
     lightbg: #DFDFDD;

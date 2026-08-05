@@ -175,7 +175,7 @@ function Util.strip_markup(s)
     return s:gsub("<[^>]+>", "")
 end
 
-local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART = (function()
+local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_META, THEME_ART = (function()
     if arg and arg[1] and arg[1]:match("^%-%-") then
         -- Non-interactive modes (--daemon, --prefetch-lyrics) never open rofi.
         -- Skip the shared /tmp theme files so background processes can't wipe
@@ -183,7 +183,7 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART
         Util.THEME_THUMBS = P.dir .. "/style/thumbs.rasi"
         return P.dir .. "/style/main.rasi", P.dir .. "/style/menu.rasi", P.dir .. "/style/lyrics.rasi",
                P.dir .. "/style/message.rasi", P.dir .. "/style/sub.rasi", P.dir .. "/style/binds.rasi",
-               P.dir .. "/style/art.rasi"
+               P.dir .. "/style/meta.rasi", P.dir .. "/style/art.rasi"
     end
     os.execute("rm -f /tmp/spotirofi_theme_*.rasi 2>/dev/null")
     local function resolve(src, name)
@@ -202,7 +202,7 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_ART
     Util.THEME_THUMBS = resolve(d.."/thumbs.rasi","thumbs")
     return resolve(d.."/main.rasi","main"), resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
            resolve(d.."/message.rasi","message"), resolve(d.."/sub.rasi","sub"), resolve(d.."/binds.rasi","binds"),
-           resolve(d.."/art.rasi","art")
+           resolve(d.."/meta.rasi","meta"), resolve(d.."/art.rasi","art")
 end)()
 
 local _cache_ready = false
@@ -851,6 +851,95 @@ Util.art_url = function(art_url, seed)
     return (art_url:gsub("(i%.scdn%.co/image/ab67616d0000)[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]", "%1" .. s))
 end
 
+Util._rand_suffix = function()
+    local u = io.open("/dev/urandom", "rb")
+    if u then
+        local b = u:read(4)
+        u:close()
+        if b and #b == 4 then
+            return string.format("%02x%02x%02x%02x", b:byte(1), b:byte(2), b:byte(3), b:byte(4))
+        end
+    end
+    return tostring(os.time())
+end
+
+Util._art_content_length = function(hdr_path)
+    if not hdr_path then return nil end
+    local h = read_file(hdr_path)
+    if not h then return nil end
+    return tonumber(h:match("[Cc]ontent%-[Ll]ength:%s*(%d+)"))
+end
+
+Util._art_valid_file = function(path, content_length)
+    local fh = io.open(path, "rb")
+    if not fh then return false end
+    local head = fh:read(3)
+    local st = fh:seek("end")
+    local tail = nil
+    if st and st >= 2 then
+        fh:seek("end", -2)
+        tail = fh:read(2)
+    end
+    fh:close()
+    if not st or st <= 0 then return false end
+    if content_length and st ~= content_length then return false end
+    if not head or #head < 3 then return false end
+    if head:byte(1) ~= 0xFF or head:byte(2) ~= 0xD8 or head:byte(3) ~= 0xFF then return false end
+    if not tail or #tail < 2 then return false end
+    return tail:byte(1) == 0xFF and tail:byte(2) == 0xD9
+end
+
+Util.fetch_art = function(url, art_path)
+    for attempt = 1, 3 do
+        local tmp = art_path .. ".tmp" .. Util._rand_suffix()
+        local hdr = tmp .. ".hdr"
+        local cmd = string.format("curl -sf --connect-timeout 5 --max-time 10 -D %s -o %s %s 2>/dev/null",
+            shell_quote(hdr), shell_quote(tmp), shell_quote(url))
+        shell(cmd)
+        local cl = Util._art_content_length(hdr)
+        os.remove(hdr)
+        if Util._art_valid_file(tmp, cl) then
+            if os.rename(tmp, art_path) then return art_path end
+        end
+        os.remove(tmp)
+        if attempt < 3 then os.execute("sleep 1") end
+    end
+    return nil
+end
+
+Util._art_batch = function(items)
+    local todo = items
+    for pass = 1, 3 do
+        if #todo == 0 then break end
+        local cmds = {}
+        for j, pd in ipairs(todo) do
+            local tmp = pd.path .. ".tmp" .. Util._rand_suffix() .. "." .. j
+            local hdr = tmp .. ".hdr"
+            pd.tmp, pd.hdr = tmp, hdr
+            cmds[#cmds+1] = string.format("curl -sf --connect-timeout 5 --max-time 10 -D %s -o %s %s 2>/dev/null",
+                shell_quote(hdr), shell_quote(tmp), shell_quote(pd.url))
+            if (j % 8 == 0 and j < #todo) or j == #todo then
+                if #cmds > 0 then
+                    os.execute(table.concat(cmds, " & ") .. " & wait")
+                end
+                cmds = {}
+            end
+        end
+        local failures = {}
+        for _, pd in ipairs(todo) do
+            local cl = Util._art_content_length(pd.hdr)
+            os.remove(pd.hdr)
+            local ok = Util._art_valid_file(pd.tmp, cl)
+            if ok then ok = os.rename(pd.tmp, pd.path) end
+            if not ok then failures[#failures+1] = pd end
+            os.remove(pd.tmp)
+            pd.tmp, pd.hdr = nil, nil
+        end
+        todo = failures
+        if #todo > 0 and pass < 3 then os.execute("sleep 1") end
+    end
+end
+
 local function ensure_art(art_url, subdir)
     if not art_url or #art_url == 0 then return nil end
     local hash = art_url:match("/image/([%w]+)") or art_url:match("/([%w_%-]+)$")
@@ -870,15 +959,7 @@ local function ensure_art(art_url, subdir)
         if size and size > 0 then return art_path end
         os.remove(art_path)
     end
-    os.execute("curl -s --max-time 5 -o " .. shell_quote(art_path) .. " " .. shell_quote(art_url))
-    fh = io.open(art_path, "r")
-    if fh then
-        local size = fh:seek("end")
-        fh:close()
-        if size and size > 0 then return art_path end
-        os.remove(art_path)
-    end
-    return nil
+    return Util.fetch_art(art_url, art_path)
 end
 
 Util.write_art_theme = function(name, art_path)
@@ -926,14 +1007,7 @@ Util.album_thumbs = function(entries, items)
     end
     if #pending > 0 then
         ensure_cache()
-        local cmds = {}
-        for j, pd in ipairs(pending) do
-            cmds[#cmds+1] = "curl -s --max-time 5 -o " .. shell_quote(pd.path) .. " " .. shell_quote(pd.url)
-            if j % 8 == 0 or j == #pending then
-                os.execute(table.concat(cmds, " & ") .. " & wait")
-                cmds = {}
-            end
-        end
+        Util._art_batch(pending)
     end
     for i, e in ipairs(entries or {}) do
         local p = paths[i]
@@ -1442,7 +1516,7 @@ open_url = function(url)
             if tracks and #tracks > 0 then
                 session_push({view="playlist", playlist_id=id, playlist_name=d.name or "Playlist"})
                 local te = format_entries(tracks)
-                view_browse(te, tracks, (d.name or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", id)
+                view_browse(te, tracks, display_playlist(d) .. SEP .. #tracks .. " tracks", "playlist", "playlist", id)
                 session_pop()
                 if seek_pending or jump_to_track_pending then return end
             else rofi_message("Playlist is empty") end
@@ -1451,16 +1525,19 @@ open_url = function(url)
 end
 
 -- RECENTLY PLAYED
+--
+-- Write-through on every record so the always-on --recent-watch process and
+-- interactive sessions can each read-modify-write the file safely.
 
-local recent_tracks
-if not (arg and arg[1] and arg[1]:match("^%-%-")) then
+local recent_tracks = disk_get(P.recent) or {}
+
+function Util.recent_reload()
     recent_tracks = disk_get(P.recent) or {}
 end
-local _recent_dirty = false
-local _recent_dirty_since = 0
 
 local function record_recent_play(track)
     if not track or not track.id then return end
+    Util.recent_reload()
     for i = #recent_tracks, 1, -1 do
         if recent_tracks[i].id == track.id then
             table.remove(recent_tracks, i)
@@ -1470,14 +1547,6 @@ local function record_recent_play(track)
     while #recent_tracks > 100 do
         table.remove(recent_tracks)
     end
-    _recent_dirty = true
-    _recent_dirty_since = os.time()
-end
-
-local function flush_recent_play()
-    if not _recent_dirty then return end
-    if os.time() - _recent_dirty_since < 5 then return end
-    _recent_dirty = false
     disk_set(P.recent, recent_tracks)
 end
 
@@ -1537,6 +1606,7 @@ format_entries = function(tracks, hide_artist, hide_liked, hide_single_artist)
 end
 
 local function view_recently_played()
+    Util.recent_reload()
     local tracks = recent_tracks
     if #tracks == 0 then rofi_message("No recently played tracks"); return end
     session_push({view="recently-played"})
@@ -1591,13 +1661,13 @@ end
 
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    local l = item.id and liked[item.id] and "  \u{f05d}" or ""
-    local e = item.explicit and "  \u{f071}" or ""
+    local l = item.id and liked[item.id] and " \u{f05d}" or ""
+    local e = item.explicit and " \u{f071}" or ""
     local s = ""
     if Util.has_lyrics(item.id) then
-        s = Util.has_synced_lyrics(item.id) and "  \u{F0188}" or "  \u{F0189}"
+        s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
     end
-    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. l .. e .. s
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
 end
 
 local function progress_bar(pct)
@@ -1781,7 +1851,6 @@ end
 
 function Util.clean_exit()
     flush_liked_cache()
-    if _recent_dirty then _recent_dirty_since = 0; flush_recent_play() end
     os.remove("/tmp/spotirofi_instance.lock")
     os.remove(P.cache .. "/action_theme.rasi")
     os.execute("rm -f /tmp/spotirofi_theme_*.rasi 2>/dev/null")
@@ -1870,7 +1939,7 @@ end
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
 local function album_action_menu(album)
-    local acts = {"Open Album", "Save Album", "Albumart", "Copy URL"}
+    local acts = {"Open Album", "Save Album", "Albumart", "Copy URL", "Album Details"}
     if (album.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
     local al_ac_key = "album-ac:" .. (album.id or "")
     local pre_sel = 0
@@ -1894,6 +1963,8 @@ local function album_action_menu(album)
         if ar then view_artist({id=ar.id, name=ar.name or ""}) end
     elseif action == "Albumart" then
         view_art({album=album, name=album.name, artists=album.artists})
+    elseif action == "Album Details" then
+        view_album_details(album)
     end
     return action == "Open Album"
 end
@@ -1999,6 +2070,41 @@ local function api_get_album(album_id)
         end
         return d
     end)
+end
+
+view_album_details = function(album)
+    local d = api_get_album(album.id)
+    if not d then
+        rofi_message("Could not load album details")
+        return
+    end
+    local lines = {}
+    local function row(label, val)
+        local k = 15
+        return string.rep(" ", k - #label)
+            .. Util.markup('<span foreground="#9bbfbf">') .. label .. Util.markup("</span>")
+            .. "  " .. tostring(val)
+    end
+    local add = function(label, val)
+        if val ~= nil and tostring(val) ~= "" then lines[#lines+1] = row(label, val) end
+    end
+    local names = {}
+    for _, ar in ipairs(d.artists or {}) do
+        if ar.name and ar.name ~= "" then names[#names+1] = ar.name end
+    end
+    add("Name", d.name)
+    if #names > 0 then add("Artists", table.concat(names, ", ")) end
+    add("Type", d.album_type)
+    add("Release date", d.release_date)
+    add("Total tracks", d.total_tracks)
+    add("Label", d.label)
+    if d.genres and #d.genres > 0 then add("Genres", table.concat(d.genres, ", ")) end
+    if d.popularity ~= nil then add("Popularity", tostring(d.popularity)) end
+    if d.external_urls and d.external_urls.spotify then add("URL", d.external_urls.spotify) end
+    if d.external_ids and d.external_ids.upc then add("UPC", d.external_ids.upc) end
+    add("ID", d.id)
+    if #lines == 0 then lines[1] = "No details available" end
+    rofi_message(table.concat(lines, "\n"), THEME_META)
 end
 
 api_get_playlist_tracks = function(playlist_id)
@@ -2349,7 +2455,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                     else
                         session_push({view="playlist", playlist_id=item.id, playlist_name=item.name or "Playlist"})
                         local te = format_entries(tracks)
-                        view_browse(te, tracks, (item.name or "Unknown") .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
+                        view_browse(te, tracks, display_playlist(item) .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
                         session_pop()
                         if seek_pending or jump_to_track_pending then return end
                     end
@@ -2365,7 +2471,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             if ctx == "search-album" then
                 do_open = album_action_menu(item)
             elseif ctx == "album-list" then
-                local acts = {"Open Album", "Remove from Library", "Albumart", "Copy URL"}
+                local acts = {"Open Album", "Remove from Library", "Albumart", "Copy URL", "Album Details"}
                 if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
                 local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true})
                 if action == "Open Album" then
@@ -2398,6 +2504,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                     end
                 elseif action == "Albumart" then
                     view_art({album=item, name=item.name, artists=item.artists})
+                elseif action == "Album Details" then
+                    view_album_details(item)
                 end
             end
             if do_open then
@@ -2424,7 +2532,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 else
                     session_push({view="playlist", playlist_id=item.id, playlist_name=item.name or "Playlist"})
                     local te = format_entries(tracks)
-                    view_browse(te, tracks, (item.name or "Unknown") .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
+                    view_browse(te, tracks, display_playlist(item) .. SEP .. #tracks .. " tracks", "playlist", "playlist", item.id)
                     session_pop()
                     if seek_pending then return end
                 end
@@ -3063,7 +3171,7 @@ local function view_playlists()
                 else
                     session_push({view="playlist", playlist_id=pl.id, playlist_name=pl.name or "Playlist"})
                     local te = format_entries(tracks)
-                    view_browse(te, tracks, (pl.name or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", pl.id)
+                    view_browse(te, tracks, display_playlist(pl) .. SEP .. #tracks .. " tracks", "playlist", "playlist", pl.id)
                     session_pop()
                     if seek_pending or jump_to_track_pending then session_pop(); session_pop(); return end
                 end
@@ -3552,16 +3660,21 @@ local function view_system()
             break
         elseif clean == "Restart Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null"); os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
+            Util.kill_recent_watch()
+            Util.kill_playerctl_follow()
             mem_bust("spotifyd_device"); mem_bust("spotifyd_device_vol")
             os.remove(P.trails); Util.trail_history = {}
             os.execute("sleep 1")
             inv_playback()
             ensure_spotifyd()
             os.execute("sleep 3")
-            os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
+            os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon > /tmp/spotirofi_daemon.log 2>&1 &")
+            Util.ensure_recent_watch()
         elseif clean == "Kill Daemons" then
             os.execute("pkill -x spotifyd 2>/dev/null")
             os.execute("pkill -f 'spotirofi.*--daemon' 2>/dev/null")
+            Util.kill_recent_watch()
+            Util.kill_playerctl_follow()
             os.remove(P.trails); Util.trail_history = {}
             os.execute("pkill -x rofi 2>/dev/null")
             Util.clean_exit()
@@ -3608,7 +3721,7 @@ local function replay_session(prefer_current)
             if tracks and #tracks > 0 then
                 session_push({view="playlist", playlist_id=s.playlist_id, playlist_name=pl and pl.name or "Playlist"})
                 local te = format_entries(tracks)
-                view_browse(te, tracks, (pl and pl.name or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", s.playlist_id)
+                view_browse(te, tracks, (pl and display_playlist(pl) or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", s.playlist_id)
                 session_pop()
             end
         elseif v == "liked"              then view_liked_tracks()
@@ -3696,7 +3809,7 @@ local function replay_session(prefer_current)
                     rofi_message("Playlist is empty")
                 else
                     local te = format_entries(tracks)
-                    view_browse(te, tracks, (pl.name or "Playlist") .. SEP .. #tracks .. " tracks", "playlist", "playlist", pl.id)
+                    view_browse(te, tracks, display_playlist(pl) .. SEP .. #tracks .. " tracks", "playlist", "playlist", pl.id)
                     if seek_pending then return end
                 end
                 goto rp_act
@@ -3835,12 +3948,40 @@ local function ensure_daemon()
     local daemon_pid = trim(read_file("/tmp/spotirofi_daemon.pid") or "")
     local daemon_alive = false
     if daemon_pid ~= "" and tonumber(daemon_pid) then
-        daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
+        local cmdline = trim(shell("cat /proc/" .. daemon_pid .. "/cmdline 2>/dev/null") or "")
+        if cmdline:find("spotirofi") and cmdline:find("--daemon") then
+            daemon_alive = trim(shell("kill -0 " .. daemon_pid .. " 2>/dev/null && echo alive") or "") == "alive"
+        end
     end
     if not daemon_alive then
-        os.execute("lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon &")
+        os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --daemon > /tmp/spotirofi_daemon.log 2>&1 &")
     end
     return daemon_alive
+end
+
+function Util.ensure_recent_watch()
+    local pid = trim(read_file("/tmp/spotirofi_recent.pid") or "")
+    local alive = false
+    if pid ~= "" and tonumber(pid) then
+        local cmdline = trim(shell("cat /proc/" .. pid .. "/cmdline 2>/dev/null") or "")
+        if cmdline:find("spotirofi") and cmdline:find("--recent%-watch") then
+            alive = trim(shell("kill -0 " .. pid .. " 2>/dev/null && echo alive") or "") == "alive"
+        end
+    end
+    if not alive then
+        os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua") .. " --recent-watch > /tmp/spotirofi_recent_watch.log 2>&1 &")
+    end
+end
+
+function Util.kill_recent_watch()
+    local wp = trim(read_file("/tmp/spotirofi_recent.pid") or "")
+    if wp ~= "" then os.execute("kill " .. wp .. " 2>/dev/null") end
+    os.execute("pkill -f 'spotirofi.*--recent-watch' 2>/dev/null")
+    os.remove("/tmp/spotirofi_recent.pid")
+end
+
+function Util.kill_playerctl_follow()
+    os.execute("pkill -f 'playerctl[ -]--follow metadata' 2>/dev/null")
 end
 
 local function check_rate_cooldown()
@@ -3901,6 +4042,7 @@ end
 local function main()
     init_instance_lock()
     local cold_start = not ensure_daemon()
+    Util.ensure_recent_watch()
     if check_rate_cooldown() then Util.clean_exit() end
     init_library(cold_start)
 
@@ -3909,11 +4051,11 @@ local function main()
     local main_pre = 0
     while true do
         flush_liked_cache()
-        flush_recent_play()
         if not first_loop then get_playback() end
         local is_first = first_loop
         first_loop = false
         if is_first then
+            if current_id and current_track then record_recent_play(current_track) end
             previous_id = current_id
         elseif current_id and current_id ~= previous_id then
             record_recent_play(current_track)
@@ -4047,23 +4189,11 @@ local function daemon_mode()
         end
     end
     if mypid then Util.secure_write(lock, tostring(mypid)) end
+    Util.kill_playerctl_follow()
 
     local NOTIFY_FILE = "/tmp/spotirofi_last_notify"
     local last_title = nil
     local last_track_id = nil
-
-    local function wait_for_prefetch(id)
-        if not id then return end
-        for _ = 1, 30 do
-            local track_done = false
-            local rt = safe_decode(read_file(P.now_track))
-            if rt and rt.item and rt.item.id == id then track_done = true end
-            local lyrics_done = disk_get(P.lyrics .. "/lyrics_" .. id .. ".json", P.ttl_lyrics) ~= nil
-                or disk_get(P.lyrics .. "/nolyr_" .. id .. ".json", P.ttl_lyrics) ~= nil
-            if track_done and lyrics_done then return end
-            os.execute("sleep 0.05")
-        end
-    end
 
     local function notify_icons(track_id)
         if not track_id then return "" end
@@ -4090,15 +4220,33 @@ local function daemon_mode()
         return res
     end
 
+    local function art_cached_path(art_url)
+        if not art_url or #art_url == 0 then return "" end
+        local u = Util.art_url(art_url, "1e02")
+        local hash = u:match("/image/([%w]+)") or u:match("/([%w_%-]+)$")
+        if not hash then return "" end
+        local p = P.art .. "/" .. hash .. ".jpg"
+        local fh = io.open(p, "r")
+        if not fh then return "" end
+        local sz = fh:seek("end")
+        fh:close()
+        if not (sz and sz > 0) then return "" end
+        return p
+    end
+
     local function daemon_notify(title, artist, art_url, track_id)
         if not title or #trim(title) == 0 then return end
         if track_id and #track_id > 0 then
             local prev_id = read_file(NOTIFY_FILE)
             if prev_id and trim(prev_id) == track_id then return end
             Util.secure_write(NOTIFY_FILE, track_id)
-            wait_for_prefetch(track_id)
         end
-        local art_path = ensure_art(Util.art_url(art_url, "1e02")) or ""
+        local art_path = art_cached_path(art_url)
+        if art_path == "" and art_url and #art_url > 0 then
+            os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
+                .. " --prefetch-art " .. shell_quote(Util.art_url(art_url, "1e02"))
+                .. " > /dev/null 2>&1 &")
+        end
         local icon = #art_path > 0 and ("--icon=" .. shell_quote(art_path)) or ""
         local body = Util.pango_escape(artist or "")
         local suffix = notify_icons(track_id):gsub("^%s+", "")
@@ -4169,6 +4317,44 @@ local function daemon_mode()
     end
 end
 
+-- RECENT-WATCH — always-on recorder. Polls the live playback endpoint so any
+-- play on the account (regardless of source or local MPRIS) lands in Recently
+-- Played even while the interactive UI is closed.
+
+function Util.recent_watch_mode()
+    Util.detached = true
+    local mypid = Util.get_own_pid()
+    if mypid then Util.secure_write("/tmp/spotirofi_recent.pid", tostring(mypid)) end
+    local last_id = nil
+    local nil_strikes = 0
+    local function poll()
+        local d = api_get("me/player")
+        if not d or type(d) ~= "table" or not d.item or not d.item.id then
+            nil_strikes = nil_strikes + 1
+            return
+        end
+        nil_strikes = 0
+        local id = d.item.id
+        if id ~= last_id then
+            record_recent_play(d.item)
+            last_id = id
+        end
+    end
+    while true do
+        local cooldown = tonumber((read_file("/tmp/spotirofi_rate_cooldown") or ""):match("%d+"))
+        if cooldown and os.time() < cooldown then
+            os.execute("sleep " .. math.max(cooldown - os.time(), 1))
+        else
+            local ok, err = pcall(poll)
+            if not ok then
+                io.stderr:write("spotirofi recent-watch error: " .. tostring(err) .. "\n")
+                nil_strikes = nil_strikes + 1
+            end
+            os.execute("sleep " .. (nil_strikes >= 3 and 60 or 25))
+        end
+    end
+end
+
 local function run_prefetch_lyrics()
     Util.detached = true
     local id = arg[2]
@@ -4199,12 +4385,24 @@ local function run_prefetch_track()
     os.exit(0)
 end
 
+local function run_prefetch_art()
+    Util.detached = true
+    local url = arg[2]
+    if not url or #url == 0 then os.exit(0) end
+    ensure_art(url)
+    os.exit(0)
+end
+
 if arg and arg[1] == "--daemon" then
     daemon_mode()
+elseif arg and arg[1] == "--recent-watch" then
+    Util.recent_watch_mode()
 elseif arg and arg[1] == "--prefetch-lyrics" then
     run_prefetch_lyrics()
 elseif arg and arg[1] == "--prefetch-track" then
     run_prefetch_track()
+elseif arg and arg[1] == "--prefetch-art" then
+    run_prefetch_art()
 elseif arg and arg[1] then
     os.exit(2)
 else

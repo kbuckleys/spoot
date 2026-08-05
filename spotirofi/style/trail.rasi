@@ -30,5 +30,5 @@ element-text {
 }
 element-text selected {
     text-color: #b6e0a4;
-    font: "JetBrainsMono Nerd Font Bold 12";
+    font: "JetBrainsMono Nerd Font Propo Medium 12";
 }
