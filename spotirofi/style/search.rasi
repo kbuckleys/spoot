@@ -49,9 +49,9 @@ textbox {
     font: "JetBrainsMono Nerd Font Propo Bold 12";
 }
 textbox-prompt-colon {
-    str: "";
+    padding: 0px 8px 0px 8px;
     color: #b6e0a4;
-    padding: 0px 8px 0px 2px;
+    str: "";
 }
 entry {
     text-color: #b6e0a4;

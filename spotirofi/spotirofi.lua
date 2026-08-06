@@ -1,6 +1,6 @@
 #!/usr/bin/lua
 
-;(function()
+(function()
 
 -- ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
 -- ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
@@ -40,6 +40,7 @@ local EXIT = {
     track = 17, seek = 18, art = 19, repeat_toggle = 20, lyrics = 21,
     recent = 22, shuffle_toggle = 23, clear_trail = 24,
     seek_plus = 25, seek_minus = 26,
+    alt_action = 27,
 }
 local SEP = " \u{F01D8} "
 local CACHE_TTL_SHORT = 300
@@ -560,6 +561,7 @@ local function rofi_dmenu(entries, opts)
     local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or (opts.use_menu and THEME_MENU or THEME))
     local eh       = opts.eh
     local sel      = opts.sel
+    local items    = opts.items
 
     if seek_pending or jump_to_track_pending then return nil end
     ::menu_redo::
@@ -569,8 +571,7 @@ local function rofi_dmenu(entries, opts)
     args[#args+1] = "-kb-element-next"; args[#args+1] = ""
     if not opts.no_alt_space then args[#args+1] = "-kb-custom-2"; args[#args+1] = "Alt+space" end
     args[#args+1] = "-kb-custom-3"; args[#args+1] = "Alt+g"
-    args[#args+1] = "-kb-custom-4"; args[#args+1] = "Alt+Return"
-    args[#args+1] = "-kb-custom-5"; args[#args+1] = "Alt+KP_Enter"
+    args[#args+1] = "-kb-custom-4"; args[#args+1] = "Alt+n"
     args[#args+1] = "-kb-custom-6"; args[#args+1] = "Alt+l"
     args[#args+1] = "-kb-custom-7"; args[#args+1] = "Tab"
     args[#args+1] = "-kb-custom-8"; args[#args+1] = "Alt+c"
@@ -583,6 +584,7 @@ local function rofi_dmenu(entries, opts)
     args[#args+1] = "-kb-custom-15"; args[#args+1] = "Delete"
     args[#args+1] = "-kb-custom-16"; args[#args+1] = "Alt+equal"
     args[#args+1] = "-kb-custom-17"; args[#args+1] = "Alt+minus"
+    args[#args+1] = "-kb-custom-18"; args[#args+1] = "Alt+Return"
     args[#args+1] = "-kb-remove-char-forward"; args[#args+1] = "Control+d"
     if opts.custom == false then args[#args+1] = "-no-custom" end
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
@@ -644,6 +646,18 @@ local function rofi_dmenu(entries, opts)
         return nil
     end
     if exit_code == EXIT.track then jump_to_track_pending = true; return nil end
+    if exit_code == EXIT.alt_action then
+        if opts.current then
+            view_actions(opts.current)
+        else
+            local items = opts.items or {}
+            local idx = tonumber(result or "")
+            if idx and idx >= 0 and idx < #items then
+                view_actions(items[idx + 1])
+            end
+        end
+        return nil
+    end
     if exit_code == EXIT.seek then
         if current_track then seek_pending = true; return nil
         else rofi_message("No track playing"); return nil end
@@ -2441,7 +2455,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
     end
     while true do
         if is_album_grid then Util.album_thumbs(entries, items) end
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx, thumbs=is_album_grid})
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2458,20 +2472,27 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             local item = items[idx]
 
         if is_track then
-            local unliked = view_actions(item, ctx_type, ctx_id, items, idx, entries)
-            if seek_pending then return end
-            if unliked and ctx == "liked" then
-                table.remove(entries, idx)
-                table.remove(items, idx)
-                entries = format_entries(items, nil, true)
-                mesg = "Liked Tracks" .. SEP .. #items .. " tracks"
-                if #items == 0 then return nil end
-            else
+            if item.id == current_id then
+                if is_playing then
+                    os.execute("playerctl pause 2>/dev/null")
+                    is_playing = false
+                else
+                    os.execute("playerctl play 2>/dev/null")
+                    is_playing = true
+                end
+                last_playback = 0
                 get_playback()
-                entries = format_entries(items, nil, nil, hide_single_artist)
-                pre_sel = idx - 1
-                do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
+            else
+                do_play(item, ctx_type, ctx_id, items, idx)
+                current_track = item
+                current_id = item.id
+                is_playing = true
+                last_playback = 0
+                get_playback()
             end
+            entries = format_entries(items, nil, nil, hide_single_artist)
+            pre_sel = idx - 1
+            do local vp = disk_get(P.view_pos) or {}; vp[v_key] = idx - 1; disk_set(P.view_pos, vp) end
         elseif is_search_all then
             local st = item._stype
             if st == "tracks" then
@@ -2483,7 +2504,24 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                         if it == item then tcidx = #tctx end
                     end
                 end
-                view_actions(item, ctx_type, ctx_id, (#tctx or 0) > 1 and tctx or nil, tcidx, entries)
+                if item.id == current_id then
+                    if is_playing then
+                        os.execute("playerctl pause 2>/dev/null")
+                        is_playing = false
+                    else
+                        os.execute("playerctl play 2>/dev/null")
+                        is_playing = true
+                    end
+                    last_playback = 0
+                    get_playback()
+                else
+                    do_play(item, ctx_type, ctx_id, tctx, tcidx)
+                    current_track = item
+                    current_id = item.id
+                    is_playing = true
+                    last_playback = 0
+                    get_playback()
+                end
                 if seek_pending then return end
                 get_playback()
                 entries = {}
@@ -2682,6 +2720,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=track_mesg(item), sel=pre_sel, custom=false, theme=action_theme, markup=true, current=item})
         if not sel then
+            Util.back_pressed = false
             if seek_pending then
                 seek_pending = false
                 if item.id == current_id then view_seek(item) end
@@ -2800,6 +2839,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             else rofi_message("Not the current track") end
         end
     end
+    session_pop()
 end
 
 -- SHARED HELPERS (used by both view functions and replay_session)
@@ -2899,6 +2939,7 @@ view_artist = function(artist)
         ::artist_next::
         local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist", sel=pre_sel, custom=false, use_menu=true, theme=THEME_SUB, no_status=true, markup=true})
         if not sel then
+            Util.back_pressed = false
             if consume_pending_toggle() then goto artist_next end
             session_pop()
             return
@@ -2988,6 +3029,7 @@ view_artist = function(artist)
             rofi_message("Copied URL")
         end
     end
+    session_pop()
 end
 
 -- VIEW: LYRICS (via lrclib.net)
@@ -3022,15 +3064,14 @@ view_lyrics = function(item)
         session_pop(); rofi_message("No lyrics found"); return
     end
 
-    local mesg_base = track_mesg(item)
+local mesg_base = track_mesg(item)
     if timestamps then
         local pre_sel = 0
         if current_id == item.id then
             local pos = get_playerctl_position()
             for i, ts in ipairs(timestamps) do
                 if ts <= pos then pre_sel = i - 1 end
-            end
-    end
+end
     while true do
             ::lr_next::
             local sel_line = rofi_dmenu(display_lines,
@@ -3049,6 +3090,7 @@ view_lyrics = function(item)
                 goto lr_next
             end
             if not sel_line then
+                Util.back_pressed = false
                 if consume_pending_toggle() then goto lr_next end
                 if seek_pending or jump_to_track_pending then session_pop(); return end
                 session_pop()
@@ -3108,6 +3150,7 @@ view_lyrics = function(item)
             break
         end
     end
+end
 end
 
 -- VIEW: ADD TO PLAYLIST
@@ -3571,7 +3614,7 @@ local function view_playback()
         if type(saved) == "string" then
             for i, it in ipairs(items) do if Util.strip_markup(it) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
         end
-        local si = rofi_dmenu(items, {prompt="Playback", mesg=mesg, custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=not current_track, sel=pre_sel})
+        local si = rofi_dmenu(items, {prompt="Playback", mesg=mesg, custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=not current_track, sel=pre_sel, current=current_track})
         if not si then
             if consume_pending_toggle() then goto pb_next end
             break
@@ -3656,25 +3699,25 @@ local function view_system()
                     .. "  " .. desc
             end
             rofi_message(table.concat({
-                row("Select", "return"),
-                row("Close", "escape"),
-                row("Clear input / Back one level", "backspace"),
-                row("View track's action menu", "shift + return"),
-                row("Jump to current track's action menu", "alt + return"),
-                row("Jump to main menu", "alt + space"),
-                row("Clear session trail", "delete"),
-                row("Jump to trail step", "tab"),
-                row("Liked tracks", "alt + l"),
-                row("Recently played", "alt + p"),
-                row("Album art of current track", "alt + a"),
-                row("Lyrics of current track", "alt + y"),
-                row("Seek menu", "alt + e"),
-                row("Seek + / - 10s", "alt + = / -"),
-                row("Cycle repeat modes", "alt + r"),
-                row("Toggle shuffle", "alt + s"),
-                row("Open Spotify URL from clipboard", "alt + g"),
-                row("Jump to playing track (list)", "alt + c"),
-                row("Jump to current lyric line (lyrics)"),
+                row("jump to trail step", "tab"),
+                row("select", "return"),
+                row("close", "escape"),
+                row("clear session trail", "delete"),
+                row("clear input / back one level", "backspace"),
+                row("jump to main menu", "alt + space"),
+                row("view track's action menu", "alt + return"),
+                row("seek + / - 10s", "alt + = / -"),
+                row("seek menu", "alt + e"),
+                row("jump to current track's action menu", "alt + n"),
+                row("liked tracks", "alt + l"),
+                row("recently played", "alt + p"),
+                row("album art of current track", "alt + a"),
+                row("lyrics of current track", "alt + y"),
+                row("cycle repeat modes", "alt + r"),
+                row("toggle shuffle", "alt + s"),
+                row("open Spotify URL from clipboard", "alt + g"),
+                row("jump to playing track (list)", "alt + c"),
+                row("jump to current lyric line (lyrics)"),
             }, "\n"), THEME_BINDS)
         elseif clean:match("^Volume") then
             view_volume()
@@ -4075,7 +4118,7 @@ local function init_library(cold_start)
     ensure_spotifyd()
     load_queue()
     if cold_start then clear_last_playback() end
-    ;(function()
+    (function()
         local raw = read_file(P.state)
         if raw then local d = safe_decode(raw)
             if d then
@@ -4190,7 +4233,13 @@ local function main()
         end
         if Util.back_pressed then
             Util.back_pressed = false
-            if Util.restore_trail() then goto m1 end
+            if _session_stack and #_session_stack > 1 then
+                session_pop()
+                replay_session()
+                goto m1
+            elseif Util.restore_trail() then
+                goto m1
+            end
         end
         if not sel then goto m1 end
 
@@ -4888,5 +4937,4 @@ elseif arg and arg[1] then
 else
     main()
 end
-
 end)()
