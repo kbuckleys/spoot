@@ -68,7 +68,7 @@ First things first; spotirofi is designed to be as intuitive as possible, which 
 - Set a keybind for it in your compositor's config
 - Have fun
 
-That's it! No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files. Well except for that part where you have to add your name to the input group.
+That's it! No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files. Well except for that part where you have to add your username to the input group.
 
 # Controls
 Given the scope, you can be easily multiple levels deep as you navigate through menus, so it was important to set some keybinds in place for convenience and faster -hopefully organic- interactions.
