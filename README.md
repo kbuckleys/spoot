@@ -88,7 +88,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
             <tr><td><kbd>alt + =</kbd>  &nbsp;&nbsp;&nbsp;&nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
       <tr><td><kbd>alt + return</kbd></td><td>Selected track's Action Menu</td><td>Track</td></tr>
       <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + e</kbd></td><td>Jump to Seek menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + n</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
       <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
