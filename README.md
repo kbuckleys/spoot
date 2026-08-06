@@ -48,6 +48,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
+- Wayland session
 - Spotify Premium ```no way around it```
 - spotifyd
 - rofi 1.7+
@@ -56,14 +57,18 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - playerctl
 - curl
 - perl
-- wl-clipboard / xclip ```depending on your session```
+- wl-clipboard
 - JetBrainsMono Nerd Font
 
-> You may use whatever you want, really. However, spotirofi will fallback to what you have installed, and it may exhibit padding drifts in some menus -- i.e. sub-optimal layout. ```JetBrainsMono``` is spotirofi's defined typeface to specifically address a very important issue; broad language support while maintaining uniformity and layout consistency
+# Installation
+Assuming you have all the required dependencies, first things first; spotirofi was designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life, as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow this step in particular for an optimal experience.
+- Add your username to the input group ```sudo usermod -aG input <username>``` and re-login for it to fully register
+- Place the spotirofi directory wherever you want
+- Make ```spotirofi.lua``` executable
+- Set a keybind for it in your compositor's config
+- Have fun
 
-# How to use
-Place the spotirofi directory wherever you want, make ```spotirofi.lua``` executable and set a keybind for it in your compositor's config
-> Really, that's it. No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files
+That's it! No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files. Well except for that part where you have to add your name to an input group.
 
 # Controls
 Given the scope, you can be easily multiple levels deep as you navigate through menus, so it was important to set some keybinds in place for convenience and faster -hopefully organic- interactions.
@@ -76,10 +81,8 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
     </thead>
     <tbody>
       <tr><td><kbd>alt + return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + backspace</kbd></td><td>Back one level</td><td>Universal</td></tr>
       <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + t</kbd></td><td>Jump to trail step</td><td>Universal</td></tr>
       <tr><td><kbd>alt + p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
       <tr><td><kbd>alt + y</kbd></td><td>Jump to current track's lyrics</td><td>Universal</td></tr>
       <tr><td><kbd>alt + a</kbd></td><td>View albumart of current track</td><td>Universal</td></tr>
@@ -88,7 +91,10 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + s</kbd></td><td>Toggle Shuffle</td><td>Universal</td></tr>
       <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
       <tr><td><kbd>alt + g</kbd></td><td>Paste and go to a Spotify web link</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + k</kbd></td><td>Clear session</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + =</kbd>  &nbsp;&nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
+      <tr><td><kbd>tab</kbd></td><td>Jump to trail menu</td><td>Universal</td></tr>
+      <tr><td><kbd>delete</kbd></td><td>Clear session</td><td>Universal</td></tr>
+      <tr><td><kbd>backspace</kbd></td><td>Clear filter / Delete input / Back one level</td><td>Universal</td></tr>
       <tr><td><kbd>return</kbd></td><td>Select</td><td>Universal</td></tr>
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
     </tbody>
