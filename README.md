@@ -90,8 +90,8 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>alt + c</kbd></td><td>Jump to current track in list / Jump to current lyric line</td><td>List / Lyrics</td></tr>
       <tr><td><kbd>alt + r</kbd></td><td>Cycle through Repeat modes</td><td>Universal</td></tr>
       <tr><td><kbd>alt + s</kbd></td><td>Toggle Shuffle</td><td>Universal</td></tr>
-      <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
       <tr><td><kbd>alt + g</kbd></td><td>Paste and go to a Spotify web link</td><td>Universal</td></tr>
+      <tr><td><kbd>alt + e</kbd></td><td>Seek current track</td><td>Universal</td></tr>
       <tr><td><kbd>alt + =</kbd>  &nbsp;&nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
       <tr><td><kbd>tab</kbd></td><td>Jump to trail menu</td><td>Universal</td></tr>
       <tr><td><kbd>delete</kbd></td><td>Clear session</td><td>Universal</td></tr>
