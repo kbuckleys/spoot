@@ -695,6 +695,7 @@ local function rofi_dmenu(entries, opts)
         local target = math.max(0, math.min(dur > 0 and dur or math.huge, math.floor(pos + delta + 0.5)))
         os.execute("playerctl position " .. target .. " 2>/dev/null")
         mem_bust("_playerctl_pos")
+        goto menu_redo
     else
         if result == "" then
             if exit_code == 0 then return nil end
@@ -1638,7 +1639,7 @@ local function bust_format_cache()
     _fmt_cache_key     = nil
 end
 
-local function get_playerctl_position()
+get_playerctl_position = function()
     local cached = mem_get("_playerctl_pos")
     if cached ~= nil then return cached end
     local raw = shell("playerctl position 2>/dev/null")
@@ -3430,7 +3431,7 @@ local function view_your_queue()
     if seek_pending or jump_to_track_pending then return end
 end
 
-local function view_volume()
+view_volume = function()
     local supports_vol = mem_get("spotifyd_device_vol")
     if supports_vol == false then
         rofi_message("Device doesn't support volume control"); return
