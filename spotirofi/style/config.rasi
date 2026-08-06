@@ -5,4 +5,8 @@
  * https://github.com/kbuckleys/
  * Dummy config.rasi to allow spotirofi.lua to bypass global rofi's config.rasi */
 
-configuration {}
+configuration {
+    /* free the Delete key from rofi's default remove-char-forward so
+       spotirofi can bind it to clear-trail (custom-15) */
+    kb-remove-char-forward: "Control+d";
+}

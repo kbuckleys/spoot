@@ -39,7 +39,7 @@ element-text selected {
 
 message {
     background-color: #16191d;
-    padding: 5px 5px 5px 5px;
+    padding: 5px 30px 5px 30px;
 }
 textbox {
     text-color: #b6e0a4;
