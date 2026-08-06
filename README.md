@@ -61,7 +61,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - JetBrainsMono Nerd Font
 
 # Installation
-Assuming you have all the required dependencies, first things first; spotirofi was designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life, as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow this step in particular for an optimal experience.
+First things first; spotirofi was designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life, as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow this step in particular for an optimal experience.
 - Add your username to the input group ```sudo usermod -aG input <username>``` and re-login for it to fully register
 - Place the spotirofi directory wherever you want
 - Make ```spotirofi.lua``` executable
