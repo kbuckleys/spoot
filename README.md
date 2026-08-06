@@ -80,7 +80,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>shift + return</kbd></td><td>Track's action menu</td><td>Universal</td></tr>
+      <tr><td><kbd>shift + return</kbd></td><td>Track's Action Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
