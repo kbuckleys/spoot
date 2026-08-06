@@ -39,6 +39,7 @@ local EXIT = {
     open_url = 12, jump = 13, jump_kp = 14, liked = 15, trail_jump = 16,
     track = 17, seek = 18, art = 19, repeat_toggle = 20, lyrics = 21,
     recent = 22, shuffle_toggle = 23, clear_trail = 24,
+    seek_plus = 25, seek_minus = 26,
 }
 local SEP = " \u{F01D8} "
 local CACHE_TTL_SHORT = 300
@@ -503,6 +504,7 @@ local view_actions, view_artist, view_lyrics, view_add_pl, view_art, view_volume
 local browse_album, view_browse
 local get_playback
 local get_token
+local get_playerctl_position
 local display_track, rofi_message
 local toggle_repeat, toggle_shuffle
 local open_url
@@ -552,7 +554,7 @@ local function rofi_dmenu(entries, opts)
     if main_pending or liked_pending or recent_pending or Util.trail_jump_pending then return nil end
     opts = opts or {}
     local prompt   = opts.prompt or ""
-    local mesg     = opts.mesg
+    local mesg_fn  = opts.mesg
     local markup   = opts.markup
     local by_index = opts.by_index
     local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or (opts.use_menu and THEME_MENU or THEME))
@@ -560,6 +562,8 @@ local function rofi_dmenu(entries, opts)
     local sel      = opts.sel
 
     if seek_pending or jump_to_track_pending then return nil end
+    ::menu_redo::
+    local mesg = type(mesg_fn) == "function" and mesg_fn() or mesg_fn
     local args = {"rofi","-dmenu","-config",P.dir.."/style/config.rasi","-theme",theme,"-p",prompt,"-i",
                    "-kb-custom-1","Control+Shift+Delete"}
     args[#args+1] = "-kb-element-next"; args[#args+1] = ""
@@ -577,6 +581,8 @@ local function rofi_dmenu(entries, opts)
     args[#args+1] = "-kb-custom-13"; args[#args+1] = "Alt+p"
     args[#args+1] = "-kb-custom-14"; args[#args+1] = "Alt+s"
     args[#args+1] = "-kb-custom-15"; args[#args+1] = "Delete"
+    args[#args+1] = "-kb-custom-16"; args[#args+1] = "Alt+equal"
+    args[#args+1] = "-kb-custom-17"; args[#args+1] = "Alt+minus"
     args[#args+1] = "-kb-remove-char-forward"; args[#args+1] = "Control+d"
     if opts.custom == false then args[#args+1] = "-no-custom" end
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
@@ -678,6 +684,17 @@ local function rofi_dmenu(entries, opts)
         end)
         if not ok then rofi_message("open_url error: " .. tostring(err)) end
         return nil
+    elseif exit_code == EXIT.seek_plus or exit_code == EXIT.seek_minus then
+        if not current_track then
+            rofi_message("No track playing")
+            return nil
+        end
+        local delta = exit_code == EXIT.seek_plus and 10 or -10
+        local pos = get_playerctl_position()
+        local dur = (current_track.duration_ms or 0) / 1000
+        local target = math.max(0, math.min(dur > 0 and dur or math.huge, math.floor(pos + delta + 0.5)))
+        os.execute("playerctl position " .. target .. " 2>/dev/null")
+        mem_bust("_playerctl_pos")
     else
         if result == "" then
             if exit_code == 0 then return nil end
@@ -690,6 +707,7 @@ local function rofi_dmenu(entries, opts)
         end
         return result
     end
+    goto menu_redo
 end
 
 rofi_message = function(msg, theme)
@@ -2105,6 +2123,45 @@ view_album_details = function(album)
     rofi_message(table.concat(lines, "\n"), THEME_META)
 end
 
+view_track_details = function(item)
+    local d = api_get("tracks/" .. (item.id or ""))
+    if not d then
+        rofi_message("Could not load track details")
+        return
+    end
+    local lines = {}
+    local function row(label, val)
+        local k = 15
+        return string.rep(" ", k - #label)
+            .. Util.markup('<span foreground="#9bbfbf">') .. label .. Util.markup("</span>")
+            .. "  " .. tostring(val)
+    end
+    local add = function(label, val)
+        if val ~= nil and tostring(val) ~= "" then lines[#lines+1] = row(label, val) end
+    end
+    local names = {}
+    for _, ar in ipairs(d.artists or {}) do
+        if ar.name and ar.name ~= "" then names[#names+1] = ar.name end
+    end
+    add("Name", d.name)
+    if #names > 0 then add("Artists", table.concat(names, ", ")) end
+    if d.album and d.album.name then add("Album", d.album.name) end
+    if d.album and d.album.album_type then add("Type", d.album.album_type) end
+    if d.disc_number then add("Disc", d.disc_number) end
+    if d.track_number then add("Track", d.track_number) end
+    if d.duration_ms then
+        add("Duration", string.format("%d:%02d", math.floor(d.duration_ms / 60000),
+            math.floor((d.duration_ms % 60000) / 1000)))
+    end
+    if d.explicit then add("Explicit", "yes") end
+    if d.popularity ~= nil then add("Popularity", tostring(d.popularity)) end
+    if d.external_urls and d.external_urls.spotify then add("URL", d.external_urls.spotify) end
+    if d.external_ids and d.external_ids.isrc then add("ISRC", d.external_ids.isrc) end
+    add("ID", d.id)
+    if #lines == 0 then lines[1] = "No details available" end
+    rofi_message(table.concat(lines, "\n"), THEME_META)
+end
+
 api_get_playlist_tracks = function(playlist_id)
     return cached_fetch("playlist_tracks_" .. playlist_id, P.mass .. "/playlist_tracks_" .. playlist_id .. ".json", 1800, function()
         return Util.paged_fetch("playlists/" .. playlist_id .. "/tracks",
@@ -2605,6 +2662,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     actions[#actions+1] = "Copy URL"
     actions[#actions+1] = "More Like This"
     actions[#actions+1] = "Albumart"
+    actions[#actions+1] = "Track Details"
 
     local act_key = "action:" .. (item.id or "")
     local pre_sel = 0
@@ -2735,6 +2793,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                 session_pop()
             end
         elseif sel == "Albumart" then view_art(item)
+        elseif sel == "Track Details" then view_track_details(item)
         elseif sel == "Seek" then
             if item.id == current_id then view_seek(item)
             else rofi_message("Not the current track") end
@@ -3426,9 +3485,8 @@ end
 
 view_seek = function(item)
     session_push({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0})
-    local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "1:00", "2:00", "0:00"}
+    local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "+1:00", "-1:00", "0:00"}
     local seek_key = "seek:" .. (item.id or "")
-    local disp_pos = get_playerctl_position()
     while true do
         ::seek_next::
         local pre_sel = 0
@@ -3436,7 +3494,7 @@ view_seek = function(item)
         if type(saved) == "string" then
             for i, a in ipairs(seeks) do if Util.strip_markup(a) == Util.strip_markup(saved) then pre_sel = i - 1; break end end
         end
-        local si = rofi_dmenu(seeks, {prompt="Seek", mesg=seek_mesg(item, disp_pos), sel=pre_sel, custom=false, theme=THEME_SUB, markup=true})
+        local si = rofi_dmenu(seeks, {prompt="Seek", mesg=function() return seek_mesg(item) end, sel=pre_sel, custom=false, theme=THEME_SUB, markup=true})
         if not si then
             if consume_pending_toggle() then goto seek_next end
             if seek_pending or jump_to_track_pending then session_pop(); return end
@@ -3444,14 +3502,19 @@ view_seek = function(item)
             break
         end
         do local vp = disk_get(P.view_pos) or {}; vp[seek_key] = si; disk_set(P.view_pos, vp) end
+        local delta
         local sign, secs = si:match("^([%+%-])(%d+)s$")
-        if sign then
-            local delta = sign == "+" and tonumber(secs) or -tonumber(secs)
+        if sign then delta = sign == "+" and tonumber(secs) or -tonumber(secs) end
+        if not delta then
+            local rsign, rm, rs = si:match("^([%+%-])(%d+):(%d+)$")
+            if rsign then delta = (rsign == "+" and 1 or -1) * (tonumber(rm) * 60 + tonumber(rs)) end
+        end
+        if delta then
+            local pos = get_playerctl_position()
             local dur = (item.duration_ms or 0) / 1000
-            local target = math.max(0, math.min(dur > 0 and dur or math.huge, math.floor(disp_pos + delta + 0.5)))
+            local target = math.max(0, math.min(dur > 0 and dur or math.huge, math.floor(pos + delta + 0.5)))
             os.execute("playerctl position " .. target .. " 2>/dev/null")
             mem_bust("_playerctl_pos")
-            disp_pos = target
         else
             local m, s = si:match("^(%d+):(%d+)$")
             if m and s then
@@ -3460,7 +3523,6 @@ view_seek = function(item)
                 target = math.max(0, math.min(dur > 0 and dur or math.huge, target))
                 os.execute("playerctl position " .. target .. " 2>/dev/null")
                 mem_bust("_playerctl_pos")
-                disp_pos = target
             end
         end
     end
@@ -3595,16 +3657,18 @@ local function view_system()
             rofi_message(table.concat({
                 row("Select", "return"),
                 row("Close", "escape"),
-                row("Back one level", "backspace (empty filter)"),
+                row("Clear input / Back one level", "backspace"),
+                row("View track's action menu", "shift + return"),
                 row("Jump to current track's action menu", "alt + return"),
                 row("Jump to main menu", "alt + space"),
-                row("Jump to trail step", "tab"),
                 row("Clear session trail", "delete"),
+                row("Jump to trail step", "tab"),
                 row("Liked tracks", "alt + l"),
                 row("Recently played", "alt + p"),
                 row("Album art of current track", "alt + a"),
                 row("Lyrics of current track", "alt + y"),
-                row("Seek current track", "alt + e"),
+                row("Seek menu", "alt + e"),
+                row("Seek + / - 10s", "alt + = / -"),
                 row("Cycle repeat modes", "alt + r"),
                 row("Toggle shuffle", "alt + s"),
                 row("Open Spotify URL from clipboard", "alt + g"),
