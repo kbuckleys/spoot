@@ -1,0 +1,34 @@
+/**
+* ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
+* ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
+* └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
+* https://github.com/kbuckleys/ */
+
+@import "ZENON"
+
+window {
+    width: 700px;
+}
+
+mainbox {
+    children: [ listview ];
+}
+
+listview {
+    fixed-columns: false;
+    fixed-height: false;
+    scrollbar: false;
+    columns: 1;
+    lines: 10;
+}
+
+element {
+    padding: 2px 20px 2px 20px;
+}
+element-text {
+    horizontal-align: 0.5;
+}
+element-text selected {
+    text-color: #b6e0a4;
+    font: "JetBrainsMono Nerd Font Propo Medium 12";
+}
