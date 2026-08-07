@@ -15,27 +15,27 @@ https://github.com/user-attachments/assets/f0d46590-c18e-4a06-9ac5-4488df955887
 
 This is a full-fledged, standalone Spotify client in a single Lua file (yes, you read that correctly), almost everything you can do in the official Spotify client can be done from within this interface. It's meant to be a quick and convenient way to manage your listening on the fly, much like a program launcher, except for your tunes.
 
-# The philosophy behind spotirofi
-Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spotirofi was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. Spotirofi was meant to bridge that gap, think of it as a remote control for your stereo system.
+# The philosophy behind spoot
+Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spoot was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. spoot was meant to bridge that gap, think of it as a remote control for your stereo system.
 
-But as spotirofi's development pressed on, it became mature enough to be its own player, with its own small but comprehensive ecosystem. The idea was to be able to quickly access my library from anywhere, and do whatever I'd typically do on a desktop Spotify client without having to bring up a window cluttered to the brim with distractions and corporate directives, disrupting my workflow in the process. That's the point of spotirofi. A music player should not have to be a dedicated space governing and imposing its own rules instead of catering to the user. Music players can be better, smaller and quicker without having to sacrifice functionality or user experience.
+But as spoot's development pressed on, it became mature enough to be its own player, with its own small but comprehensive ecosystem. The idea was to be able to quickly access my library from anywhere, and do whatever I'd typically do on a desktop Spotify client without having to bring up a window cluttered to the brim with distractions and corporate directives, disrupting my workflow in the process. That's the point of spoot. A music player should not have to be a dedicated space governing and imposing its own rules instead of catering to the user. Music players can be better, smaller and quicker without having to sacrifice functionality or user experience.
 
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
 # Functionality
-- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spotirofi will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away
+- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spoot will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away
 - Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this option
 - Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels
 
 # Limitations:
-Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spotirofi is no exception
+Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception
 - **Remove from queue (Spotify Web API limitation)**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
     - It adds complexity and relative bloat for what it's supposed to do
     - Local implementation also means zero sync with other Spotify clients/connect devices
 
 - **Podcast management**
-  - Not that spotirofi can't do it, I simply didn't implement support for it, for two primary reasons;
+  - Not that spoot can't do it, I simply didn't implement support for it, for two primary reasons;
     - Spotify's API doesn't expose some of the key features that help make listening to podcasts accessible, like chapter management
     - This may sound subjective, but it's a relatively niche medium to cover
 
@@ -61,10 +61,10 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 - JetBrainsMono Nerd Font
 
 # Installation
-First things first; spotirofi is designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life -- as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow the first step in particular for an optimal experience.
+First things first; spoot is designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life -- as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow the first step in particular for an optimal experience.
 - Add your username to the input group ```sudo usermod -aG input <username>``` and re-login for it to fully register
-- Place the spotirofi directory wherever you want
-- Make ```spotirofi.lua``` executable
+- Place the spoot directory wherever you want
+- Make ```spoot.lua``` executable
 - Set a keybind for it in your compositor's config
 - Have fun
 
