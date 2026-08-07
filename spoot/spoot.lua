@@ -49,6 +49,12 @@ local CACHE_TTL_SHORT = 300
 local CACHE_TTL_MED = 3600
 local CACHE_TTL_LONG = 86400
 local PROGRESS_BAR_W = 20
+-- How many album covers a thumbnail grid fetches before it is allowed to draw.
+-- style/thumbs.rasi shows 5x3 = 15 at a time, so this is several screens of
+-- scroll headroom. An artist discography can run to 1500 albums (Rachmaninoff
+-- does), and fetching every cover up front is what made such a list look like a
+-- hang -- the rest is handed to a detached prefetch, see Util.album_thumbs.
+local THUMB_SYNC = 60
 -- Budget for the FIRST mesg line, excluding the status icons (which are split
 -- off and never truncated) -- see the truncation call in rofi_dmenu.
 -- Measured against the narrowest theme, main/sub.rasi at 700px: 1px border and
@@ -257,6 +263,11 @@ local _cache_ready = false
 local function ensure_cache()
     if _cache_ready then return end
     os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics) .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres"))
+    -- A fetch interrupted mid-flight (Escape out of a grid, or a kill) leaves its
+    -- .tmp behind and nothing else ever removed them -- they had piled up into
+    -- thousands. -mmin +10 so a prefetch still running from an earlier launch
+    -- keeps the files it is actively writing.
+    os.execute("find " .. shell_quote(P.art) .. " -name '*.tmp*' -mmin +10 -delete 2>/dev/null &")
     _cache_ready = true
 end
 
@@ -1258,37 +1269,77 @@ Util.fetch_art = function(url, art_path, opts)
     return nil
 end
 
+-- Values go into a curl -K config, which honours backslash escapes inside the
+-- quotes. Art URLs and cache paths never contain either character today, but a
+-- $HOME that did would silently corrupt every transfer in the config.
+-- On Util, not a local: the chunk body is one function and Lua caps it at 200
+-- locals (see the note above Util's declaration).
+Util._curl_cfg_quote = function(s)
+    return (tostring(s):gsub("[\\\"]", "\\%0"))
+end
+
+-- ONE curl process per pass rather than one per image. -Z multiplexes every
+-- transfer over a handful of HTTP/2 connections to i.scdn.co: measured on 40
+-- covers, 0.54s / 0.08s CPU versus 1.45s / 1.14s for the 8-at-a-time fork loop
+-- this replaces. The old cost was process spawn and cold TCP+TLS, not a lack of
+-- concurrency -- which is why --parallel-max 16 is no slower than 32 or 64.
+--
+-- Validation moved off response headers: `dump-header` in a -K config is a
+-- GLOBAL, last-one-wins option, so every response's headers land concatenated in
+-- one file with nothing tying them to a transfer. --write-out is per transfer
+-- and carries more: status plus the byte count curl actually wrote, keyed by
+-- output path. No .hdr files are created at all now.
 Util._art_batch = function(items)
     local todo = items
     for pass = 1, 3 do
         if #todo == 0 then break end
-        local cmds = {}
+        local cfg = os.tmpname()
+        local f = io.open(cfg, "w")
+        if not f then os.remove(cfg); return end
         for j, pd in ipairs(todo) do
-            local tmp = pd.path .. ".tmp" .. Util._rand_suffix() .. "." .. j
-            local hdr = tmp .. ".hdr"
-            pd.tmp, pd.hdr = tmp, hdr
-            cmds[#cmds+1] = string.format("curl -sf --connect-timeout 5 --max-time 10 -D %s -o %s %s 2>/dev/null",
-                shell_quote(hdr), shell_quote(tmp), shell_quote(pd.url))
-            if (j % 8 == 0 and j < #todo) or j == #todo then
-                if #cmds > 0 then
-                    os.execute(table.concat(cmds, " & ") .. " & wait")
-                end
-                cmds = {}
-            end
+            pd.tmp = pd.path .. ".tmp" .. Util._rand_suffix() .. "." .. j
+            f:write('url = "', Util._curl_cfg_quote(pd.url), '"\n',
+                    'output = "', Util._curl_cfg_quote(pd.tmp), '"\n')
+        end
+        f:close()
+        -- filename_effective goes LAST so a path containing spaces still parses.
+        local report = shell("curl -sf -Z --parallel-max 16 --connect-timeout 5 --max-time 10 -K "
+            .. shell_quote(cfg) .. " -w '%{http_code} %{size_download} %{filename_effective}\\n' 2>/dev/null") or ""
+        os.remove(cfg)
+        local got = {}
+        for code, size, path in report:gmatch("(%d+) (%d+) ([^\n]+)") do
+            got[path] = {code = code, size = tonumber(size)}
         end
         local failures = {}
         for _, pd in ipairs(todo) do
-            local cl = Util._art_content_length(pd.hdr)
-            os.remove(pd.hdr)
-            local ok = Util._art_valid_file(pd.tmp, cl)
+            local r = got[pd.tmp]
+            local ok = r ~= nil and r.code:match("2..") ~= nil
+            if ok then ok = Util._art_valid_file(pd.tmp, r.size) end
             if ok then ok = os.rename(pd.tmp, pd.path) end
             if not ok then failures[#failures+1] = pd end
             os.remove(pd.tmp)
-            pd.tmp, pd.hdr = nil, nil
+            pd.tmp = nil
         end
         todo = failures
         if #todo > 0 and pass < 3 then os.execute("sleep 1") end
     end
+end
+
+-- Hands the tail of a thumbnail grid to a detached copy of ourselves so the menu
+-- can draw now and the rest of the covers are warm by the next visit. Routed
+-- through spoot.lua rather than a backgrounded bare curl so the tail gets the
+-- same status + byte-count + JPEG validation and atomic rename as the sync path;
+-- a prefetch killed mid-flight can then never leave a truncated file sitting at
+-- a final art path, where every later run would trust it.
+function Util.spawn_art_prefetch(list)
+    if not list or #list == 0 then return end
+    local lf = os.tmpname()
+    local f = io.open(lf, "w")
+    if not f then os.remove(lf); return end
+    for _, pd in ipairs(list) do f:write(pd.url, "\t", pd.path, "\n") end
+    f:close()
+    os.execute("nohup lua " .. shell_quote(P.dir .. "/spoot.lua")
+        .. " --prefetch-art-batch " .. shell_quote(lf) .. " > /dev/null 2>&1 &")
 end
 
 local function ensure_art(art_url, subdir, opts)
@@ -1326,8 +1377,15 @@ Util.write_art_theme = function(name, art_path)
 end
 
 -- Album-list thumbnails: reuse the shared 300px art cache (seed "1e02") so the
--- grid needs no extra network source. Fetches missing covers in parallel batches,
--- then appends "\0icon\x1f<path>" to each entry that has art available.
+-- grid needs no extra network source. Fetches the first THUMB_SYNC missing
+-- covers before returning and hands the rest to a detached prefetch, then
+-- appends "\0icon\x1f<path>" to each entry that has art available.
+--
+-- A row whose file has not landed yet simply gets no icon: rofi reads the entry
+-- list once, so pointing it at a path that does not exist would render blank for
+-- the life of the menu. Nothing is lost -- pending is re-derived from disk on
+-- every call (view_browse's `rebuild` included), so a redraw or a later visit
+-- picks up whatever the prefetch has finished.
 Util.album_thumbs = function(entries, items)
     local pending = {}
     local paths = {}
@@ -1353,7 +1411,12 @@ Util.album_thumbs = function(entries, items)
     end
     if #pending > 0 then
         ensure_cache()
-        Util._art_batch(pending)
+        local head, tail = {}, {}
+        for i, pd in ipairs(pending) do
+            if i <= THUMB_SYNC then head[#head+1] = pd else tail[#tail+1] = pd end
+        end
+        Util._art_batch(head)
+        if #tail > 0 then Util.spawn_art_prefetch(tail) end
     end
     for i, e in ipairs(entries or {}) do
         local p = paths[i]
@@ -4459,7 +4522,11 @@ local function view_system()
             os.execute("pkill -f 'spoot.*--daemon' 2>/dev/null")
             Util.kill_recent_watch()
             Util.kill_playerctl_follow()
-            os.remove(P.trails); Util.trail_history = {}
+            -- Session AND trail: this row is a shutdown, and clean_exit's
+            -- os.exit means no scope unwinds to rewrite session.json -- so the
+            -- stack was left naming THIS menu, and the next launch replayed
+            -- straight back into it instead of opening on Main.
+            Util.clear_trail()
             os.execute("pkill -x rofi 2>/dev/null")
             Util.clean_exit()
         end
@@ -5142,6 +5209,24 @@ local function run_prefetch_art()
     os.exit(0)
 end
 
+-- The tail of a thumbnail grid, handed over by Util.spawn_art_prefetch as a
+-- url<TAB>path list. Consumed and removed immediately so a crash here cannot
+-- leave the file behind.
+function Util.run_prefetch_art_batch()
+    Util.detached = true
+    local lf = arg[2]
+    if not lf or #lf == 0 then os.exit(0) end
+    local raw = read_file(lf)
+    os.remove(lf)
+    if not raw then os.exit(0) end
+    local list = {}
+    for url, path in raw:gmatch("([^\t\n]+)\t([^\t\n]+)") do
+        list[#list+1] = {url = url, path = path}
+    end
+    if #list > 0 then ensure_cache(); Util._art_batch(list) end
+    os.exit(0)
+end
+
 -- ── Backspace monitor ─────────────────────────────────────────────────
 -- Plain Backspace is ambiguous: rofi edits the filter natively, but when
 -- the filter is already empty a Backspace press is swallowed by rofi's
@@ -5627,6 +5712,8 @@ elseif arg and arg[1] == "--prefetch-track" then
     run_prefetch_track()
 elseif arg and arg[1] == "--prefetch-art" then
     run_prefetch_art()
+elseif arg and arg[1] == "--prefetch-art-batch" then
+    Util.run_prefetch_art_batch()
 elseif arg and arg[1] == "--prefetch-plindex" then
     Util.run_prefetch_plindex()
 elseif arg and arg[1] == "--notify" then
