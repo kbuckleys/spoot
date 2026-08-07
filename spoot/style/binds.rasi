@@ -7,7 +7,7 @@
 @import "ZENON"
 
 window {
-    width: 640px;
+    width: 710px;
 }
 
 mainbox {

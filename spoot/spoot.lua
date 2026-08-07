@@ -42,7 +42,7 @@ local EXIT = {
     track = 17, seek = 18, art = 19, repeat_toggle = 20, lyrics = 21,
     recent = 22, shuffle_toggle = 23, clear_trail = 24,
     seek_plus = 25, seek_minus = 26,
-    alt_action = 27,
+    alt_action = 27, refresh = 28,
 }
 local SEP = " \u{F01D8} "
 local CACHE_TTL_SHORT = 300
@@ -433,6 +433,53 @@ local function cache_stale(path)
     end
     return not ts or os.time() - ts >= P.ttl
 end
+-- Our Spotify market, memoised. api_get_me goes through cached_fetch, which
+-- calls mark_availability, which calls this -- so the flag below breaks what
+-- would otherwise be unbounded recursion on the very first profile fetch.
+Util._market_resolving = false
+function Util.market()
+    if Util._market ~= nil then return Util._market or nil end
+    if Util._market_resolving then return nil end
+    Util._market_resolving = true
+    local me = Util.api_get_me and Util.api_get_me() or nil
+    Util._market_resolving = false
+    Util._market = (me and me.country) or false
+    return Util._market or nil
+end
+
+-- Spotify answers with ~185 country codes in available_markets on the album AND
+-- on every track, because we send no market param. Nothing ever read them back
+-- (no is_playable / restrictions handling either), and they were ~44% of every
+-- cache on disk -- 5.1MB down to 2.8MB across the track caches. Collapse each to
+-- the single yes/no we actually care about, at cache time.
+--
+-- With no market known (offline, no profile yet) this does NOTHING, deliberately:
+-- stripping an array we cannot evaluate would destroy the only data able to
+-- answer the question on a later run.
+function Util.mark_availability(o)
+    local market = Util.market()
+    if not market then return o end
+    local function walk(t)
+        if type(t) ~= "table" then return end
+        local am = t.available_markets
+        if type(am) == "table" then
+            local ok = false
+            for _, c in ipairs(am) do
+                if c == market then ok = true; break end
+            end
+            -- Left absent rather than false when available, so the common case
+            -- adds nothing to the encoded JSON.
+            if not ok then t.unavail = true end
+            t.available_markets = nil
+        end
+        for _, v in pairs(t) do
+            if type(v) == "table" then walk(v) end
+        end
+    end
+    walk(o)
+    return o
+end
+
 local function cached_fetch(key, disk_path, ttl, fetch_fn)
     local v = mem_get(key)
     if v ~= nil then return v end
@@ -444,6 +491,7 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn)
     if v ~= nil then
         local empty = type(v) == "table" and next(v) == nil
         if not empty then
+            Util.mark_availability(v)
             mem_set(key, v, ttl)
             if disk_path then disk_set(disk_path, v) end
         end
@@ -826,9 +874,10 @@ local function rofi_dmenu(entries, opts)
     -- Control+bracketleft stays on kb-cancel as a native escape hatch.
     args[#args+1] = "-kb-cancel"; args[#args+1] = "Control+bracketleft"
     args[#args+1] = "-kb-custom-5"; args[#args+1] = "Escape"
-    -- Unused slot: left on rofi's default it returns an exit code no handler
-    -- matches, which can fall through to clean_exit and quit the app.
-    args[#args+1] = "-kb-custom-19"; args[#args+1] = ""
+    -- Last custom slot (exit code 9 + N). Redraws the menu in place, which is
+    -- how a thumbnail grid picks up covers the background prefetch has written
+    -- since it opened -- rofi never re-reads an icon path it already missed.
+    args[#args+1] = "-kb-custom-19"; args[#args+1] = "F5"
     if not opts.no_alt_space then args[#args+1] = "-kb-custom-2"; args[#args+1] = "Alt+space" end
     args[#args+1] = "-kb-custom-3"; args[#args+1] = "Alt+g"
     args[#args+1] = "-kb-custom-4"; args[#args+1] = "Alt+Return"
@@ -992,6 +1041,11 @@ local function rofi_dmenu(entries, opts)
         if not Util.fast_now_track() then last_playback = 0; get_playback() end
         if current_track then view_actions(current_track)
         else rofi_message("No track playing") end
+        if reenter(result) then goto menu_redo end
+        return nil
+    elseif exit_code == EXIT.refresh then
+        -- Pure redraw: menu_redo re-runs opts.refresh, so whatever that rebuilds
+        -- (thumbnail icons, live track state) is picked up.
         if reenter(result) then goto menu_redo end
         return nil
     elseif exit_code == EXIT.repeat_toggle then
@@ -1333,13 +1387,23 @@ end
 -- a final art path, where every later run would trust it.
 function Util.spawn_art_prefetch(list)
     if not list or #list == 0 then return end
+    -- album_thumbs re-derives its pending list from disk on every call, so each
+    -- redraw during a download would otherwise spawn a second prefetcher for
+    -- whatever is still missing. Same kill -0 liveness idiom as ensure_daemon.
+    local pidf = "/tmp/spoot_art_prefetch.pid"
+    local prev = trim(read_file(pidf) or "")
+    if prev:match("^%d+$")
+       and trim(shell("kill -0 " .. prev .. " 2>/dev/null && echo alive") or "") == "alive" then
+        return
+    end
     local lf = os.tmpname()
     local f = io.open(lf, "w")
     if not f then os.remove(lf); return end
     for _, pd in ipairs(list) do f:write(pd.url, "\t", pd.path, "\n") end
     f:close()
     os.execute("nohup lua " .. shell_quote(P.dir .. "/spoot.lua")
-        .. " --prefetch-art-batch " .. shell_quote(lf) .. " > /dev/null 2>&1 &")
+        .. " --prefetch-art-batch " .. shell_quote(lf) .. " > /dev/null 2>&1 &"
+        .. " echo $! > " .. shell_quote(pidf))
 end
 
 local function ensure_art(art_url, subdir, opts)
@@ -1378,35 +1442,46 @@ end
 
 -- Album-list thumbnails: reuse the shared 300px art cache (seed "1e02") so the
 -- grid needs no extra network source. Fetches the first THUMB_SYNC missing
--- covers before returning and hands the rest to a detached prefetch, then
--- appends "\0icon\x1f<path>" to each entry that has art available.
+-- covers before returning, hands the rest to a detached prefetch, then appends
+-- "\0icon\x1f<path>" to EVERY row that has a path -- see the note on the
+-- decoration loop for why a path that does not exist yet is still emitted.
 --
--- A row whose file has not landed yet simply gets no icon: rofi reads the entry
--- list once, so pointing it at a path that does not exist would render blank for
--- the life of the menu. Nothing is lost -- pending is re-derived from disk on
--- every call (view_browse's `rebuild` included), so a redraw or a later visit
--- picks up whatever the prefetch has finished.
+-- Three states a tile can be in, which used to be one indistinguishable black
+-- square:
+--   * cover not fetched YET -- no file, but the path is emitted anyway so rofi
+--     loads it when you scroll the row into view, and F5 catches the rest.
+--   * fetch FAILED -- Util._art_batch retried it 3 passes; pending is re-derived
+--     from disk on every call (view_browse's `rebuild` included), so the next
+--     redraw or visit tries again.
+--   * album has NO artwork at all -- nothing will ever be fetched, so the row is
+--     pointed at style/noart.png instead of being left iconless forever.
 Util.album_thumbs = function(entries, items)
     local pending = {}
     local paths = {}
     for i, it in ipairs(items or {}) do
         local imgs = it.images or (it.album and it.album.images) or {}
         local url = imgs[1] and imgs[1].url
+        local hash
         if url and #url > 0 then
             url = Util.art_url(url, "1e02")
-            local hash = url:match("/image/([%w]+)") or url:match("/([%w_%-]+)$")
-            if hash then
-                local p = P.art .. "/" .. hash .. ".jpg"
-                paths[i] = p
-                local fh = io.open(p, "r")
-                local ok = false
-                if fh then
-                    local sz = fh:seek("end")
-                    fh:close()
-                    ok = sz and sz > 0
-                end
-                if not ok then pending[#pending+1] = { url = url, path = p } end
+            hash = url:match("/image/([%w]+)") or url:match("/([%w_%-]+)$")
+        end
+        if hash then
+            local p = P.art .. "/" .. hash .. ".jpg"
+            paths[i] = p
+            local fh = io.open(p, "r")
+            local ok = false
+            if fh then
+                local sz = fh:seek("end")
+                fh:close()
+                ok = sz and sz > 0
             end
+            if not ok then pending[#pending+1] = { url = url, path = p } end
+        else
+            -- No usable art URL: deliberately NOT added to pending, there is
+            -- nothing to fetch. The placeholder ships with the themes, so it is
+            -- always present and costs no network.
+            paths[i] = P.dir .. "/style/noart.png"
         end
     end
     if #pending > 0 then
@@ -1418,17 +1493,18 @@ Util.album_thumbs = function(entries, items)
         Util._art_batch(head)
         if #tail > 0 then Util.spawn_art_prefetch(tail) end
     end
+    -- Emitted even when the file is not there YET, which looks wrong but is
+    -- deliberate: rofi queries an icon only when it first RENDERS that row
+    -- (measured -- of 200 rows whose icons all existed, rofi opened 3), so a row
+    -- below the fold is looked up when you scroll to it, by which time the
+    -- prefetch has usually written it. A row that IS on screen while its file is
+    -- still missing is the case this cannot help: rofi caches that miss for the
+    -- life of the menu and never re-reads the path, even once the file appears.
+    -- F5 redraws to pick those up.
     for i, e in ipairs(entries or {}) do
         local p = paths[i]
         if p and not e:find("\0icon", 1, true) then
-            local fh = io.open(p, "r")
-            local ok = false
-            if fh then
-                local sz = fh:seek("end")
-                fh:close()
-                ok = sz and sz > 0
-            end
-            if ok then entries[i] = e .. "\0icon\x1f" .. p end
+            entries[i] = e .. "\0icon\x1f" .. p
         end
     end
 end
@@ -1763,6 +1839,7 @@ local function load_saved_albums()
         offset = offset + 50
     end
     table.sort(items, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
+    Util.mark_availability(items)
     write_file(P.albums, json.encode({fetched_at=os.time(), items=items}))
     mem_set("saved_albums", items, P.ttl)
     return items, true
@@ -1830,8 +1907,12 @@ local function build_liked_artist_index(tracks)
     end
 end
 
+-- These write straight to disk instead of going through cached_fetch, so they
+-- need the availability collapse applied here too -- liked_tracks.json alone is
+-- 44% available_markets.
 local function save_library_cache(tracks, albums, artists)
     if tracks then
+        Util.mark_availability(tracks)
         mem_set("liked_tracks", tracks, P.ttl)
         build_liked_artist_index(tracks)
         write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
@@ -1840,6 +1921,7 @@ local function save_library_cache(tracks, albums, artists)
         write_file(P.liked_ids, json.encode(ids))
     end
     if albums then
+        Util.mark_availability(albums)
         mem_set("saved_albums", albums, P.ttl)
         write_file(P.albums, json.encode({fetched_at=os.time(), items=albums}))
     end
@@ -1870,6 +1952,7 @@ local function load_liked_tracks()
         build_liked_artist_index(tracks)
         return tracks
     end
+    Util.mark_availability(tracks)
     write_file(P.liked, json.encode({fetched_at=os.time(), tracks=tracks}))
     local ids = {}
     for _, t in ipairs(tracks) do if t.id then ids[#ids+1] = t.id end end
@@ -2004,6 +2087,8 @@ local function record_recent_play(track)
     while #recent_tracks > 100 do
         table.remove(recent_tracks)
     end
+    -- Tracks arrive here straight off me/player, not through cached_fetch.
+    Util.mark_availability(recent_tracks)
     disk_set(P.recent, recent_tracks)
 end
 
@@ -2016,7 +2101,13 @@ display_track = function(item, hide_artist, hide_liked, hide_single_artist)
     local l  = (not hide_liked) and item.id and liked[item.id] and "\u{f05d} " or ""
     local e  = item.explicit and "\u{f071} " or ""
     local txt = p .. l .. e .. (item.name or "Unknown") .. (hide and "" or SEP .. an)
-    if item.id == current_id then txt = Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>') end
+    if item.id == current_id then txt = Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>')
+    elseif item.unavail then
+        -- Not licensed in our market, so it will not play. Same dim as the
+        -- disabled action rows. Never applied to the current track: if it IS
+        -- playing, whatever the cache says, green wins.
+        txt = Util.markup('<span color="#6a707f">') .. txt .. Util.markup('</span>')
+    end
     return txt
 end
 
@@ -2679,6 +2770,9 @@ local function api_get_me()
         return api_get("me")
     end)
 end
+-- Util.market() needs this, and it is declared far above where this local
+-- exists. Published rather than duplicated so there stays one profile fetch.
+Util.api_get_me = api_get_me
 
 local function api_get_my_playlists()
     return cached_fetch("my_playlists", P.cache .. "/my_playlists.json", CACHE_TTL_SHORT, function()
@@ -3127,8 +3221,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 pre_sel = idx - 1
             elseif st == "albums" then
                 if not alt or album_action_menu(item) then
-                    local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
-                    if not ok then rofi_message("Failed to load album") end
+                    -- browse_album reports its own failure now.
+                    browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
                     if jump_to_track_pending then return end
                 end
             elseif st == "artists" then
@@ -3196,8 +3290,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 do_open = album_action_menu(item)
             end
             if do_open then
-                local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
-                if not ok then rofi_message("Failed to load album") end
+                -- browse_album reports its own failure now.
+                browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
                 if jump_to_track_pending then return end
             end
             pre_sel = idx - 1
@@ -3215,14 +3309,27 @@ end
 
 browse_album = function(album_id, mesg)
     local ad = api_get_album(album_id)
-    if not ad or not ad.tracks or #ad.tracks == 0 then return false end
+    -- Reported HERE rather than at the call sites: 6 of the 8 ignored the false
+    -- return, so pasting a URL for a dead or restricted album used to do nothing
+    -- at all -- no view, no message. The two causes are worth telling apart.
+    if not ad then rofi_message("Failed to load album"); return false end
+    if not ad.tracks or #ad.tracks == 0 then
+        local mk = Util.market()
+        rofi_message("Album has no available tracks" .. (mk and (" in " .. mk) or ""))
+        return false
+    end
     -- Derived here when the caller has no album object to build it from, which
     -- is the case on a warm start.
     mesg = mesg or ((ad.name or "Album") .. album_suffix(ad))
-    -- Util.scope hands back whatever the body returns, but this call was not
-    -- returned -- so browse_album answered nil even on success, and callers that
-    -- test it ("if not ok then rofi_message('Failed to load album')") fired that
-    -- message every time you backed out of an album you had just opened fine.
+    -- Context on the view you asked for, rather than a blocking message.
+    if ad.unavail then
+        local mk = Util.market()
+        mesg = mesg .. SEP .. "unavailable" .. (mk and (" in " .. mk) or "")
+    end
+    -- Util.scope hands back whatever the body returns, and this MUST stay
+    -- returned: browse_album otherwise answers nil on success, which reads as
+    -- failure to anything testing it (it once fired a "Failed to load album"
+    -- message every time you backed out of an album you had opened fine).
     return Util.scope({view="album", album_id=album_id, album_name=ad.name or "Album"}, function()
     local te = format_entries(ad.tracks, nil, nil, true)
     view_browse(te, ad.tracks, mesg, "album", "album", album_id)
@@ -3741,7 +3848,10 @@ function Util.browse_artist_albums(artist_id, artist_name)
             Util.album_thumbs(ae, items)
             local aidx = rofi_dmenu(ae, {prompt=artist_name or "", mesg=mesg, custom=false, by_index=true,
                                          use_menu=true, no_status=true, markup=true, thumbs=true, pos_key=pk,
-                                         alt_select=true})
+                                         alt_select=true,
+                                         -- So F5 re-runs album_thumbs; view_browse gets this
+                                         -- via its own `rebuild`.
+                                         refresh=function() Util.album_thumbs(ae, items); return ae end})
             local alt = Util.alt_pressed
             Util.alt_pressed = false
             if not aidx then return end
@@ -4171,7 +4281,8 @@ local function view_new_releases()
     local pre_sel = nil
     while true do
         Util.album_thumbs(entries, albums)
-        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true, alt_select=true})
+        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true, alt_select=true,
+            refresh=function() Util.album_thumbs(entries, albums); return entries end})
         local alt = Util.alt_pressed
         Util.alt_pressed = false
         if not idx then return end
@@ -4446,6 +4557,7 @@ local function view_system()
                 row("close", "escape"),
                 row("clear session trail", "delete"),
                 row("clear input / back one level", "backspace"),
+                row("redraw / load missing thumbnails", "f5"),
                 row("jump to main menu", "alt + space"),
                 row("seek + / - 10s", "alt + = / -"),
                 row("seek menu", "alt + e"),
