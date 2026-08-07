@@ -80,12 +80,13 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
+      <tr><td><kbd>f5</kbd></td><td>List refresh failsafe (you'll probably never use this)</td><td>Universal</td></tr>
       <tr><td><kbd>tab</kbd></td><td>Jump to trail menu</td><td>Universal</td></tr>
       <tr><td><kbd>delete</kbd></td><td>Clear session</td><td>Universal</td></tr>
       <tr><td><kbd>return</kbd></td><td>Select -- play/pause selected track</td><td>Universal</td></tr>
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
       <tr><td><kbd>backspace</kbd></td><td>Clear filter / Delete input / Back one level</td><td>Universal</td></tr>
-            <tr><td><kbd>alt + =</kbd>  &nbsp;&nbsp;&nbsp;&nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
+            <tr><td><kbd>alt + =</kbd>  &nbsp;&nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
       <tr><td><kbd>shift + return</kbd></td><td>Selected track's Action Menu</td><td>Track</td></tr>
       <tr><td><kbd>alt + return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt + space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
