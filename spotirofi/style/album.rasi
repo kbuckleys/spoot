@@ -36,7 +36,7 @@ icon-current-entry {
 }
 
 listview {
-    lines: 13;
+    lines: 12;
     scrollbar: false;
 }
 

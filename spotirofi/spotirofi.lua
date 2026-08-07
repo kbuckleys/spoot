@@ -35,6 +35,7 @@ P.state      = P.cache .. "/playback_state.json"
 P.now        = P.cache .. "/now.json"
 P.now_track  = P.cache .. "/now_track.json"
 P.device     = P.cache .. "/device.json"
+P.pl_index   = P.cache .. "/playlist_index.json"
 local EXIT = {
     back = 10, main = 11,
     open_url = 12, jump = 13, quit = 14, liked = 15, trail_jump = 16,
@@ -48,9 +49,20 @@ local CACHE_TTL_SHORT = 300
 local CACHE_TTL_MED = 3600
 local CACHE_TTL_LONG = 86400
 local PROGRESS_BAR_W = 20
--- Safe on the narrowest theme that mis-sizes its message box (action.rasi,
--- 800px); see the truncation call in rofi_dmenu for why this exists.
-local MESG_NAME_MAX_CHARS = 42
+-- Budget for the FIRST mesg line, excluding the status icons (which are split
+-- off and never truncated) -- see the truncation call in rofi_dmenu.
+-- Measured against the narrowest theme, main/sub.rasi at 700px: 1px border and
+-- 30px message padding each side leave 638px, and JetBrainsMono Nerd Font Propo
+-- Bold 12 is 10px per character. Subtract the shuffle/repeat prefix that
+-- status_mesg prepends after truncation (57px) and the widest status icon run,
+-- liked + explicit + lyrics (73px), and 508px remain. truncate_text appends an
+-- ellipsis on top of the limit, so the cap is 49, not 50: 49 + "…" = 500px,
+-- 630px in total.
+local MESG_NAME_MAX_CHARS = 49
+-- Trailing glyphs that carry a track's status. They live at the end of the line
+-- and must survive truncation, so a long title costs title characters and never
+-- the icons.
+local STATUS_GLYPHS = {[0xf05d] = true, [0xf071] = true, [0xF0188] = true, [0xF0189] = true}
 local ICON_PREFIX = {
     tracks    = "\u{F0387} ",
     albums    = "\u{F405} ",
@@ -96,6 +108,30 @@ local function truncate_text(s, max_chars)
     if not len or len <= max_chars then return s end
     local byte_end = utf8.offset(s, max_chars + 1) - 1
     return s:sub(1, byte_end) .. "\u{2026}"
+end
+
+-- Peels the trailing status-icon run off a mesg line so truncation can spend the
+-- whole character budget on the title and put the icons back afterwards. Without
+-- this, a long title pushed the liked/explicit/lyrics glyphs past the cut and
+-- they simply vanished -- the icons are the part you cannot reconstruct by
+-- reading, so they are the last thing that should go.
+local function split_status_icons(s)
+    if not s or s == "" then return s or "", "" end
+    local n = utf8.len(s)
+    if not n then return s, "" end     -- invalid UTF-8: leave it alone
+    local cut = #s + 1
+    for i = n, 1, -1 do
+        local off = utf8.offset(s, i)
+        if not off then break end
+        local cp = utf8.codepoint(s, off)
+        if not (STATUS_GLYPHS[cp] or cp == 0x20) then break end
+        cut = off
+    end
+    local suffix = s:sub(cut)
+    -- A title that merely ends in spaces must keep them; only a run that
+    -- actually contains a glyph counts as icons.
+    if not suffix:find("[^ ]") then return s, "" end
+    return s:sub(1, cut - 1), suffix
 end
 
 local function copy_to_clipboard(text)
@@ -751,13 +787,15 @@ local function rofi_dmenu(entries, opts)
     -- width that never wraps in the narrowest such theme sidesteps that for
     -- every caller, everywhere, without touching intentional multi-line
     -- content (progress bars, etc.) that comes after it.
+    -- The trailing status icons are peeled off first and re-attached after the
+    -- cut, so they are never what gets dropped: the budget buys title, and the
+    -- liked/explicit/lyrics glyphs are always shown in full.
     if mesg then
         local nl = mesg:find("\n", 1, true)
-        if nl then
-            mesg = truncate_text(mesg:sub(1, nl - 1), MESG_NAME_MAX_CHARS) .. mesg:sub(nl)
-        else
-            mesg = truncate_text(mesg, MESG_NAME_MAX_CHARS)
-        end
+        local first = nl and mesg:sub(1, nl - 1) or mesg
+        local rest  = nl and mesg:sub(nl) or ""
+        local body, icons = split_status_icons(first)
+        mesg = truncate_text(body, MESG_NAME_MAX_CHARS) .. icons .. rest
     end
     local args = {"rofi","-dmenu","-config",P.dir.."/style/config.rasi","-theme",theme,"-p",prompt,"-i",
                    "-kb-custom-1","Control+Shift+Delete"}
@@ -861,13 +899,21 @@ local function rofi_dmenu(entries, opts)
     end
     if exit_code == EXIT.track then jump_to_track_pending = true; return nil end
     if exit_code == EXIT.alt_action then
+        -- The sibling hotkey branches below all refresh before opening a view
+        -- that renders track state; this one did not, so an action menu reached
+        -- by Shift+Return could open on stale Play/Pause/Like labels.
+        if not Util.fast_now_track() then last_playback = 0; get_playback() end
+        -- Forward the list's context. view_actions has always accepted it, but
+        -- every call site passed the item alone, so ctx_id was permanently nil
+        -- -- which is why its Remove from Playlist branch was unreachable, and
+        -- why Play from here lost the queue context do_play wants.
         if opts.current then
-            view_actions(opts.current)
+            view_actions(opts.current, opts.ctx_type, opts.ctx_id, opts.items, opts.cidx, opts.entries)
         else
             local items = opts.items or {}
             local idx = tonumber(result or "")
             if idx and idx >= 0 and idx < #items then
-                view_actions(items[idx + 1])
+                view_actions(items[idx + 1], opts.ctx_type, opts.ctx_id, items, idx + 1, opts.entries)
             end
         end
         if reenter(result) then goto menu_redo end
@@ -882,12 +928,19 @@ local function rofi_dmenu(entries, opts)
         if reenter(result) then goto menu_redo end
         return nil
     end
+    -- Alt+a and Alt+y below deliberately do NOT re-enter view_actions after the
+    -- nested view returns. They used to, back when rofi_dmenu closed the menu
+    -- underneath instead of redrawing it. Now `reenter -> goto menu_redo` puts
+    -- the very same action menu back up with rebuild_actions re-run, so calling
+    -- view_actions again just stacked a SECOND {view="action"} scope entry for
+    -- the same track -- and parts_from_stack renders a repeated crumb name as
+    -- the generic view label, so every press appended another "Track" to the
+    -- breadcrumb and the trail.
     if exit_code == EXIT.art then
         if not Util.fast_now_track() then last_playback = 0; get_playback() end
         local target = opts.current or current_track
         if target then
             view_art(target)
-            if opts.current then view_actions(target) end
         else rofi_message("No track playing") end
         if reenter(result) then goto menu_redo end
         return nil
@@ -901,7 +954,6 @@ local function rofi_dmenu(entries, opts)
         local target = opts.current or current_track
         if target then
             view_lyrics(target)
-            if opts.current then view_actions(target) end
         else rofi_message("No track playing") end
         if reenter(result) then goto menu_redo end
         return nil
@@ -1786,8 +1838,40 @@ function Util.fast_now_track()
     if not (now and now.id and rich and rich.item and rich.item.id == now.id) then return false end
     current_track = rich.item
     current_id    = rich.item.id
-    is_playing    = rich.playing ~= nil and rich.playing == true or now.playing == true
+    -- Ask the player, not the cache. now.json's `playing` is sampled once per
+    -- track (the daemon's process_snap early-returns on pause/resume, because
+    -- those MPRIS events carry unchanged metadata) so it goes stale the moment
+    -- you pause, and now_track.json may not carry the field at all. playerctl
+    -- status is a local D-Bus round trip with no network in it, and it is the
+    -- only source that is right every time. The cached fields stay as fallback
+    -- for when playerctl is unavailable.
+    local st = trim(shell("playerctl status 2>/dev/null") or "")
+    if st == "Playing" then
+        is_playing = true
+    elseif st == "Paused" or st == "Stopped" then
+        is_playing = false
+    elseif rich.playing ~= nil then
+        -- Was `rich.playing ~= nil and rich.playing == true or now.playing`, which
+        -- parses as `(rich.playing ~= nil and rich.playing == true) or now.playing`
+        -- -- so an explicit `playing = false` fell through to the stale snapshot.
+        is_playing = rich.playing == true
+    else
+        is_playing = now.playing == true
+    end
     return true
+end
+
+-- Cheap refresh for any menu that renders now-playing state. fast_now_track is
+-- two file reads plus a local playerctl call; get_playback is a ~300ms me/player
+-- round trip that self-throttles to once per 5s, so this is safe to call on
+-- every menu entry.
+function Util.sync_now()
+    -- Right after do_play the locally patched globals are the ONLY correct
+    -- source: spotifyd needs a moment to pick the track up, so now.json still
+    -- names the previous one and me/player can still answer with it too.
+    -- Syncing inside that window would drag the ▶ marker back to the old track.
+    if P.recent_cmd_at and os.time() - P.recent_cmd_at < 5 then return end
+    if not Util.fast_now_track() then get_playback() end
 end
 
 open_url = function(url)
@@ -1949,15 +2033,36 @@ function Util.track_has_lyrics(id)
     return nil
 end
 
+-- The liked set is only populated in the interactive process; the detached
+-- notify helper has to fall back to the on-disk id list.
+function Util.is_liked(id)
+    if not id then return false end
+    if liked[id] then return true end
+    if next(liked) ~= nil then return false end
+    local ids = safe_decode(read_file(P.liked_ids))
+    if type(ids) ~= "table" then return false end
+    for _, v in ipairs(ids) do if v == id then return true end end
+    return false
+end
+
+-- Single composer for the liked / explicit / lyrics glyph run. The notification
+-- path used to carry its own copy of this logic and the two had already drifted
+-- apart; anything that shows a track's status now reads from here.
+function Util.status_icons(item)
+    if not item then return "" end
+    local out = ""
+    if Util.is_liked(item.id) then out = out .. " \u{f05d}" end
+    if item.explicit then out = out .. " \u{f071}" end
+    if Util.has_lyrics(item.id) then
+        out = out .. (Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}")
+    end
+    return out
+end
+
 local function track_mesg(item)
     local p = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    local l = item.id and liked[item.id] and " \u{f05d}" or ""
-    local e = item.explicit and " \u{f071}" or ""
-    local s = ""
-    if Util.has_lyrics(item.id) then
-        s = Util.has_synced_lyrics(item.id) and " \u{F0188}" or " \u{F0189}"
-    end
-    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item) .. " " .. l .. e .. s
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item)
+        .. " " .. Util.status_icons(item)
 end
 
 local function progress_bar(pct)
@@ -2449,7 +2554,11 @@ end
 api_get_playlist_tracks = function(playlist_id)
     return cached_fetch("playlist_tracks_" .. playlist_id, P.mass .. "/playlist_tracks_" .. playlist_id .. ".json", 1800, function()
         return Util.paged_fetch("playlists/" .. playlist_id .. "/tracks",
-            function(o) return "limit=100&offset=" .. o .. "&fields=items(track(id,name,duration_ms,artists,album(id,name,images,artists)),added_at),next" end,
+            -- `explicit` has to be in the mask: this is the only track source in
+            -- the file that narrows the response, so without it every track read
+            -- out of a playlist lost its explicit glyph in list rows, in the
+            -- message bar and in Track Details.
+            function(o) return "limit=100&offset=" .. o .. "&fields=items(track(id,name,duration_ms,explicit,artists,album(id,name,images,artists)),added_at),next" end,
             function(d, items) return #items == 0 or not d.next end,
             function(entry)
                 if entry.track and entry.track.id then
@@ -2487,6 +2596,109 @@ local function api_get_my_playlists()
             function(o) return "limit=50&offset=" .. o end,
             function(d, items) return #items == 0 or not d.next end)
     end)
+end
+
+-- PLAYLIST MEMBERSHIP INDEX
+--
+-- Answers "which of my playlists is this track in?" without a round trip, so the
+-- action menu can offer Remove from Playlist no matter which view the track was
+-- opened from. Only playlists you own or collaborate on are indexed -- Spotify
+-- rejects writes to editorial ones, so offering removal for those would just
+-- produce a failed request.
+--
+-- Shape: { owned = {[pl_id] = name}, tracks = {[track_id] = {pl_id, ...}} }
+
+-- On Util rather than as file locals: this chunk is already at Lua's 200-local
+-- ceiling.
+function Util.pl_is_mine(p, my_id)
+    return p and p.owner and my_id and (p.owner.id == my_id or p.collaborative)
+end
+
+function Util.build_pl_index()
+    local me = api_get_me()
+    local my_id = me and me.id
+    if not my_id then return nil end
+    local pls = api_get_my_playlists()
+    if not pls then return nil end
+
+    local idx = {owned = {}, tracks = {}}
+    for _, p in ipairs(pls) do
+        if p.id and Util.pl_is_mine(p, my_id) then
+            idx.owned[p.id] = p.name or "Playlist"
+            -- api_get_playlist_tracks is disk+mem cached at 1800s, so a rebuild
+            -- behind a warm library costs no network at all.
+            for _, t in ipairs(api_get_playlist_tracks(p.id) or {}) do
+                if t.id then
+                    local l = idx.tracks[t.id]
+                    if not l then l = {}; idx.tracks[t.id] = l end
+                    l[#l+1] = p.id
+                end
+            end
+        end
+    end
+    disk_set(P.pl_index, idx)
+    mem_set("pl_index", idx, CACHE_TTL_SHORT)
+    return idx
+end
+
+-- Read-only and non-blocking: view_actions already stalls up to 1.5s on
+-- resolve_lyrics_state, so it must never also wait on a walk of every playlist.
+-- A stale index is served while a rebuild runs in the background.
+function Util.pl_index()
+    local v = mem_get("pl_index")
+    if v ~= nil then return v end
+    local fresh = disk_get(P.pl_index, CACHE_TTL_SHORT)
+    if fresh then mem_set("pl_index", fresh, CACHE_TTL_SHORT); return fresh end
+    if not Util.detached then
+        os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
+            .. " --prefetch-plindex > /dev/null 2>&1 &")
+    end
+    return disk_get(P.pl_index)  -- no TTL: whatever we last knew beats nothing
+end
+
+-- Keep the index truthful the instant a track is added or removed, rather than
+-- leaving the menu wrong until the next rebuild.
+-- pl_name registers the playlist as one of yours, which matters for a playlist
+-- created seconds ago: it is not in any index built before it existed, and
+-- rm_targets only offers playlists listed in `owned`.
+function Util.pl_index_patch(pl_id, track_id, present, pl_name)
+    if not (pl_id and track_id) then return end
+    local idx = mem_get("pl_index") or disk_get(P.pl_index)
+    if type(idx) ~= "table" then idx = {owned = {}, tracks = {}} end
+    if type(idx.owned) ~= "table" then idx.owned = {} end
+    if type(idx.tracks) ~= "table" then idx.tracks = {} end
+    if present and pl_name then idx.owned[pl_id] = pl_name end
+    local l = idx.tracks[track_id]
+    if present then
+        if not l then l = {}; idx.tracks[track_id] = l end
+        -- Already listed: fall through to the write anyway, because registering
+        -- the playlist in `owned` above may still be new information.
+        local dup = false
+        for _, id in ipairs(l) do if id == pl_id then dup = true; break end end
+        if not dup then l[#l+1] = pl_id end
+    elseif l then
+        for i = #l, 1, -1 do if l[i] == pl_id then table.remove(l, i) end end
+        if #l == 0 then idx.tracks[track_id] = nil end
+    end
+    disk_set(P.pl_index, idx)
+    mem_set("pl_index", idx, CACHE_TTL_SHORT)
+end
+
+-- Removes every occurrence of the URI, matching the rest of the file: no call
+-- site here sends a snapshot_id.
+function Util.do_remove_from_playlist(playlist_id, track_id)
+    if not (playlist_id and track_id) then return false end
+    local token = get_token()
+    if not token then return false end
+    local body = json.encode({tracks = {{uri = "spotify:track:" .. track_id}}})
+    local url = "https://api.spotify.com/v1/playlists/" .. playlist_id .. "/tracks"
+    local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null",
+        shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
+    if not (r and r:match("2..")) then return false end
+    disk_bust(P.mass .. "/playlist_tracks_" .. playlist_id .. ".json")
+    mem_bust("playlist_tracks_" .. playlist_id)
+    Util.pl_index_patch(playlist_id, track_id, false)
+    return true
 end
 
 local function api_get_artist_albums(artist_id)
@@ -2742,7 +2954,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         return entries
     end
     while true do
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, refresh=rebuild})
+        -- ctx_type/ctx_id/entries ride along so Shift+Return can hand the action
+        -- menu the list it was opened from -- that is what lets it offer Remove
+        -- from Playlist for the playlist you are actually browsing, and lets it
+        -- drop the row here once the removal succeeds.
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild})
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2887,7 +3103,11 @@ browse_album = function(album_id, mesg)
     -- Derived here when the caller has no album object to build it from, which
     -- is the case on a warm start.
     mesg = mesg or ((ad.name or "Album") .. album_suffix(ad))
-    Util.scope({view="album", album_id=album_id, album_name=ad.name or "Album"}, function()
+    -- Util.scope hands back whatever the body returns, but this call was not
+    -- returned -- so browse_album answered nil even on success, and callers that
+    -- test it ("if not ok then rofi_message('Failed to load album')") fired that
+    -- message every time you backed out of an album you had just opened fine.
+    return Util.scope({view="album", album_id=album_id, album_name=ad.name or "Album"}, function()
     local te = format_entries(ad.tracks, nil, nil, true)
     view_browse(te, ad.tracks, mesg, "album", "album", album_id)
     return true
@@ -2936,13 +3156,43 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- track, so Shift+Return on some other row came back as the wrong track.
     -- `or nil` keeps the field out of session.json when false, so older session
     -- files (which have no such field) restore their own track.
+    -- ctx_type/ctx_id are recorded so a warm start restores the menu with the
+    -- list context it had. all_items/cidx cannot be restored, so a replayed menu
+    -- can still remove the track, it just cannot prune a row that isn't there.
     return Util.scope({view="action", track_id=item.id, track_name=item.name or "",
                   track_artists=item.artists or {}, track_album=item.album or {},
                   track_duration_ms=item.duration_ms or 0,
+                  ctx_type=ctx_type, ctx_id=ctx_id,
                   from_current=(item.id ~= nil and item.id == current_id) or nil}, function()
+    -- Both the mesg and the volatile Play/Pause/Seek/Like labels are derived
+    -- from the now-playing globals, and nothing on the way in refreshed them --
+    -- so reopening this menu after the track changed (or was paused) elsewhere
+    -- showed whatever state the process last happened to observe.
+    Util.sync_now()
     local is_liked = item.id and liked[item.id]
-    local in_pl    = ctx_type == "playlist" and ctx_id
     resolve_lyrics_state(item)
+
+    -- Every playlist of yours this track sits in, so removal is offered wherever
+    -- you found the track -- Liked Tracks, a search, Recently Played -- not only
+    -- while browsing the playlist itself. The playlist you navigated from goes
+    -- first so it stays the obvious default. Editorial playlists are excluded:
+    -- Spotify refuses writes to them, so listing them would only ever fail.
+    local rm_targets = {}
+    local seen_pl = {}
+    local pidx = item.id and Util.pl_index() or nil
+    local owned = (type(pidx) == "table" and pidx.owned) or {}
+    if ctx_type == "playlist" and ctx_id and owned[ctx_id] then
+        rm_targets[1] = {id = ctx_id, name = owned[ctx_id], from_ctx = true}
+        seen_pl[ctx_id] = true
+    end
+    if type(pidx) == "table" and type(pidx.tracks) == "table" and item.id then
+        for _, pid in ipairs(pidx.tracks[item.id] or {}) do
+            if owned[pid] and not seen_pl[pid] then
+                seen_pl[pid] = true
+                rm_targets[#rm_targets+1] = {id = pid, name = owned[pid]}
+            end
+        end
+    end
 
     local actions = {"Play"}
     local seek_idx = #actions + 1
@@ -2953,7 +3203,11 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     actions[#actions+1] = "Go to Album"
     actions[#actions+1] = "Go to Artist"
     actions[#actions+1] = "Add to Playlist"
-    if in_pl then actions[#actions+1] = "Remove from Playlist" end
+    -- Always present, dimmed by rebuild_actions when the track is in none of
+    -- your playlists -- same treatment as Seek on a track that is not playing.
+    -- A row that appears and disappears also shifts every index below it.
+    local rm_idx = #actions + 1
+    actions[rm_idx] = "Remove from Playlist"
     local lyrics_idx = #actions + 1
     actions[lyrics_idx] = "Lyrics"
     actions[#actions+1] = "Copy URL"
@@ -2972,6 +3226,8 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         actions[1]          = playing_this and (is_playing and "Pause" or "Resume") or "Play"
         actions[seek_idx]   = playing_this and "Seek" or Util.markup(DIM .. 'Seek</span>')
         actions[like_idx]   = is_liked and "Unlike" or "Like"
+        actions[rm_idx]     = #rm_targets > 0 and "Remove from Playlist"
+                              or Util.markup(DIM .. 'Remove from Playlist</span>')
         actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics"
                               or Util.markup(DIM .. 'Lyrics</span>')
         return actions
@@ -2993,7 +3249,8 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         local action_theme = tmp_theme
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=function() return track_mesg(item) end, sel=pre_sel,
-             custom=false, theme=action_theme, markup=true, current=item, refresh=rebuild_actions})
+             custom=false, theme=action_theme, markup=true, current=item, refresh=rebuild_actions,
+             ctx_type=ctx_type, ctx_id=ctx_id, items=all_items, cidx=cidx, entries=entries})
         if not sel then
             Util.back_pressed = false
             if jump_to_track_pending then
@@ -3005,34 +3262,43 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         end
 
+        -- rebuild_actions hands rofi pango-wrapped labels for the dimmed Seek and
+        -- Lyrics rows, and rofi echoes back exactly what it was given -- so the
+        -- raw string is "<span color=...>Lyrics</span>", which matched no branch
+        -- below and made a dimmed row silently redraw the menu. Normalise once
+        -- and dispatch on that, the way the cursor-memory lookup above already
+        -- does. A dimmed Lyrics now reaches view_lyrics, which says "No lyrics
+        -- found" instead of doing nothing at all.
+        local key = Util.strip_markup(sel)
+
         if sel then
-            for i, a in ipairs(actions) do if Util.strip_markup(a) == Util.strip_markup(sel) then pre_sel = i - 1; break end end
+            for i, a in ipairs(actions) do if Util.strip_markup(a) == key then pre_sel = i - 1; break end end
             Util.pos_put(act_key, sel)
         end
 
-        if sel == "Resume" then
+        if key == "Resume" then
             os.execute("playerctl play 2>/dev/null")
             is_playing = true
-        elseif sel == "Play" then
+        elseif key == "Play" then
             do_play(item, ctx_type, ctx_id, all_items, cidx)
             current_track = item
             current_id = item.id
             is_playing = true
-        elseif sel == "Pause" then
+        elseif key == "Pause" then
             os.execute("playerctl pause 2>/dev/null")
             is_playing = false
-        elseif sel == "Add to Queue" then do_add_queue(item.id)
-        elseif sel == "Like" or sel == "Unlike" then
-            if do_like(item, sel == "Unlike") then
+        elseif key == "Add to Queue" then do_add_queue(item.id)
+        elseif key == "Like" or key == "Unlike" then
+            if do_like(item, key == "Unlike") then
                 is_liked = not is_liked
                 if not is_liked then if tmp_theme then os.remove(tmp_theme) end; return true end
             end
-        elseif sel == "Go to Album" then
+        elseif key == "Go to Album" then
             local album = item.album
             if album and album.id and album_action_menu(album) then
                 browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
             end
-        elseif sel == "Go to Artist" then
+        elseif key == "Go to Artist" then
             local arts = item.artists or {}
             if #arts <= 1 then
                 if #arts == 1 then view_artist(arts[1]) end
@@ -3052,33 +3318,54 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                     end
                 end
             end
-        elseif sel == "Add to Playlist" then view_add_pl(item.id, item.name)
-        elseif sel == "Remove from Playlist" then
-            local token = get_token()
-            if token then
-                local body = json.encode({tracks={{uri="spotify:track:" .. item.id}}})
-                local url = "https://api.spotify.com/v1/playlists/" .. ctx_id .. "/tracks"
-                local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X DELETE %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(url), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
-                if r and r:match("2..") then
-                    disk_bust(P.mass .. "/playlist_tracks_" .. ctx_id .. ".json"); mem_bust("playlist_tracks_" .. ctx_id)
-                    if entries and cidx then
+        elseif key == "Add to Playlist" then view_add_pl(item.id, item.name)
+        elseif key == "Remove from Playlist" then
+            local target = rm_targets[1]
+            if #rm_targets == 0 then
+                rofi_message("Not in any of your playlists")
+            elseif #rm_targets > 1 then
+                local names = {}
+                for i, t in ipairs(rm_targets) do names[i] = t.name end
+                local pick = rofi_dmenu(names, {prompt="Remove from", mesg=(item.name or "") .. SEP .. #rm_targets .. " playlists",
+                    custom=false, by_index=true, use_menu=true, theme=THEME_SUB, markup=true, pos_key="remove-from-playlist"})
+                target = pick and rm_targets[pick] or nil
+            end
+            if target then
+                if Util.do_remove_from_playlist(target.id, item.id) then
+                    -- Drop the row only when the list underneath IS this playlist;
+                    -- removing from some other playlist leaves this view correct.
+                    if target.from_ctx and entries and all_items and cidx then
                         table.remove(entries, cidx)
                         table.remove(all_items, cidx)
                         bust_format_cache()
                     end
-                    if tmp_theme then os.remove(tmp_theme) end
-                    return
+                    -- Keep the menu's own candidate list honest, so a second
+                    -- removal offers only the playlists still holding the track.
+                    for i = #rm_targets, 1, -1 do
+                        if rm_targets[i].id == target.id then table.remove(rm_targets, i) end
+                    end
+                    rofi_message("Removed from " .. (target.name or "playlist"))
+                    if target.from_ctx then
+                        if tmp_theme then os.remove(tmp_theme) end
+                        return
+                    end
+                    -- rebuild_actions dims the row once rm_targets empties. The
+                    -- entry is never spliced out: seek_idx/like_idx/lyrics_idx
+                    -- are fixed positions into this array, and removing an
+                    -- element would slide the labels into the wrong slots.
+                else
+                    rofi_message("Failed to remove from " .. (target.name or "playlist"))
                 end
             end
-        elseif sel == "Lyrics" then view_lyrics(item)
-        elseif sel == "Copy URL" then
+        elseif key == "Lyrics" then view_lyrics(item)
+        elseif key == "Copy URL" then
             copy_spotify_url("track", item.id)
             rofi_message("Copied URL")
-        elseif sel == "More Like This" then
+        elseif key == "More Like This" then
             Util.open_recommendations(item.id, item.name)
-        elseif sel == "Albumart" then view_art(item)
-        elseif sel == "Track Details" then view_track_details(item)
-        elseif sel == "Seek" then
+        elseif key == "Albumart" then view_art(item)
+        elseif key == "Track Details" then view_track_details(item)
+        elseif key == "Seek" then
             if item.id == current_id then view_seek(item)
             else rofi_message("Not the current track") end
         end
@@ -3408,15 +3695,23 @@ view_lyrics = function(item)
         rofi_message("No lyrics found"); return
     end
 
-local mesg_base = track_mesg(item)
+    local mesg_base = track_mesg(item)
     if timestamps then
         local pre_sel = 0
         if current_id == item.id then
             local pos = get_playerctl_position()
             for i, ts in ipairs(timestamps) do
                 if ts <= pos then pre_sel = i - 1 end
-end
-    while true do
+            end
+        end
+        -- The synced viewer runs for ANY track that has timestamps. It used to
+        -- sit inside the `current_id == item.id` test above, because the `end`
+        -- closing this for-loop was missing -- which silently reparented the
+        -- whole block and left `if timestamps` with no else at all. A track with
+        -- plain (unsynced) lyrics therefore fell through both branches and
+        -- view_lyrics returned without opening a window, which is what made
+        -- "Lyrics" in the action menu look like it did nothing.
+        while true do
             ::lr_next::
             local sel_line = rofi_dmenu(display_lines,
                 {prompt="Lyrics", mesg=mesg_base .. "\n> Search or select a line to jump to <", custom=false,
@@ -3489,7 +3784,6 @@ end
             break
         end
     end
-end
 end)
 end
 
@@ -3522,7 +3816,7 @@ view_add_pl = function(track_id, track_name)
         break
     end
 
-    local target_id
+    local target_id, target_name
     if ids[idx] == "__create__" then
         local pl_name = rofi_input("New Playlist", "", P.THEME_SEARCH)
         if pl_name == "" then return end
@@ -3531,15 +3825,22 @@ view_add_pl = function(track_id, track_name)
         local cr = safe_decode(r)
         if not cr or not cr.id then rofi_message("Failed to create playlist"); return end
         target_id = cr.id
+        target_name = cr.name or pl_name
         bust_my_playlists()
     else
         target_id = ids[idx]
+        target_name = names[idx]
     end
 
     local body = json.encode({uris={"spotify:track:" .. track_id}})
     local add_url = "https://api.spotify.com/v1/playlists/" .. target_id .. "/tracks"
     local r = shell(string.format("curl -s --max-time 5 -w '%%{http_code}' -X POST %s -H %s -H 'Content-Type: application/json' -d %s -o /dev/null", shell_quote(add_url), shell_quote("Authorization: Bearer " .. token), shell_quote(body)))
-    if r and r:match("2..") then disk_bust(P.mass .. "/playlist_tracks_" .. target_id .. ".json"); mem_bust("playlist_tracks_" .. target_id) end
+    if r and r:match("2..") then
+        disk_bust(P.mass .. "/playlist_tracks_" .. target_id .. ".json"); mem_bust("playlist_tracks_" .. target_id)
+        -- Patch the membership index now rather than waiting for a rebuild, so
+        -- Remove from Playlist offers this playlist immediately.
+        Util.pl_index_patch(target_id, track_id, true, target_name)
+    end
     rofi_message(r and r:match("2..") and "Added to playlist" or "Failed to add track")
 end)
 end
@@ -3833,6 +4134,10 @@ local function view_playback()
         end
     end
     Util.scope({view="playback"}, function()
+    -- Rebuilding rows from live state only helps if that state was refreshed on
+    -- the way in; without this, reopening Playback showed the transport as it
+    -- stood when this process last looked.
+    Util.sync_now()
     -- Every row here reflects live transport state, so it is rebuilt on each
     -- draw -- including a redraw from inside rofi_dmenu, where this loop does
     -- not run (Alt+r/Alt+s toggle shuffle and repeat from this very menu).
@@ -4042,11 +4347,15 @@ local function reg(view, label, open) VIEWS[view] = {label = label, open = open}
 -- view_actions. Any other entry restores the exact track it names.
 reg("action", "Track", function(s, prefer_current)
     if not s.track_id then return end
+    -- The list this menu sat on top of is gone after a restart, so all_items and
+    -- cidx stay nil; ctx_type/ctx_id survive in the stack entry and are enough
+    -- for Remove from Playlist to still know which playlist you came from.
     if current_track and (current_track.id == s.track_id or (prefer_current and s.from_current)) then
-        view_actions(current_track)
+        view_actions(current_track, s.ctx_type, s.ctx_id)
     else
         view_actions({id=s.track_id, name=s.track_name or "", artists=s.track_artists or {},
-            album=s.track_album or {}, duration_ms=s.track_duration_ms or 0})
+            album=s.track_album or {}, duration_ms=s.track_duration_ms or 0},
+            s.ctx_type, s.ctx_id)
     end
 end)
 reg("lyrics", "Lyrics", function(s, prefer_current)
@@ -4118,13 +4427,15 @@ reg("playback",         "Playback",         function() view_playback() end)
 reg("system",           "System",           function() view_system() end)
 
 local function replay_session(prefer_current)
-    local s = session_peek()
-    if not s then return end
-
     -- Hoisted out of the loop: this used to run per stack entry, so restoring a
     -- deep trail could fan out into several ~300ms me/player round trips when
-    -- one refresh covers the whole replay.
-    if not Util.fast_now_track() then get_playback() end
+    -- one refresh covers the whole replay. It also has to sit ABOVE the
+    -- session_peek guard -- an empty stack returned early and left the caller
+    -- with no playback state at all, which is what main() then drew.
+    Util.sync_now()
+
+    local s = session_peek()
+    if not s then return end
 
     while s do
         session_pop()
@@ -4333,6 +4644,12 @@ local function init_library(cold_start)
         os.execute("notify-send -t 3000 --app-name=spotirofi 'spotirofi' 'Caching Complete' &")
     end
     populate_liked_ids()
+    -- Warm the playlist membership index out of band. Nothing waits on it: the
+    -- action menu serves the last known index and picks up the new one next run.
+    if not disk_get(P.pl_index, CACHE_TTL_SHORT) then
+        os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
+            .. " --prefetch-plindex > /dev/null 2>&1 &")
+    end
     Util.trail_load()
     session_load()
     replay_session(true)
@@ -4350,7 +4667,13 @@ local function main()
     local main_key = "main||"
     while true do
         flush_liked_cache()
-        if not first_loop then get_playback() end
+        -- Refresh on the first loop too. Skipping it meant a fresh launch drew
+        -- the main menu with current_track still nil, so the mesg had no track
+        -- and `no_status = not current_track` suppressed the shuffle/repeat
+        -- icons as well -- they only appeared once you backed out of a submenu.
+        -- sync_now prefers the daemon's cache, so the cold path costs two file
+        -- reads rather than the me/player call the skip was avoiding.
+        Util.sync_now()
         local is_first = first_loop
         first_loop = false
         if is_first then
@@ -4474,71 +4797,14 @@ local function daemon_mode()
     local last_title = nil
     local last_track_id = nil
 
-    local function notify_icons(track_id)
-        if not track_id then return "" end
-        local icons = {}
-        local ids = safe_decode(read_file(P.liked_ids))
-        if ids and type(ids) == "table" then
-            for _, id in ipairs(ids) do
-                if id == track_id then icons[#icons+1] = "\u{f05d}"; break end
-            end
-        end
-        local rt = safe_decode(read_file(P.now_track))
-        if rt and rt.item and rt.item.id == track_id and rt.item.explicit then
-            icons[#icons+1] = "\u{f071}"
-        end
-        if Util.has_lyrics(track_id) then
-            if Util.has_synced_lyrics(track_id) then
-                icons[#icons+1] = "\u{F0188}"
-            else
-                icons[#icons+1] = "\u{F0189}"
-            end
-        end
-        local res = ""
-        for _, ic in ipairs(icons) do res = res .. " " .. ic end
-        return res
-    end
-
-    local function art_cached_path(art_url)
-        if not art_url or #art_url == 0 then return "" end
-        local u = Util.art_url(art_url, "1e02")
-        local hash = u:match("/image/([%w]+)") or u:match("/([%w_%-]+)$")
-        if not hash then return "" end
-        local p = P.art .. "/" .. hash .. ".jpg"
-        if not Util._art_valid_file(p) then return "" end
-        return p
-    end
-
-    local function daemon_notify(title, artist, art_url, track_id)
-        if not title or #trim(title) == 0 then return end
-        if track_id and #track_id > 0 then
-            local prev_id = read_file(NOTIFY_FILE)
-            if prev_id and trim(prev_id) == track_id then return end
-            Util.secure_write(NOTIFY_FILE, track_id)
-        end
-        local art_path = art_cached_path(art_url)
-        if art_path == "" and art_url and #art_url > 0 then
-            -- Not cached yet (first time this track has been seen). A single
-            -- short attempt here usually wins the race and lets this very
-            -- notification carry art; daemon_notify runs inline in the
-            -- playerctl --follow loop, so it must never risk the full
-            -- 3-attempt/10s-each retry chain blocking subsequent MPRIS events.
-            art_path = ensure_art(Util.art_url(art_url, "1e02"), nil, {attempts = 1, connect_timeout = 2, timeout = 3}) or ""
-            if art_path == "" then
-                os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
-                    .. " --prefetch-art " .. shell_quote(Util.art_url(art_url, "1e02"))
-                    .. " > /dev/null 2>&1 &")
-            end
-        end
-        local icon = #art_path > 0 and ("--icon=" .. shell_quote(art_path)) or ""
-        local body = Util.pango_escape(artist or "")
-        local suffix = notify_icons(track_id):gsub("^%s+", "")
-        if suffix ~= "" then
-            body = body .. (body ~= "" and "\n" or "") .. suffix
-        end
-        os.execute("notify-send --app-name=spotirofi " .. icon
-            .. " " .. shell_quote(title)
-            .. " " .. shell_quote(body) .. " &")
+    -- Dedupe lives here, ahead of the spawn, so a burst of MPRIS snaps for one
+    -- track starts exactly one notify helper.
+    local function notify_seen(track_id)
+        if not (track_id and #track_id > 0) then return false end
+        local prev_id = read_file(NOTIFY_FILE)
+        if prev_id and trim(prev_id) == track_id then return true end
+        Util.secure_write(NOTIFY_FILE, track_id)
+        return false
     end
 
     local FIELD_SEP = "\x1f"
@@ -4561,22 +4827,24 @@ local function daemon_mode()
             last_track_id = track_id
         end
         if title and title ~= "" then last_title = title end
-        if track_changed and not disk_get(P.lyrics .. "/lyrics_" .. track_id .. ".json", P.ttl_lyrics)
-           and disk_get(P.lyrics .. "/nolyr_" .. track_id .. ".json", P.ttl_lyrics) == nil then
+        -- One helper instead of three spawns plus an inline notify. The old
+        -- order was self-defeating: --prefetch-track and --prefetch-lyrics were
+        -- launched here and the notification was composed two statements later,
+        -- reading the very caches those processes had not written yet -- so a
+        -- track's first play always lost its explicit and lyrics glyphs, and the
+        -- dedupe above meant they were never filled in afterwards. The helper
+        -- fetches first and notifies last, off this loop so nothing blocks the
+        -- playerctl --follow stream.
+        if title and #trim(title) > 0 and not notify_seen(track_id) then
             os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
-                .. " --prefetch-lyrics " .. shell_quote(track_id)
+                .. " --notify " .. shell_quote(track_id or "")
                 .. " " .. shell_quote(title)
                 .. " " .. shell_quote(artist or "")
                 .. " " .. shell_quote(album or "")
                 .. " " .. shell_quote(duration and tostring(math.floor(duration)) or "")
+                .. " " .. shell_quote(art_url or "")
                 .. " > /dev/null 2>&1 &")
         end
-        if track_changed then
-            os.execute("nohup lua " .. shell_quote(P.dir .. "/spotirofi.lua")
-                .. " --prefetch-track " .. shell_quote(track_id)
-                .. " > /dev/null 2>&1 &")
-        end
-        daemon_notify(title, artist, art_url, track_id)
     end
 
     local function daemon_loop()
@@ -4638,33 +4906,98 @@ function Util.recent_watch_mode()
     end
 end
 
+-- Shared by --prefetch-lyrics and --notify so there is one definition of "look
+-- these lyrics up and cache the answer", including the negative one.
+function Util.fetch_and_cache_lyrics(id, title, artist, album, duration)
+    if not (id and title and artist) then return end
+    if not id:match("^[A-Za-z0-9]+$") then return end
+    local disk = P.lyrics .. "/lyrics_" .. id .. ".json"
+    if disk_get(disk, P.ttl_lyrics) then return end
+    if disk_get(P.lyrics .. "/nolyr_" .. id .. ".json", P.ttl_lyrics) ~= nil then return end
+    local result, definitive = api_get_lyrics(title, artist, album, duration)
+    if result then
+        disk_set(disk, result)
+    elseif definitive then
+        disk_set(P.lyrics .. "/nolyr_" .. id .. ".json", true)
+    end
+end
+
 local function run_prefetch_lyrics()
     Util.detached = true
     local id = arg[2]
     if not (id and arg[3] and arg[4]) then os.exit(2) end
-    if not id:match("^[A-Za-z0-9]+$") then os.exit(0) end
-    local disk = P.lyrics .. "/lyrics_" .. id .. ".json"
-    if not disk_get(disk, P.ttl_lyrics) then
-        local album = arg[5] ~= "" and arg[5] or nil
-        local duration = arg[6] and tonumber(arg[6]) or nil
-        local result, definitive = api_get_lyrics(arg[3], arg[4], album, duration)
-        if result then
-            disk_set(disk, result)
-        elseif definitive then
-            disk_set(P.lyrics .. "/nolyr_" .. id .. ".json", true)
-        end
-    end
+    Util.fetch_and_cache_lyrics(id, arg[3], arg[4],
+        arg[5] ~= "" and arg[5] or nil,
+        arg[6] and tonumber(arg[6]) or nil)
     os.exit(0)
 end
 
+-- Fetch everything the notification needs, THEN send it. Ordering is the whole
+-- point: the track object supplies `explicit` and the lyrics lookup decides
+-- which lyrics glyph applies, and neither is knowable at the moment the daemon
+-- sees the MPRIS event.
+function Util.run_notify()
+    Util.detached = true
+    local id       = arg[2] ~= "" and arg[2] or nil
+    local title    = arg[3]
+    local artist   = arg[4] ~= "" and arg[4] or nil
+    local album    = arg[5] ~= "" and arg[5] or nil
+    local duration = arg[6] and tonumber(arg[6]) or nil
+    local art_url  = arg[7] ~= "" and arg[7] or nil
+    if not title or #trim(title) == 0 then os.exit(0) end
+
+    -- Off the follow loop now, so the full retry budget is affordable.
+    local art_path = ""
+    if art_url then art_path = ensure_art(Util.art_url(art_url, "1e02")) or "" end
+
+    local track
+    if id and id:match("^[A-Za-z0-9]+$") then
+        track = api_get("tracks/" .. id)
+        if track then
+            -- `playing` is written here as well; run_prefetch_track omitted it
+            -- while get_playback includes it, which left fast_now_track reading
+            -- transport state from the daemon's one-shot snapshot instead.
+            write_file(P.now_track, json.encode({
+                item = track,
+                playing = trim(shell("playerctl status 2>/dev/null")) == "Playing",
+            }))
+        end
+        Util.fetch_and_cache_lyrics(id, title, artist or "", album, duration)
+    end
+
+    local icons = Util.status_icons({id = id, explicit = track and track.explicit})
+    local body = Util.pango_escape(artist or "")
+    icons = icons:gsub("^%s+", "")
+    if icons ~= "" then body = body .. (body ~= "" and "\n" or "") .. icons end
+
+    os.execute("notify-send --app-name=spotirofi "
+        .. (#art_path > 0 and ("--icon=" .. shell_quote(art_path)) or "")
+        .. " " .. shell_quote(title)
+        .. " " .. shell_quote(body))
+    os.exit(0)
+end
+
+-- The daemon no longer spawns this (--notify covers that path), but it stays as
+-- a standalone way to refresh now_track.json. It has to write `playing` like
+-- every other writer of this file, or fast_now_track falls back to the daemon's
+-- one-shot snapshot for transport state.
 local function run_prefetch_track()
     Util.detached = true
     local id = arg[2]
     if not id or not id:match("^[A-Za-z0-9]+$") then os.exit(0) end
     local track = api_get("tracks/" .. id)
     if track then
-        write_file(P.now_track, json.encode({ item = track }))
+        write_file(P.now_track, json.encode({
+            item = track,
+            playing = trim(shell("playerctl status 2>/dev/null")) == "Playing",
+        }))
     end
+    os.exit(0)
+end
+
+function Util.run_prefetch_plindex()
+    Util.detached = true
+    Util.build_pl_index()
     os.exit(0)
 end
 
@@ -5161,6 +5494,10 @@ elseif arg and arg[1] == "--prefetch-track" then
     run_prefetch_track()
 elseif arg and arg[1] == "--prefetch-art" then
     run_prefetch_art()
+elseif arg and arg[1] == "--prefetch-plindex" then
+    Util.run_prefetch_plindex()
+elseif arg and arg[1] == "--notify" then
+    Util.run_notify()
 elseif arg and arg[1] == "--bsmon" then
     Util.bsmon_mode()
 elseif arg and arg[1] then
