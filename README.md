@@ -1,5 +1,5 @@
 <p align="center"><picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/b9685bb8-e951-492a-bdbc-75367c8a6045">
+  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/5b4d8a87-b8d6-4f07-941c-a3361f5ba01f">
   <img src="image-light.png" alt="">
 </picture></p>
 
