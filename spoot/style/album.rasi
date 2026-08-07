@@ -12,7 +12,7 @@ configuration {
 }
 
 window {
-    width: 900px;
+    width: 1000px;
     children: [ wrap, listview-split ];
 }
 

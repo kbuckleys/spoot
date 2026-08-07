@@ -697,6 +697,7 @@ end
 
 local function rofi_dmenu(entries, opts)
     Util.back_pressed = false
+    Util.alt_pressed = false
     if main_pending or liked_pending or recent_pending or Util.trail_jump_pending then return nil end
     opts = opts or {}
     local prompt   = opts.prompt or ""
@@ -759,6 +760,7 @@ local function rofi_dmenu(entries, opts)
     -- to propagate all the way up.
     local function reenter(res)
         Util.back_pressed = false
+        Util.alt_pressed = false
         if main_pending or liked_pending or recent_pending or Util.trail_jump_pending
            or jump_to_track_pending then return false end
         local row = row_of(res)
@@ -899,6 +901,24 @@ local function rofi_dmenu(entries, opts)
     end
     if exit_code == EXIT.track then jump_to_track_pending = true; return nil end
     if exit_code == EXIT.alt_action then
+        -- Menus that opt in handle Shift+Return themselves: hand the highlighted
+        -- row back exactly as an ordinary accept would and flag which key ended
+        -- the menu, the way Util.back_pressed already reports Backspace. A flag
+        -- rather than a callback because the caller's handling can need `goto`
+        -- or an early `return` inside its own loop (Saved Albums drops the row
+        -- after Remove from Library), which a callback running here cannot do.
+        -- The caller MUST read Util.alt_pressed immediately: the next rofi_dmenu,
+        -- nested or not, clears it.
+        if opts.alt_select then
+            local row = row_of(result)
+            if row then
+                capture_pos(result)
+                Util.alt_pressed = true
+                return by_index and (row + 1) or result
+            end
+            if reenter(result) then goto menu_redo end
+            return nil
+        end
         -- The sibling hotkey branches below all refresh before opening a view
         -- that renders track state; this one did not, so an action menu reached
         -- by Shift+Return could open on stale Play/Pause/Like labels.
@@ -1947,7 +1967,7 @@ local function display_artist(item)
 end
 
 local function display_playlist(item)
-    local prefix = (item.owner and item.owner.id == "spotify") and "\u{f1bc} " or ""
+    local prefix = (item.owner and item.owner.id == "spotify") and "\u{f1bc}  " or ""
     return prefix .. (item.name or "Unknown")
 end
 
@@ -2353,8 +2373,15 @@ local function album_action_menu(album)
         for i, a in ipairs(acts) do if a == saved then pre_sel = i - 1; break end end
     end
     local mesg = (album.name or "Album") .. album_suffix(album)
+    -- Claimed only for the Go to Artist row, which offers the artist's hub on
+    -- Shift+Return and their discography on Return. Every other row treats the
+    -- two alike -- the default handler was a silent no-op here anyway, since
+    -- this menu passes neither `current` nor `items`.
     local action = rofi_dmenu(acts,
-        {prompt=album.name or "Album", mesg=mesg, custom=false, theme=THEME_SUB, no_status=true, sel=pre_sel, markup=true})
+        {prompt=album.name or "Album", mesg=mesg, custom=false, theme=THEME_SUB, no_status=true, sel=pre_sel, markup=true,
+         alt_select=true})
+    local alt = Util.alt_pressed
+    Util.alt_pressed = false
     if action then
         Util.pos_put(al_ac_key, action)
     end
@@ -2365,7 +2392,7 @@ local function album_action_menu(album)
         rofi_message("Copied URL")
     elseif action == "Go to Artist" then
         local ar = (album.artists or {})[1]
-        if ar then view_artist({id=ar.id, name=ar.name or ""}) end
+        if ar then Util.open_artist({id=ar.id, name=ar.name or ""}, alt) end
     elseif action == "Albumart" then
         view_art({album=album, name=album.name, artists=album.artists})
     elseif action == "Album Details" then
@@ -2958,7 +2985,15 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         -- menu the list it was opened from -- that is what lets it offer Remove
         -- from Playlist for the playlist you are actually browsing, and lets it
         -- drop the row here once the removal succeeds.
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild})
+        -- Album, artist and playlist rows open their content on Return and their
+        -- action menu on Shift+Return, so those lists claim the key (alt_select)
+        -- and dispatch on it below. An album's TRACK list is is_album_list too,
+        -- but is_track wins the dispatch there, so it keeps the default handler.
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
+            alt_select=((is_album_list and not is_track) or is_artist_list or is_playlist_list or is_search_all) or nil})
+        -- Read before anything else: the next rofi_dmenu call clears the flag.
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -2992,7 +3027,16 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             pre_sel = idx - 1
         elseif is_search_all then
             local st = item._stype
-            if st == "tracks" then
+            if st == "tracks" and alt then
+                -- This list claims Shift+Return for its album and playlist rows,
+                -- so a track row has to reproduce what rofi_dmenu's default
+                -- handler would have done for it.
+                if not Util.fast_now_track() then last_playback = 0; get_playback() end
+                view_actions(item, ctx_type, ctx_id, items, idx, entries)
+                if jump_to_track_pending then return end
+                rebuild()
+                pre_sel = idx - 1
+            elseif st == "tracks" then
                 local tctx, tcidx = nil, nil
                 for j, it in ipairs(items) do
                     if it._stype == "tracks" then
@@ -3019,15 +3063,16 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 rebuild()
                 pre_sel = idx - 1
             elseif st == "albums" then
-                if album_action_menu(item) then
+                if not alt or album_action_menu(item) then
                     local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
                     if not ok then rofi_message("Failed to load album") end
                     if jump_to_track_pending then return end
                 end
             elseif st == "artists" then
-                view_artist(item)
+                Util.open_artist(item, alt)
+                if jump_to_track_pending then return end
             elseif st == "playlists" then
-                if playlist_action_menu(item) then
+                if not alt or playlist_action_menu(item) then
                     Util.open_playlist(item)
                     if jump_to_track_pending then return end
                 end
@@ -3037,13 +3082,20 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 pre_sel = idx - 1
             end
         elseif is_album_list then
-            local do_open = false
-            if ctx == "search-album" then
-                do_open = album_action_menu(item)
-            elseif ctx == "album-list" then
+            -- Return opens the album; only Shift+Return detours through an
+            -- action menu. Saved Albums keeps its own list (it has Remove from
+            -- Library, whose success path prunes the row and restarts the loop
+            -- below -- which is why it stays inline here rather than moving into
+            -- the shared album_action_menu).
+            local do_open = not alt
+            if alt and ctx == "album-list" then
                 local acts = {"Open Album", "Remove from Library", "Albumart", "Copy URL", "Album Details"}
                 if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
-                local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true, pos_key="album-list-ac:" .. (item.id or "")})
+                -- act_alt, not alt: this list's own Shift+Return is already bound
+                -- to the `alt` above, which is what opened this menu.
+                local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), custom=false, theme=THEME_SUB, no_status=true, markup=true, pos_key="album-list-ac:" .. (item.id or ""), alt_select=true})
+                local act_alt = Util.alt_pressed
+                Util.alt_pressed = false
                 if action == "Open Album" then
                     do_open = true
                 elseif action == "Remove from Library" then
@@ -3069,7 +3121,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 elseif action == "Go to Artist" then
                     local ar = (item.artists or {})[1]
                     if ar then
-                        view_artist({id=ar.id, name=ar.name or ""})
+                        Util.open_artist({id=ar.id, name=ar.name or ""}, act_alt)
                         if jump_to_track_pending then return end
                     end
                 elseif action == "Albumart" then
@@ -3077,6 +3129,8 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 elseif action == "Album Details" then
                     view_album_details(item)
                 end
+            elseif alt then
+                do_open = album_action_menu(item)
             end
             if do_open then
                 local ok = browse_album(item.id, (item.name or "Unknown") .. album_suffix(item))
@@ -3085,12 +3139,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             end
             pre_sel = idx - 1
         elseif is_artist_list then
-            view_artist(item)
+            Util.open_artist(item, alt)
             entries[idx] = ctx == "artist" and string.format("%2d. %s", idx, display_artist(item)) or display_artist(item)
             pre_sel = idx - 1
         elseif is_playlist_list then
-            local do_open = playlist_action_menu(item)
-            if do_open then Util.open_playlist(item) end
+            if not alt or playlist_action_menu(item) then Util.open_playlist(item) end
             pre_sel = idx - 1
         end end
         ::br_next::
@@ -3234,6 +3287,34 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     end
     rebuild_actions()
 
+    -- Shared by the Return and the Shift+Return path so the multi-artist picker
+    -- is written once. Returns true when the caller must unwind (a jump-to-track
+    -- is in flight); the caller owns tmp_theme, so cleanup stays out here.
+    local function go_to_artist(want_hub)
+        local arts = item.artists or {}
+        if #arts <= 1 then
+            if #arts == 1 then Util.open_artist(arts[1], want_hub) end
+            return jump_to_track_pending
+        end
+        local ae = {}
+        for i, a in ipairs(arts) do ae[i] = display_artist(a) end
+        local pick_key = "artist-pick:" .. (item.id or "")
+        while true do
+            local aidx = rofi_dmenu(ae, {prompt="Artists", mesg=(item.name or "") .. SEP .. #arts .. " artists",
+                custom=false, by_index=true, use_menu=true, theme=THEME_SUB, pos_key=pick_key,
+                markup=true, alt_select=true})
+            -- Shift+Return on the picker reaches the hub even when plain Return
+            -- (want_hub false) is what opened it.
+            local pick_alt = Util.alt_pressed
+            Util.alt_pressed = false
+            if not aidx then return false end
+            if aidx >= 1 and aidx <= #arts then
+                Util.open_artist(arts[aidx], want_hub or pick_alt)
+                if jump_to_track_pending then return true end
+            end
+        end
+    end
+
     local act_key = "action:" .. (item.id or "")
     local pre_sel = 0
     local act_saved = Util.pos_get(act_key)
@@ -3247,10 +3328,16 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         local art_path = ensure_art(Util.art_url(art_url, "1e02")) or ""
         local tmp_theme = Util.write_art_theme("action", art_path)
         local action_theme = tmp_theme
+        -- Claimed so Shift+Return on "Go to Album" can offer the album's own
+        -- action menu (Return there opens the album outright). Every other row
+        -- reproduces the default below: a nested action menu for this track.
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=function() return track_mesg(item) end, sel=pre_sel,
              custom=false, theme=action_theme, markup=true, current=item, refresh=rebuild_actions,
-             ctx_type=ctx_type, ctx_id=ctx_id, items=all_items, cidx=cidx, entries=entries})
+             ctx_type=ctx_type, ctx_id=ctx_id, items=all_items, cidx=cidx, entries=entries,
+             alt_select=true})
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
         if not sel then
             Util.back_pressed = false
             if jump_to_track_pending then
@@ -3276,7 +3363,23 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             Util.pos_put(act_key, sel)
         end
 
-        if key == "Resume" then
+        if alt then
+            if key == "Go to Album" then
+                local album = item.album
+                if album and album.id and album_action_menu(album) then
+                    browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
+                end
+            elseif key == "Go to Artist" then
+                go_to_artist(true)
+            else
+                if not Util.fast_now_track() then last_playback = 0; get_playback() end
+                view_actions(item, ctx_type, ctx_id, all_items, cidx, entries)
+            end
+            if jump_to_track_pending then
+                if tmp_theme then os.remove(tmp_theme) end
+                return
+            end
+        elseif key == "Resume" then
             os.execute("playerctl play 2>/dev/null")
             is_playing = true
         elseif key == "Play" then
@@ -3295,28 +3398,13 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         elseif key == "Go to Album" then
             local album = item.album
-            if album and album.id and album_action_menu(album) then
+            if album and album.id then
                 browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
             end
         elseif key == "Go to Artist" then
-            local arts = item.artists or {}
-            if #arts <= 1 then
-                if #arts == 1 then view_artist(arts[1]) end
-            else
-                local ae = {}
-                for i, a in ipairs(arts) do ae[i] = display_artist(a) end
-                local pick_key = "artist-pick:" .. (item.id or "")
-                while true do
-                    local aidx = rofi_dmenu(ae, {prompt="Artists", mesg=(item.name or "") .. SEP .. #arts .. " artists", custom=false, by_index=true, use_menu=true, theme=THEME_SUB, pos_key=pick_key, markup=true})
-                    if not aidx then break end
-                    if aidx >= 1 and aidx <= #arts then
-                        view_artist(arts[aidx])
-                        if jump_to_track_pending then
-                            if tmp_theme then os.remove(tmp_theme) end
-                            return
-                        end
-                    end
-                end
+            if go_to_artist(false) then
+                if tmp_theme then os.remove(tmp_theme) end
+                return
             end
         elseif key == "Add to Playlist" then view_add_pl(item.id, item.name)
         elseif key == "Remove from Playlist" then
@@ -3589,17 +3677,31 @@ function Util.browse_artist_albums(artist_id, artist_name)
         while true do
             Util.album_thumbs(ae, items)
             local aidx = rofi_dmenu(ae, {prompt=artist_name or "", mesg=mesg, custom=false, by_index=true,
-                                         use_menu=true, no_status=true, markup=true, thumbs=true, pos_key=pk})
+                                         use_menu=true, no_status=true, markup=true, thumbs=true, pos_key=pk,
+                                         alt_select=true})
+            local alt = Util.alt_pressed
+            Util.alt_pressed = false
             if not aidx then return end
             if aidx >= 1 and aidx <= #items then
                 local al = items[aidx]
-                if album_action_menu(al) then
+                if not alt or album_action_menu(al) then
                     browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
                     if jump_to_track_pending then return end
                 end
             end
         end
     end)
+end
+
+-- One artist destination for every call site: Return lands on the discography,
+-- Shift+Return on the hub. Split out because eight call sites need the same
+-- choice, and the artist "action menu" (view_artist) is itself a scoped view --
+-- so the Return path has to bypass it rather than pass through it, which is why
+-- backing out of an artist's albums lands on the artist list, not the hub.
+function Util.open_artist(artist, want_hub)
+    if not artist or not artist.id then return end
+    if want_hub then view_artist(artist)
+    else Util.browse_artist_albums(artist.id, artist.name or "") end
 end
 
 function Util.browse_related_artists(artist_id, artist_name)
@@ -3609,10 +3711,13 @@ function Util.browse_related_artists(artist_id, artist_name)
         local pk = "related:" .. (artist_id or "")
         while true do
             local ridx = rofi_dmenu(ae, {prompt="Related to " .. (artist_name or ""), mesg=mesg, custom=false,
-                                         by_index=true, use_menu=true, no_status=true, markup=true, pos_key=pk})
+                                         by_index=true, use_menu=true, no_status=true, markup=true, pos_key=pk,
+                                         alt_select=true})
+            local alt = Util.alt_pressed
+            Util.alt_pressed = false
             if not ridx then return end
             if ridx >= 1 and ridx <= #artists then
-                view_artist(artists[ridx])
+                Util.open_artist(artists[ridx], alt)
                 if jump_to_track_pending then return end
             end
         end
@@ -3876,7 +3981,9 @@ local function view_playlists()
     for _, p in ipairs(pls) do entries[#entries+1] = display_playlist(p) end
 
     while true do
-        local idx = rofi_dmenu(entries, {prompt="Playlists", mesg="Playlists" .. SEP .. #pls, custom=false, by_index=true, use_menu=true, no_status=true, markup=true, pos_key="playlists||"})
+        local idx = rofi_dmenu(entries, {prompt="Playlists", mesg="Playlists" .. SEP .. #pls, custom=false, by_index=true, use_menu=true, no_status=true, markup=true, pos_key="playlists||", alt_select=true})
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
         if not idx then return end
         if idx == 1 then
             local pl_name = rofi_input("New Playlist", "", P.THEME_SEARCH)
@@ -3891,17 +3998,21 @@ local function view_playlists()
             end
         elseif idx >= 2 and idx - 1 <= #pls then
             local pl = pls[idx - 1]
-            Util.open_playlist_actions(pl, function(what)
-                if what == "rename" then
-                    table.sort(pls, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
-                    entries = {"Create New Playlist"}
-                    for _, p in ipairs(pls) do entries[#entries+1] = display_playlist(p) end
-                elseif what == "delete" then
-                    local del_idx = nil
-                    for i, p in ipairs(pls) do if p.id == pl.id then del_idx = i; break end end
-                    if del_idx then table.remove(entries, del_idx + 1); table.remove(pls, del_idx) end
-                end
-            end)
+            if alt then
+                Util.open_playlist_actions(pl, function(what)
+                    if what == "rename" then
+                        table.sort(pls, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
+                        entries = {"Create New Playlist"}
+                        for _, p in ipairs(pls) do entries[#entries+1] = display_playlist(p) end
+                    elseif what == "delete" then
+                        local del_idx = nil
+                        for i, p in ipairs(pls) do if p.id == pl.id then del_idx = i; break end end
+                        if del_idx then table.remove(entries, del_idx + 1); table.remove(pls, del_idx) end
+                    end
+                end)
+            else
+                Util.open_playlist(pl)
+            end
             if jump_to_track_pending then return end
         end
         ::pl_loop::
@@ -3997,12 +4108,14 @@ local function view_new_releases()
     local pre_sel = nil
     while true do
         Util.album_thumbs(entries, albums)
-        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true})
+        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true, alt_select=true})
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
         if not idx then return end
         if idx >= 1 and idx <= #albums then
             pre_sel = idx - 1
             local al = albums[idx]
-            if album_action_menu(al) then
+            if not alt or album_action_menu(al) then
                 browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
                 if jump_to_track_pending then return end
             end
@@ -4265,7 +4378,7 @@ local function view_system()
             rofi_message(table.concat({
                 row("jump to trail step", "tab"),
                 row("select", "return"),
-                row("view track's action menu", "shift + return"),
+                row("action menu (track / album / artist / playlist)", "shift + return"),
                 row("jump to current track's action menu", "alt + return"),
                 row("close", "escape"),
                 row("clear session trail", "delete"),
