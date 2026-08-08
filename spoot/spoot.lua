@@ -32,7 +32,22 @@ local P = {
         return (d:gsub("/+$", "")) .. "/"
     end)(),
     tmp       = os.getenv("TMPDIR") or "/tmp",
-    max       = 20,
+    -- Results per single-category search, fetched AND displayed. 50 is the hard
+    -- ceiling: verified against the live API, where limit=51 answers 400.
+    max       = 50,
+    -- Results per category in a COMBINED search -- the request limit and the
+    -- display cap, deliberately the same number so the two cannot drift. It was
+    -- briefly 10 against a display of 5 for "headroom", which protected against
+    -- nothing: nothing between api_search and format_search_results discards
+    -- items, and 8 varied queries returned zero nulls for strip_nulls to
+    -- compact away. It only cost bytes -- 23.5 KB per search at 5, 45.8 at 10,
+    -- against 229 KB if this used P.max for all four types.
+    max_all   = 5,
+    -- Top tracks are paged past the 50-per-request ceiling to here. A multiple
+    -- of 50 so the cap lands on a page boundary; the account reports 1578
+    -- available, so this needs a stop, and past ~100 a "top" list stops meaning
+    -- much. Two requests, and cached_fetch holds the result for an hour.
+    top_max   = 100,
     ttl       = 43200,
     ttl_lyrics = 7 * 24 * 3600,  -- 1 week
     spotify   = "d420a117a32841c2b3474932e49fb54b",
@@ -409,6 +424,10 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_MET
     end
     local d = P.dir .. "/style"
     P.THEME_SEARCH = resolve(d.."/search.rasi","search")
+    -- The combined search's RESULTS list, as opposed to search.rasi which is its
+    -- input box. Its rows are a mix of tracks, albums, artists and playlists, so
+    -- it gets a two-column layout of its own rather than the generic menu.
+    Util.THEME_SEARCHALL = resolve(d.."/searchall.rasi","searchall")
     Util.THEME_TRAIL = resolve(d.."/trail.rasi","trail")
     Util.THEME_THUMBS = resolve(d.."/thumbs.rasi","thumbs")
     return resolve(d.."/main.rasi","main"), resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
@@ -419,10 +438,13 @@ end)()
 local _cache_ready = false
 local function ensure_cache()
     if _cache_ready then return end
-    os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics) .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres"))
-    -- Scratch dir, 0700, in its OWN mkdir because -m applies to every operand and
-    -- the cache dirs above must keep their normal mode. -p also creates P.tmp
-    -- itself when $TMPDIR names something that does not exist yet.
+    -- Both mkdirs in ONE shell: os.execute spawns /bin/sh every time (measured at
+    -- 1.0ms against 0.44ms for a bare fork), so two calls cost a whole extra
+    -- shell for a command that runs in microseconds.
+    --
+    -- Scratch dir gets its own mkdir inside that shell because -m applies to
+    -- every operand and the cache dirs must keep their normal mode. -p also
+    -- creates P.tmp itself when $TMPDIR names something that does not exist yet.
     --
     -- The mode is the point. os.tmpname() was backed by mkstemp, which creates
     -- 0600; Util.tmpfile hands back a path that io.open("w") (or a shell >) then
@@ -431,28 +453,49 @@ local function ensure_cache()
     -- protection: files inside stay 0644, but 0700 means no other user can
     -- traverse in to reach them. One fork per process instead of per file.
     -- -m sets the mode at creation, so there is no window where it is 0755.
-    os.execute("mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
-    -- A fetch interrupted mid-flight (Escape out of a grid, or a kill) leaves its
-    -- .tmp behind and nothing else ever removed them -- they had piled up into
-    -- thousands. -mmin +10 so a prefetch still running from an earlier launch
-    -- keeps the files it is actively writing.
-    os.execute("find " .. shell_quote(P.art) .. " -name '*.tmp*' -mmin +10 -delete 2>/dev/null &")
-    -- Same treatment for the per-process api_get header files: the interactive
-    -- process removes its own in clean_exit, but a detached helper (--notify runs
-    -- once per track change) os.exits without unwinding. -maxdepth 1 so this does
-    -- not walk lyrics/ and mass/, which hold thousands of files.
-    os.execute("find " .. shell_quote(P.cache) .. " -maxdepth 1 -name '.api_hdr.*' -mmin +10 -delete 2>/dev/null &")
-    -- Scratch dirs orphaned by a helper that was killed before clean_exit. Keyed
-    -- on pid LIVENESS, not age: a long-lived process that happens not to have
-    -- written a scratch file recently still owns its directory, and an -mmin
-    -- sweep would delete it out from under a daemon that later calls tmpfile.
-    -- Only the interactive process bothers -- helpers are short-lived and there
-    -- are many of them (--notify runs once per track change).
-    if not Util.detached then
-        os.execute("for d in " .. shell_quote(P.tmp) .. "/spoot.[0-9]*; do "
-            .. "p=${d##*/spoot.}; "
-            .. "[ -d \"$d\" ] && [ ! -e \"/proc/$p\" ] && rm -rf \"$d\"; "
-            .. "done 2>/dev/null &")
+    os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics)
+        .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres")
+        .. "; mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
+
+    -- The housekeeping sweeps below are throttled to once an hour by the mtime of
+    -- a stamp file. They used to run in EVERY process -- including the --notify
+    -- helper the daemon spawns on every track change, which was paying three
+    -- forks and a walk of the whole art tree (4,912 files) to tidy up files it
+    -- never created. Nothing here is urgent: everything they remove is already
+    -- age- or liveness-gated, so an hour late is indistinguishable from on time.
+    local stamp = P.cache .. "/.sweep"
+    local sf = io.open(stamp, "r")
+    local last = 0
+    if sf then
+        last = tonumber(sf:read("*a")) or 0
+        sf:close()
+    end
+    if os.time() - last >= 3600 then
+        sf = io.open(stamp, "w")
+        if sf then sf:write(tostring(os.time())); sf:close() end
+        -- A fetch interrupted mid-flight (Escape out of a grid, or a kill) leaves
+        -- its .tmp behind and nothing else ever removed them -- they had piled up
+        -- into thousands. -mmin +10 so a prefetch still running from an earlier
+        -- launch keeps the files it is actively writing.
+        --
+        -- Same treatment for the per-process api_get header files: the
+        -- interactive process removes its own in clean_exit, but a detached
+        -- helper os.exits without unwinding. -maxdepth 1 so this does not walk
+        -- lyrics/ and mass/, which hold thousands of files.
+        --
+        -- And scratch dirs orphaned by a helper killed before clean_exit, keyed
+        -- on pid LIVENESS rather than age: a long-lived process that happens not
+        -- to have written a scratch file recently still owns its directory, and
+        -- an -mmin sweep would delete it out from under a daemon that later calls
+        -- tmpfile.
+        --
+        -- One backgrounded shell for all three, rather than three.
+        os.execute("{ find " .. shell_quote(P.art) .. " -name '*.tmp*' -mmin +10 -delete;"
+            .. " find " .. shell_quote(P.cache) .. " -maxdepth 1 -name '.api_hdr.*' -mmin +10 -delete;"
+            .. " for d in " .. shell_quote(P.tmp) .. "/spoot.[0-9]*; do"
+            .. " p=${d##*/spoot.};"
+            .. " [ -d \"$d\" ] && [ ! -e \"/proc/$p\" ] && rm -rf \"$d\";"
+            .. " done; } >/dev/null 2>&1 &")
     end
     _cache_ready = true
 end
@@ -784,6 +827,20 @@ end
 -- sites used to do it, missing every direct api_get caller (search,
 -- recommendations, pasted URLs). save_library_cache's two remain -- that data
 -- comes from raw curl.
+-- Fields Spotify sends on every object that spoot never reads -- verified by
+-- grep to have ZERO uses anywhere in this file. They are bulky (three of the
+-- four are long URLs), so dropping them here shrinks liked_tracks.json by 34%
+-- (1326 -> 881 KB) and takes its decode from 11.0ms to 8.4ms; saved_albums.json
+-- loses 45%. Every write gets cheaper too -- do_like rewrites the whole liked
+-- cache.
+--
+-- Only these four. A wider list (popularity, external_urls, external_ids,
+-- disc_number, track_number, label, genres, album_type, release_date) measured
+-- far better -- 63% smaller, 2.5x faster -- and is WRONG: Util.view_album_details
+-- and Util.view_track_details read exactly those off api_get responses, so it
+-- would empty both of those views.
+local DEAD_FIELDS = {preview_url = true, href = true, uri = true, is_local = true}
+
 function Util.mark_availability(o)
     local function walk(t)
         if type(t) ~= "table" then return end
@@ -791,6 +848,9 @@ function Util.mark_availability(o)
         if t.is_playable == false then t.unavail = true
         elseif t.is_playable == true then t.unavail = nil end
         t.is_playable = nil
+        -- Riding the walk this function already performs, so the pruning costs
+        -- no extra traversal.
+        for k in pairs(DEAD_FIELDS) do t[k] = nil end
         for _, v in pairs(t) do
             if type(v) == "table" then walk(v) end
         end
@@ -2464,7 +2524,7 @@ function Util.fast_now_track()
     -- carry unchanged metadata), so it goes stale the moment you pause.
     -- playerctl status is a local D-Bus call, no network, and always right.
     -- The cached fields remain as fallback when playerctl is unavailable.
-    local st = trim(shell("playerctl status 2>/dev/null") or "")
+    local st = Util.playerctl_status()
     if st == "Playing" then
         is_playing = true
     elseif st == "Paused" or st == "Stopped" then
@@ -2637,6 +2697,30 @@ get_playerctl_position = function()
     local v = tonumber(trim(raw or "")) or 0
     mem_set("_playerctl_pos", v, 1)
     return v
+end
+
+-- The same 1-second memo its two siblings here already had. Status was the only
+-- one of the three called raw, and it is by far the most frequent:
+-- Util.fast_now_track asks on every Util.sync_now -- each main-loop iteration,
+-- each view_actions and view_playback entry -- and Util.wait_playback_change
+-- polls it four times per skip. Measured at 4.6ms a call.
+--
+-- MUST be busted by anything that changes transport state, or a stale "Playing"
+-- lets fast_now_track flip is_playing back the instant after you pause. Same
+-- discipline as the mem_bust("_playerctl_pos") that already follows every seek.
+--
+-- On Util so Util.fast_now_track, which is defined above this point, can reach it
+-- (table field, resolved at call time).
+function Util.playerctl_status()
+    local cached = mem_get("_playerctl_status")
+    if cached ~= nil then return cached end
+    local v = trim(shell("playerctl status 2>/dev/null") or "")
+    mem_set("_playerctl_status", v, 1)
+    return v
+end
+
+function Util.playerctl_bust()
+    mem_bust("_playerctl_status")
 end
 
 local function get_playerctl_volume()
@@ -2836,15 +2920,31 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
     local dparam = device_id and "?device_id=" .. device_id or ""
 
     local body
-    if context_uri then
-        body = json.encode({context_uri=context_uri, offset={position=(idx or 1)-1}})
+    if context_uri and idx then
+        body = json.encode({context_uri=context_uri, offset={position=idx-1}})
+    elseif context_uri and item and item.id then
+        -- Context known, position NOT known. This used to fall into the branch
+        -- above as `(idx or 1)-1`, i.e. position 0, so it silently played the
+        -- album or playlist from its FIRST track instead of the one asked for.
+        -- Reached whenever a warm start replays a track's action menu: the stack
+        -- entry carries ctx_type/ctx_id but all_items/cidx cannot be restored,
+        -- so Play started the wrong track.
+        --
+        -- offset accepts a uri as well as a position, which keeps the context --
+        -- playback still continues through the album afterwards -- while landing
+        -- on the right track. Better than dropping to a bare uris play, which
+        -- would start the correct track but strand it with no context.
+        body = json.encode({context_uri=context_uri,
+                            offset={uri="spotify:track:" .. item.id}})
     elseif all_items and idx then
         local uris = {}
         for i = idx, math.min(#all_items, idx + 49) do
             if all_items[i] and all_items[i].id then uris[#uris+1] = "spotify:track:" .. all_items[i].id end
         end
         if #uris > 0 then body = json.encode({uris=uris, offset={position=0}}) end
-    else
+    elseif item and item.id then
+        -- Guarded: an item with no id used to raise a concat error here rather
+        -- than failing gracefully. `body` stays nil and the caller returns false.
         body = json.encode({uris={"spotify:track:" .. item.id}})
     end
     if body then
@@ -2872,7 +2972,8 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
         end
         -- Only on a play that actually started: this suppresses Util.sync_now,
         -- and after a FAILED play we want that sync to run and show the truth.
-        if ok then P.recent_cmd_at = os.time() end
+        -- The status memo goes with it -- transport just changed underneath it.
+        if ok then P.recent_cmd_at = os.time(); Util.playerctl_bust() end
         return ok
     end
     return false
@@ -3205,7 +3306,9 @@ local function do_playback_cmd(cmd)
     local url = "https://api.spotify.com/v1/me/player/" .. cmd
         .. (device_id and ("?device_id=" .. device_id) or "")
     local r = Util.api_write("POST", url, token, {timeout=3, len0=true})
-    if Util.is2xx(r) then mem_bust("queue"); P.recent_cmd_at = os.time() end
+    -- Bust the status memo too: next/previous changes transport, and
+    -- Util.wait_playback_change polls Util.fast_now_track straight afterwards.
+    if Util.is2xx(r) then mem_bust("queue"); P.recent_cmd_at = os.time(); Util.playerctl_bust() end
     return r
 end
 
@@ -3240,6 +3343,12 @@ recover_playback = function(direction, force)
         queue_idx = new_idx
         flush_queue()
         P.recent_cmd_at = os.time()
+        -- Explicit rather than relying on P.recent_cmd_at suppressing sync_now
+        -- for 5s while the status memo lives 1s. That coincidence does protect
+        -- this today, but it couples two unrelated constants: shorten the
+        -- suppression or lengthen the TTL and the stale-state bug returns with
+        -- nothing pointing back here.
+        Util.playerctl_bust()
         last_playback = 0; get_playback()
         return true
     end
@@ -3393,11 +3502,17 @@ api_get_playlist_tracks = function(playlist_id)
     end)
 end
 
-local function api_search(query, stype)
-    local mem_key = "search:" .. query .. ":" .. stype
+-- `limit` is per TYPE, which is why the caller sets it rather than this always
+-- using P.max: a combined search asks for four types at once but
+-- format_search_results shows only 5 of each, so P.max there would pull 229 KB
+-- to render 20 rows (measured; 46 KB at a limit of 10). Single-category searches
+-- display everything they fetch and pass P.max.
+local function api_search(query, stype, limit)
+    limit = limit or P.max
+    local mem_key = "search:" .. query .. ":" .. stype .. ":" .. limit
     local cached = mem_get(mem_key)
     if cached then return cached end
-    local d = api_get("search", Util.with_market("q=" .. url_encode(query) .. "&type=" .. stype .. "&limit=" .. P.max))
+    local d = api_get("search", Util.with_market("q=" .. url_encode(query) .. "&type=" .. stype .. "&limit=" .. limit))
     if d then
         for _, k in ipairs({"tracks","albums","artists","playlists"}) do
             if d[k] and d[k].items then d[k] = d[k].items end
@@ -3567,7 +3682,7 @@ end
 
 local function api_get_recommendations(track_id)
     if not track_id then return nil end
-    local d = api_get("recommendations", Util.with_market("seed_tracks=" .. track_id .. "&limit=20"))
+    local d = api_get("recommendations", Util.with_market("seed_tracks=" .. track_id .. "&limit=50"))
     if not d or not d.tracks or #d.tracks == 0 then return nil end
     local stubs = {}
     for i, t in pairs(d.tracks) do
@@ -3598,7 +3713,7 @@ end
 
 local function api_get_category_playlists(cat_id)
     return cached_fetch("category_playlists_" .. cat_id, P.mass .. "/category_playlists_" .. cat_id .. ".json", CACHE_TTL_MED, function()
-        local d = api_get("browse/categories/" .. cat_id .. "/playlists", "limit=20")
+        local d = api_get("browse/categories/" .. cat_id .. "/playlists", "limit=50")
         if d and d.playlists and d.playlists.items then return d.playlists.items end
     end)
 end
@@ -3606,9 +3721,22 @@ end
 local function api_get_top_tracks()
     for _, rng in ipairs({"medium_term","long_term","short_term"}) do
         local tracks = cached_fetch("top_tracks_" .. rng, P.cache .. "/top_tracks_" .. rng .. ".json", CACHE_TTL_MED, function()
-            local d = api_get("me/top/tracks", Util.with_market("limit=50&time_range=" .. rng))
-            if not d or type(d.items) ~= "table" or #d.items == 0 then return nil end
-            return d.items
+            -- 50 is the per-request ceiling, so more means paging. Reuses
+            -- Util.paged_fetch rather than hand-rolling another offset loop;
+            -- `got` is what stops it, since the account reports 1578 available.
+            local got = 0
+            local all = Util.paged_fetch("me/top/tracks",
+                function(o) return Util.with_market("limit=50&offset=" .. o .. "&time_range=" .. rng) end,
+                function(d, items)
+                    got = got + #items
+                    return #items == 0 or not d.next or got >= P.top_max
+                end)
+            -- MUST return nil, not an empty table: this function walks
+            -- medium_term -> long_term -> short_term and uses nil to fall
+            -- through to the next range. Util.paged_fetch answers {} for an
+            -- empty result, which would look like success and stop the walk.
+            if not all or #all == 0 then return nil end
+            return all
         end)
         if tracks then return tracks end
     end
@@ -3616,7 +3744,7 @@ end
 
 local function api_get_new_releases()
     return cached_fetch("new_releases", P.cache .. "/new_releases.json", CACHE_TTL_LONG, function()
-        local d = api_get("browse/new-releases", "limit=20")
+        local d = api_get("browse/new-releases", "limit=50")
         if d and d.albums and d.albums.items and #d.albums.items > 0 then return d.albums.items end
     end)
 end
@@ -3778,6 +3906,15 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         local art_path = art_url and ensure_art(Util.art_url(art_url, "1e02"), nil, Util.ART_DECOR) or ""
         album_theme = Util.write_art_theme("album", art_path)
     end
+    -- The theme this list actually draws with. Deliberately NOT folded into
+    -- album_theme: that is a per-call file this view owns and the <close> guard
+    -- above deletes it, whereas THEME_SEARCHALL is resolved once at startup and
+    -- shared for the app's lifetime -- assigning it there would delete it out
+    -- from under every later combined search.
+    --
+    -- nil for everything else, which lets rofi_dmenu fall back to its usual
+    -- use_menu/thumbs selection.
+    local view_theme = album_theme or (is_search_all and Util.THEME_SEARCHALL) or nil
     -- Regenerates rows carrying live state (▶ marker, liked heart). Handed to
     -- rofi_dmenu as `refresh` so a redraw from inside -- a track played or liked
     -- in a hotkey-opened action menu -- shows the new state. Album, artist and
@@ -3802,7 +3939,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
         -- Album/artist/playlist rows open content on Return and actions on
         -- Shift+Return, so those lists claim the key. An album's TRACK list is
         -- is_album_list too, but is_track wins the dispatch and keeps the default.
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=album_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search_all or is_playlist_list or is_artist_list or is_album_list), theme=view_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search_ctx, thumbs=is_album_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
             alt_select=((is_album_list and not is_track) or is_artist_list or is_playlist_list or is_search_all) or nil})
         -- Read before anything else: the next rofi_dmenu call clears the flag.
         local alt = Util.alt_pressed
@@ -3825,9 +3962,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
             if item.id == current_id then
                 if is_playing then
                     os.execute("playerctl pause 2>/dev/null")
+                    Util.playerctl_bust()
                     is_playing = false
                 else
                     os.execute("playerctl play 2>/dev/null")
+                    Util.playerctl_bust()
                     is_playing = true
                 end
             elseif do_play(item, ctx_type, ctx_id, items, idx) then
@@ -3864,9 +4003,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 if item.id == current_id then
                     if is_playing then
                         os.execute("playerctl pause 2>/dev/null")
+                        Util.playerctl_bust()
                         is_playing = false
                     else
                         os.execute("playerctl play 2>/dev/null")
+                        Util.playerctl_bust()
                         is_playing = true
                     end
                 elseif do_play(item, ctx_type, ctx_id, tctx, tcidx) then
@@ -4236,6 +4377,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         elseif key == "Resume" then
             os.execute("playerctl play 2>/dev/null")
+            Util.playerctl_bust()
             is_playing = true
         elseif key == "Play" then
             if do_play(item, ctx_type, ctx_id, all_items, cidx) then
@@ -4245,6 +4387,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         elseif key == "Pause" then
             os.execute("playerctl pause 2>/dev/null")
+            Util.playerctl_bust()
             is_playing = false
         elseif key == "Add to Queue" then do_add_queue(item.id)
         elseif key == "Like" or key == "Unlike" then
@@ -4378,7 +4521,10 @@ local function format_search_results(results, category, query)
         for _, rk in ipairs({"tracks","albums","artists","playlists"}) do
             local ci = results[rk]
             if ci and type(ci) == "table" then
-                for i = 1, math.min(#ci, 5) do ci[i]._stype = rk; items[#items+1] = ci[i] end
+                -- P.max_all, not a literal 5: this is the same number
+                -- Util.open_search_results sends as the API limit, so the list
+                -- displays exactly what was fetched however it is retuned.
+                for i = 1, math.min(#ci, P.max_all) do ci[i]._stype = rk; items[#items+1] = ci[i] end
             end
         end
         if #items == 0 then return nil end
@@ -4508,7 +4654,9 @@ end
 function Util.open_search_results(category, query)
     category = category or "all"
     local stype = category == "all" and "track,album,artist,playlist" or category
-    local results = api_search(query, stype)
+    -- A combined search shows 5 per category (see format_search_results), so it
+    -- asks for a little headroom rather than P.max of each of four types.
+    local results = api_search(query, stype, category == "all" and P.max_all or P.max)
     if not results then rofi_message("No results"); return false end
     Util.scope({view="search-results", category=category, query=query}, function()
         local items, entries, mesg, sctx, sctx_id = format_search_results(results, category, query)
@@ -4742,6 +4890,7 @@ view_lyrics = function(item)
                     mem_bust("_playerctl_pos")
                     if trim(shell("playerctl status 2>/dev/null")) ~= "Playing" then
                         os.execute("playerctl play &")
+                        Util.playerctl_bust()
                     end
                     is_playing = true
                 elseif item.unavail then
@@ -4765,6 +4914,11 @@ view_lyrics = function(item)
                             token, {timeout=3, body=body})
                         if Util.is2xx(r) then
                             P.recent_cmd_at = os.time()
+                            -- Explicit, for the reason spelled out in
+                            -- recover_playback: not left to the 5s-vs-1s
+                            -- coincidence between sync_now's suppression window
+                            -- and the status memo's TTL.
+                            Util.playerctl_bust()
                             current_track = item
                             current_id = item.id
                             is_playing = true
@@ -4917,10 +5071,8 @@ local function view_search(category)
         -- so typing a new query still works exactly as before -- the history is
         -- a suggestion list, not a menu you are confined to.
         local hist = Util.hist_get(hkey)
-        local mesg = "Search " .. key
-        if #hist > 0 then mesg = mesg .. SEP .. #hist .. " recent" .. SEP .. "del to forget" end
         local query = rofi_dmenu(hist, {prompt="Search " .. category:sub(1,1):upper() .. category:sub(2),
-            mesg=mesg, use_menu=true, theme=P.THEME_SEARCH, no_status=true, markup=true,
+            mesg="Search " .. key, use_menu=true, theme=P.THEME_SEARCH, no_status=true, markup=true,
             hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
         if not query then break end
         -- rofi echoes a SELECTED row back pango-escaped (markup is on), so a
@@ -5223,9 +5375,11 @@ local function view_playback()
         end
         if si == "Pause" then
             local r = os.execute("playerctl pause 2>/dev/null")
+            Util.playerctl_bust()
             if r == true or r == 0 then is_playing = false else rofi_message("Failed to pause") end
         elseif si == "Resume" then
             local r = os.execute("playerctl play 2>/dev/null")
+            Util.playerctl_bust()
             if r == true or r == 0 then is_playing = true else rofi_message("Failed to resume") end
         elseif si == "Next Track" then
             local prev_id = current_id
@@ -5734,6 +5888,7 @@ end
 -- not free. Util is a table looked up at call time, so order stops mattering.
 function Util.clear_last_playback()
     os.execute("playerctl pause 2>/dev/null")
+    Util.playerctl_bust()
     os.remove(P.now); os.remove(P.now_track)
     current_track = nil; current_id = nil; previous_id = nil
     is_playing = false; last_playback = 0

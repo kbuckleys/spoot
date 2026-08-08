@@ -15,10 +15,7 @@ mainbox {
 }
 
 inputbar {
-    enabled: true;
-    children: [textbox-prompt-colon, entry];
-    padding: 4px 8px;
-    spacing: 4px;
+    enabled: false;
 }
 
 listview {
@@ -27,7 +24,7 @@ listview {
     fixed-height: false;
     scrollbar: false;
     columns: 2;
-    lines: 14;
+    lines: 10;
 }
 
 element {
@@ -35,7 +32,6 @@ element {
 }
 element-text {
     highlight: bold #b6e0a4;
-    horizontal-align: 0.5;
 }
 element-text selected {
     background-color: transparent;
@@ -49,12 +45,4 @@ textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
     font: "JetBrainsMono Nerd Font Propo Bold 12";
-}
-textbox-prompt-colon {
-    padding: 0px 8px 0px 8px;
-    color: #b6e0a4;
-    str: "";
-}
-entry {
-    text-color: #b6e0a4;
 }

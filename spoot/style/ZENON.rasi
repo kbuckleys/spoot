@@ -114,7 +114,7 @@ element.alternate.active {
 }
 
 icon-current-entry {
-    background-color: #16191d;
+    background-color: #00000000;
 }
 
 scrollbar {
