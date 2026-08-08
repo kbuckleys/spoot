@@ -1,0 +1,163 @@
+/**
+* ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
+* ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
+* └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
+* https://github.com/kbuckleys/ */
+
+* {
+    font: "JetBrainsMono Nerd Font Propo Medium 12";
+    alternate-normal-background: @normal-background;
+    selected-urgent-background: @urgent-background;
+    alternate-urgent-foreground: @urgent-foreground;
+    alternate-active-foreground: @active-foreground;
+    selected-active-background: @normal-background;
+    alternate-active-background: @normal-background;
+    active-foreground: @selected-normal-foreground;
+    alternate-normal-foreground: @foreground;
+    border-color: rgba(155, 191, 191, 0.2);
+    alternate-urgent-background: #e78284;
+    background-color: @normal-background;
+    selected-normal-foreground: #DFDFDD;
+    selected-active-foreground: #0B0E0E;
+    selected-urgent-foreground: #0B0E0E;
+    selected-normal-background: #16191d;
+    active-background: @background;
+    normal-foreground: @foreground;
+    normal-background: #00000000;
+    lightfg: @normal-background;
+    background: rgba(0, 0, 0, 1);
+    separatorcolor: @foreground;
+    urgent-background: #e78284;
+    urgent-foreground: #e78284;
+    foreground: #DFDFDD;
+    lightbg: #DFDFDD;
+    blue: #9BBFBF;
+    red: #e78284;
+    spacing: 2;
+}
+
+window {
+    location: south;
+    anchor: south;
+    background-color: @background;
+    padding: 0;
+    border: 1px;
+}
+
+mainbox {
+    border: 0px solid;
+    padding: 0;
+}
+
+message {
+    border-color: @separatorcolor;
+    border: 0px;
+    padding: 0px;
+}
+
+textbox {
+    text-color: @foreground;
+}
+
+listview {
+    border-color: @separatorcolor;
+    scrollbar: true;
+    fixed-height: 0;
+    spacing: 2px;
+    padding: 0px;
+    border: 0px;
+}
+
+element {
+    padding: 1px;
+    border: 0;
+}
+element-text {
+    background-color: inherit;
+    text-color: inherit;
+}
+element.normal.normal {
+    background-color: @normal-background;
+    text-color: @normal-foreground;
+}
+element.normal.urgent {
+    background-color: @urgent-background;
+    text-color: @urgent-foreground;
+}
+element.normal.active {
+    background-color: @active-background;
+    text-color: @active-foreground;
+}
+element.selected.normal {
+    background-color: @selected-normal-background;
+    text-color: @selected-normal-foreground;
+}
+element.selected.urgent {
+    background-color: @selected-urgent-background;
+    text-color: @selected-urgent-foreground;
+}
+element.selected.active {
+    background-color: @selected-active-background;
+    text-color: @selected-active-foreground;
+}
+element.alternate.normal {
+    background-color: @alternate-normal-background;
+    text-color: @alternate-normal-foreground;
+}
+element.alternate.urgent {
+    background-color: @alternate-urgent-background;
+    text-color: @alternate-urgent-foreground;
+}
+element.alternate.active {
+    background-color: @alternate-active-background;
+    text-color: @alternate-active-foreground;
+}
+
+scrollbar {
+    handle-color: rgba(155, 191, 191, 0.2);
+    handle-width: 8px;
+    width: 8px;
+    padding: 0;
+    border: 0;
+}
+
+mode-switcher {
+    border-color: @separatorcolor;
+    border: 2px 0px 0px;
+}
+
+button {
+    text-color: @normal-foreground;
+    spacing: 0;
+}
+button.selected {
+    background-color: @selected-normal-background;
+    text-color: @selected-normal-foreground;
+}
+
+prompt {
+    text-color: @normal-foreground;
+    spacing: 0;
+}
+textbox-prompt-colon {
+    text-color: @normal-foreground;
+    margin: 0px 0.3em 0em 0em;
+    expand: false;
+    str: ":";
+}
+inputbar {
+    children: [ prompt,textbox-prompt-colon,entry,case-indicator ];
+    text-color: @normal-foreground;
+    padding: 1px;
+    spacing: 0;
+}
+
+case-indicator {
+    text-color: @normal-foreground;
+    spacing: 0;
+}
+
+entry {
+    text-color: @normal-foreground;
+    spacing: 0;
+}

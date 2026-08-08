@@ -1,0 +1,22 @@
+/**
+ * ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
+ * ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
+ * └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
+ * https://github.com/kbuckleys/ */
+
+@import "ZENON"
+
+window {
+    width: 710px;
+}
+
+mainbox {
+    children: [ textbox ];
+}
+
+textbox {
+    text-color: #dfdfdd;
+    horizontal-align: 0;
+    font: "JetBrainsMono Nerd Font Propo Medium 13";
+    padding: 15px 20px 30px 30px;
+}

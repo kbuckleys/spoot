@@ -1,0 +1,50 @@
+/**
+* ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
+* ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
+* └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
+* https://github.com/kbuckleys/ */
+
+@import "ZENON"
+
+window {
+    width: 1000px;
+    children: [ wrap, listview-split ];
+}
+
+wrap {
+    expand: false;
+    children: [ message ];
+}
+
+listview-split {
+    orientation: horizontal;
+    children: [ icon-current-entry, listview ];
+}
+
+icon-current-entry {
+    background-image: url("%s", both);
+    size: 364px;
+}
+
+listview {
+    lines: 13;
+    scrollbar: false;
+    padding: 0px 3px 1px 1px;
+}
+
+element {
+    padding: 2px 20px 2px 20px;
+}
+element-text {
+    horizontal-align: 0.5;
+}
+
+message {
+    background-color: #16191d;
+    padding: 5px 30px 5px 30px;
+}
+textbox {
+    text-color: #b6e0a4;
+    horizontal-align: 0.5;
+    font: "JetBrainsMono Nerd Font Propo Bold 12";
+}
