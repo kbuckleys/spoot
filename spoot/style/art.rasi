@@ -28,6 +28,7 @@ listview {
     columns: 1;
     lines: 1;
     scrollbar: false;
+    padding: 0px 0px 0px 0px;
 }
 
 element-icon {

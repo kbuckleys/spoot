@@ -32,12 +32,13 @@ listview-split {
 
 icon-current-entry {
     background-image: url("%s", both);
-    size: 362px;
+    size: 364px;
 }
 
 listview {
-    lines: 12;
+    lines: 13;
     scrollbar: false;
+    padding: 0px 3px 1px 1px;
 }
 
 element {
