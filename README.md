@@ -85,7 +85,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>f5</kbd></td><td>List refresh failsafe (you'll probably never use this)</td><td>Universal</td></tr>
       <tr><td><kbd>tab</kbd></td><td>Jump to trail menu</td><td>Universal</td></tr>
       <tr><td><kbd>return</kbd></td><td>Select -- play/pause selected track</td><td>Universal</td></tr>
-      <tr><td><kbd>delete</kbd></td><td>Delete a lookup history entry</td><td>Universal</td></tr>
+      <tr><td><kbd>delete</kbd></td><td>Delete a lookup history entry</td><td>Search Input Menu</td></tr>
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
       <tr><td><kbd>backspace</kbd></td><td>Clear filter / Delete input / Back one level</td><td>Universal</td></tr>
       <tr><td><kbd>alt + =</kbd>  &nbsp;  <kbd>alt + -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
