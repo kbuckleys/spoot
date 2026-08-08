@@ -58,6 +58,7 @@ P.now        = P.cache .. "/now.json"
 P.now_track  = P.cache .. "/now_track.json"
 P.device     = P.cache .. "/device.json"
 P.pl_index   = P.cache .. "/playlist_index.json"
+P.search_hist = P.cache .. "/search_history.json"
 local EXIT = {
     back = 10, main = 11,
     open_url = 12, jump = 13, quit = 14, liked = 15, trail_jump = 16,
@@ -662,6 +663,54 @@ function Util.pos_row(pos_key, keys)
     return 0
 end
 
+-- SEARCH HISTORY
+--
+-- Past queries, one list per search category ("search:all", "search:track", …),
+-- most recent first. Same in-process-copy-plus-write-through shape as Util.pos_*
+-- above, and for the same reason: it is read on every draw of a search menu and
+-- rewritten on every accepted query, and the file is small enough that a full
+-- re-encode per write is free.
+P.hist_max = 50
+function Util.hist_all()
+    if not Util._hist then Util._hist = disk_get(P.search_hist) or {} end
+    return Util._hist
+end
+
+function Util.hist_get(key)
+    local l = Util.hist_all()[key]
+    return type(l) == "table" and l or {}
+end
+
+-- Most-recent-first with de-duplication, so re-running an old query promotes it
+-- rather than growing a second copy.
+function Util.hist_add(key, q)
+    if not key or type(q) ~= "string" then return end
+    q = trim(q)
+    if q == "" then return end
+    local all = Util.hist_all()
+    local l = type(all[key]) == "table" and all[key] or {}
+    for i = #l, 1, -1 do if l[i] == q then table.remove(l, i) end end
+    table.insert(l, 1, q)
+    while #l > P.hist_max do table.remove(l) end
+    all[key] = l
+    disk_set(P.search_hist, all)
+end
+
+function Util.hist_remove(key, q)
+    if not key or type(q) ~= "string" then return false end
+    local all = Util.hist_all()
+    local l = type(all[key]) == "table" and all[key] or nil
+    if not l then return false end
+    local hit = false
+    for i = #l, 1, -1 do if l[i] == q then table.remove(l, i); hit = true end end
+    if not hit then return false end
+    -- Drop the key entirely once empty, so the file does not accumulate a
+    -- growing set of categories mapping to nothing.
+    if #l == 0 then all[key] = nil end
+    disk_set(P.search_hist, all)
+    return true
+end
+
 local function bust_my_playlists()
     mem_bust("my_playlists")
     os.remove(P.cache .. "/my_playlists.json")
@@ -870,6 +919,22 @@ end
 -- making stack/trail sync structural rather than a convention.
 --
 -- NEW VIEWS MUST USE THIS, not a manual session_push/session_pop pair.
+-- Captures a traceback AT THE FAULT SITE, for the crash handler at the bottom of
+-- the file. pcall unwinds the stack before it returns, so a debug.traceback taken
+-- where the error is finally caught describes the rethrow chain rather than the
+-- line that actually broke -- and Util.scope rethrows, several levels deep, on
+-- every nested view. Used as an xpcall message handler so it runs before the
+-- unwind.
+--
+-- Idempotent on purpose: nested scopes each rethrow the same error through their
+-- own xpcall, and without this test every level would staple another traceback
+-- onto it. First (innermost, most useful) one wins.
+function Util.traceback(e)
+    e = tostring(e)
+    if e:find("\nstack traceback:", 1, true) then return e end
+    return debug.traceback(e, 2)
+end
+
 function Util.scope(entry, body)
     -- A view with no VIEWS entry can be pushed but never restored, so a warm
     -- start would silently drop it and land the user somewhere else. Loud on
@@ -885,7 +950,10 @@ function Util.scope(entry, body)
     local depth = _session_stack and #_session_stack or 0
     local gen   = Util.session_gen
     session_push(entry)
-    local ok, a, b = pcall(body)
+    -- xpcall, not pcall: the handler runs BEFORE the stack unwinds, which is the
+    -- only moment a useful traceback can be taken (see Util.traceback). The
+    -- rethrow below then carries it up to the crash handler at the bottom.
+    local ok, a, b = xpcall(body, Util.traceback)
     if Util.session_gen == gen then
         while #_session_stack > depth do table.remove(_session_stack) end
         session_save()
@@ -930,19 +998,30 @@ local function crumb_name(entry)
     if entry.playlist_name and entry.playlist_name ~= "" then return entry.playlist_name end
     if entry.album_name and entry.album_name ~= "" then return entry.album_name end
     if entry.category_name and entry.category_name ~= "" then return entry.category_name end
-    -- Views that stash the track name under a view-specific field (so
-    -- replay_session can tell it apart from an "action" entry's track_name)
-    -- rather than falling back to a generic label like "Lyrics" or "Seek".
-    if entry.lyrics_track_name and entry.lyrics_track_name ~= "" then return entry.lyrics_track_name end
-    if entry.recs_track_name and entry.recs_track_name ~= "" then return entry.recs_track_name end
-    if entry.strack_name and entry.strack_name ~= "" then return entry.strack_name end
     if entry.query and entry.query ~= "" then return entry.query end
     return nil
 end
+-- lyrics_track_name / recs_track_name / strack_name are deliberately NOT read
+-- here. Those views are label_only (see reg below), so this is never consulted
+-- for them. The fields still matter -- replay_session restores each view from
+-- its own, and they are named apart from an "action" entry's track_name so a
+-- replay can tell the two kinds of entry apart -- they simply never named a
+-- breadcrumb. The comment that used to sit here claimed they existed to avoid a
+-- generic label, which was never true: the old name-collision rule discarded
+-- them every time, since these views are only ever opened from a track action
+-- menu that has already shown that same name one step up.
 
+-- A step renders its own name when it has one, and its view's label otherwise.
+--
+-- This used to collapse a name that MATCHED THE STEP ABOVE IT down to the label,
+-- which was the wrong test on both counts. It misfired on legitimate repeats --
+-- a single, whose track shares the album's name, showed "Snail of Gold > Track",
+-- and a self-titled album under its artist showed "Weezer > Album". And the case
+-- it was really there for is about view identity, not string equality: "Lyrics"
+-- reads better than a repeated track name because Lyrics is a DETAIL of the step
+-- above it, which is now stated directly by label_only (see reg).
 function Util.parts_from_stack(stack, extra)
     local parts = {"Main"}
-    local last_name = nil
     if stack then
         for _, e in ipairs(stack) do
             -- crumb_name already tolerates a non-table entry, but view_label(e.view)
@@ -952,13 +1031,9 @@ function Util.parts_from_stack(stack, extra)
             -- not launch until the cache file was deleted by hand. A junk entry is
             -- worth skipping, never worth refusing to start over.
             if type(e) == "table" then
-                local name = crumb_name(e)
-                if name and name ~= last_name then
-                    parts[#parts+1] = name
-                    last_name = name
-                else
-                    parts[#parts+1] = view_label(e.view)
-                end
+                local v = VIEWS[e.view]
+                local name = not (v and v.label_only) and crumb_name(e) or nil
+                parts[#parts+1] = name or view_label(e.view)
             end
         end
     end
@@ -970,10 +1045,41 @@ function Util.breadcrumb_parts(extra)
     return Util.parts_from_stack(_session_stack, extra)
 end
 
+-- The arrow between trail steps. Darker and heavier than the step names it
+-- separates, so the names read first and the arrows recede into punctuation --
+-- the whole crumb is otherwise one flat #6a707f, arrows included.
+--
+-- One definition shared by the two places a trail is drawn: the breadcrumb in
+-- every menu's mesg, and the rows of the Jump to Trail Step menu. The literal
+-- ">" stays OUTSIDE the Util.markup blobs so pango_escape still turns it into
+-- &gt;; only the tags are protected from escaping.
+function Util.crumb_arrow(s)
+    return Util.markup('<span foreground="#454a55"><b>') .. s .. Util.markup('</b></span>')
+end
+
 local function breadcrumb(extra)
     local parts = {}
-    for _, t in ipairs(Util.trail_history) do parts[#parts+1] = type(t) == "table" and t.label or t end
-    parts[#parts+1] = table.concat(Util.breadcrumb_parts(extra), " > ")
+    -- Archived trails are rebuilt from their saved STACK, not from their saved
+    -- label string. session_clear writes that label with a plain " > ", so
+    -- rendering it verbatim left every previous trail with unstyled arrows while
+    -- the live crumb beside it had styled ones.
+    --
+    -- Rebuilding rather than writing markup into trails.json keeps presentation
+    -- out of persisted data: the arrow colour is applied at draw time, so a later
+    -- change reaches old trails too, and trails saved before this get styled
+    -- immediately instead of only new ones. It also picks up the label_only
+    -- naming fix for free -- an old label may still read "Snail of Gold > Track".
+    --
+    -- Falls back to the stored label for entries with no usable stack: trail_load
+    -- turns a legacy bare string into {label=t, stack={}}.
+    for _, t in ipairs(Util.trail_history) do
+        if type(t) == "table" and type(t.stack) == "table" and #t.stack > 0 then
+            parts[#parts+1] = table.concat(Util.parts_from_stack(t.stack), Util.crumb_arrow(" > "))
+        else
+            parts[#parts+1] = type(t) == "table" and t.label or t
+        end
+    end
+    parts[#parts+1] = table.concat(Util.breadcrumb_parts(extra), Util.crumb_arrow(" > "))
     return table.concat(parts, "  " .. Util.markup('<span foreground="#a3a9bd">\u{F17B7}</span>') .. "  ")
 end
 
@@ -1162,7 +1268,15 @@ local function rofi_dmenu(entries, opts)
     args[#args+1] = "-kb-custom-12"; args[#args+1] = "Alt+y"
     args[#args+1] = "-kb-custom-13"; args[#args+1] = "Alt+p"
     args[#args+1] = "-kb-custom-14"; args[#args+1] = "Alt+s"
-    args[#args+1] = "-kb-custom-15"; args[#args+1] = "Delete"
+    -- One slot, two meanings, because rofi has exactly 19 kb-custom slots
+    -- (verified: a 20th is silently ignored) and all 19 are already spoken for.
+    -- A history menu binds plain Delete here and reads exit 24 as "drop the
+    -- highlighted entry"; every other menu binds Alt+Delete and reads it as
+    -- "clear the session trail". The two are never both wanted in one menu, so
+    -- sharing the slot costs nothing except that Alt+Delete does not clear the
+    -- trail while you are sitting in a search box -- where you are typing, not
+    -- navigating.
+    args[#args+1] = "-kb-custom-15"; args[#args+1] = opts.hist_key and "Delete" or "Alt+Delete"
     args[#args+1] = "-kb-custom-16"; args[#args+1] = "Alt+equal"
     args[#args+1] = "-kb-custom-17"; args[#args+1] = "Alt+minus"
     args[#args+1] = "-kb-custom-18"; args[#args+1] = "Shift+Return"
@@ -1222,7 +1336,24 @@ local function rofi_dmenu(entries, opts)
     if exit_code == EXIT.quit then capture_pos(result); Util.clean_exit() end
     if exit_code == EXIT.back then Util.back_pressed = true; return nil end
     if exit_code == EXIT.main then session_clear(); main_pending = true; return nil end
-    if exit_code == EXIT.clear_trail then Util.clear_trail(); main_pending = true; return nil end
+    if exit_code == EXIT.clear_trail then
+        -- Shared slot; see the -kb-custom-15 binding above.
+        if opts.hist_key then
+            -- entries holds the RAW queries, while rofi echoes back the
+            -- pango-escaped row, so resolve through row_of rather than
+            -- comparing strings -- otherwise a query containing & or < could
+            -- never be deleted.
+            local row = row_of(result)
+            local victim = row and (entries or {})[row + 1]
+            if victim and Util.hist_remove(opts.hist_key, victim) then
+                -- Keep the cursor where it was; opts.refresh rebuilds the list
+                -- from storage on the way back through menu_redo.
+                sel = math.max(0, math.min(row, #(entries or {}) - 2))
+            end
+            goto menu_redo
+        end
+        Util.clear_trail(); main_pending = true; return nil
+    end
     if exit_code == EXIT.liked then
         -- Guarded like the EXIT.trail_jump handler below, and for the reason
         -- Util.scope spells out: nothing reaches a menu before session_load
@@ -2849,7 +2980,9 @@ function Util.optimistic_like(item, unlike)
     return tracks
 end
 
-function Util.clean_exit()
+-- `code` defaults to 0, so every ordinary caller is unchanged; the crash handler
+-- at the bottom passes 1 so a shell that launched us sees the failure.
+function Util.clean_exit(code)
     Util.bs_stop()
     flush_liked_cache()
     if Util._api_hdr then os.remove(Util._api_hdr) end
@@ -2866,7 +2999,7 @@ function Util.clean_exit()
     if Util._scratch then
         os.execute("rm -rf " .. shell_quote(Util._scratch) .. " 2>/dev/null")
     end
-    os.exit(0)
+    os.exit(code or 0)
 end
 
 local function do_like(item, unlike)
@@ -2933,6 +3066,49 @@ local function do_save_album(album_id)
     return false
 end
 
+-- The mirror of do_save_album. This used to exist only inline in view_browse's
+-- Saved Albums branch, which is why removing an album was reachable from that
+-- ONE list and nowhere else -- an album's own action menu could save it but
+-- never unsave it.
+function Util.do_remove_album(album_id)
+    local token = get_token()
+    if not token then rofi_message("Cannot remove album: no token"); return false end
+    local url = "https://api.spotify.com/v1/me/albums?ids=" .. album_id
+    local r = Util.api_write("DELETE", url, token)
+    if Util.is2xx(r) then
+        mem_bust("saved_albums")
+        disk_bust(P.albums)
+        return true
+    end
+    return false
+end
+
+-- "Is this album in the library?", answered without stalling the menu.
+--
+-- Reads the saved-albums cache DIRECTLY rather than calling load_saved_albums:
+-- that function refetches every page when the cache is cold, which would turn
+-- opening an album's action menu into a multi-second paginated crawl. When
+-- there is no cache to consult it asks Spotify instead -- one small request,
+-- the same shape api_check_following already uses for artists.
+--
+-- A cache written before an album was saved elsewhere can be stale, exactly as
+-- Util.is_liked can be for tracks; acting on the row corrects it either way,
+-- since both writers bust the cache.
+function Util.album_is_saved(album_id)
+    if not album_id then return false end
+    local items = mem_get("saved_albums")
+    if not items then
+        local c = safe_decode(read_file(P.albums))
+        items = c and c.items
+    end
+    if type(items) == "table" then
+        for _, a in ipairs(items) do if a.id == album_id then return true end end
+        return false
+    end
+    local r = api_get("me/albums/contains", "ids=" .. album_id)
+    return type(r) == "table" and r[1] == true
+end
+
 local function do_save_playlist(playlist_id)
     local token = get_token()
     if not token then rofi_message("Cannot save playlist: no token"); return false end
@@ -2951,14 +3127,21 @@ end
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
 -- by call site.
 local function album_action_menu(album)
-    local acts = {"Open Album", "Save Album", "Albumart", "Copy URL", "Album Details"}
-    if (album.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
-    local al_ac_key = "album-ac:" .. (album.id or "")
-    local pre_sel = 0
-    local saved = Util.pos_get(al_ac_key)
-    if type(saved) == "string" then
-        for i, a in ipairs(acts) do if a == saved then pre_sel = i - 1; break end end
+    -- Row 2 flips between Save and Remove with the album's library state, so the
+    -- cursor is remembered by a STABLE key per row rather than by the visible
+    -- label -- the same problem Util.pos_row exists for in view_actions and
+    -- view_playback. Remembering the label meant that saving an album (and so
+    -- relabelling the row) dropped the cursor back to the top next time.
+    local is_saved = Util.album_is_saved(album.id)
+    local acts  = {"Open Album", is_saved and "Remove from Saved Albums" or "Save Album",
+                   "Albumart", "Copy URL", "Album Details"}
+    local akeys = {"open", "save", "art", "url", "details"}
+    if (album.artists or {})[1] then
+        table.insert(acts, 2, "Go to Artist")
+        table.insert(akeys, 2, "artist")
     end
+    local al_ac_key = "album-ac:" .. (album.id or "")
+    local pre_sel = Util.pos_row(al_ac_key, akeys)
     local mesg = (album.name or "Album") .. album_suffix(album)
     -- Claimed only for the Go to Artist row, which offers the artist's hub on
     -- Shift+Return and their discography on Return. Every other row treats the
@@ -2970,10 +3153,15 @@ local function album_action_menu(album)
     local alt = Util.alt_pressed
     Util.alt_pressed = false
     if action then
-        Util.pos_put(al_ac_key, action)
+        for i, a in ipairs(acts) do
+            if a == action then Util.pos_put(al_ac_key, akeys[i]); break end
+        end
     end
     if action == "Save Album" then
         rofi_message(do_save_album(album.id) and "Album saved" or "Failed to save album")
+    elseif action == "Remove from Saved Albums" then
+        rofi_message(Util.do_remove_album(album.id) and "Removed from Saved Albums"
+            or "Failed to remove album")
     elseif action == "Copy URL" then
         copy_spotify_url("album", album.id)
         rofi_message("Copied URL")
@@ -3079,12 +3267,25 @@ local function api_get_album(album_id)
                 next_url = page.next
             end
             d.tracks = tracks
-            if d.images and #d.images > 0 then
-                for _, t in ipairs(tracks) do
-                    if not t.album then t.album = {} end
-                    if not t.album.images or #t.album.images == 0 then
-                        t.album.images = d.images
-                    end
+            -- albums/{id} hands back SIMPLIFIED track objects, which carry no
+            -- `album` field at all, so one is synthesised here. It used to hold
+            -- nothing but the cover images, which left every track browsed from
+            -- an album with an album that could not name itself -- `Go to Album`
+            -- guards on `album.id` and so did nothing, and the stunted object
+            -- escapes this view (do_play assigns it to current_track, which the
+            -- main loop can hand to record_recent_play, and Util.optimistic_like
+            -- copies it into the liked cache).
+            --
+            -- Outside the images test on purpose: an album with no artwork used
+            -- to skip the whole loop and get no album patched onto its tracks.
+            for _, t in ipairs(tracks) do
+                if not t.album then t.album = {} end
+                t.album.id      = t.album.id      or d.id
+                t.album.name    = t.album.name    or d.name
+                t.album.artists = t.album.artists or d.artists
+                if d.images and #d.images > 0
+                   and (not t.album.images or #t.album.images == 0) then
+                    t.album.images = d.images
                 end
             end
         end
@@ -3717,22 +3918,17 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status)
                 if action == "Open Album" then
                     do_open = true
                 elseif action == "Remove from Library" then
-                    local token = get_token()
-                    if token then
-                        local url = "https://api.spotify.com/v1/me/albums?ids=" .. item.id
-                        local r = Util.api_write("DELETE", url, token)
-                        if Util.is2xx(r) then
-                            mem_bust("saved_albums")
-                            disk_bust(P.albums)
-                            rofi_message("Removed from library")
-                            table.remove(items, idx)
-                            entries = {}
-                            for i, a in ipairs(items) do entries[i] = display_album(a, true) end
-                            mesg = "Saved Albums" .. SEP .. #items .. " albums"
-                            if #items == 0 then return end
-                            goto br_next
-                        else rofi_message("Failed to remove") end
-                    end
+                    -- Shares Util.do_remove_album with the album action menu;
+                    -- only the row-pruning below is specific to this list.
+                    if Util.do_remove_album(item.id) then
+                        rofi_message("Removed from library")
+                        table.remove(items, idx)
+                        entries = {}
+                        for i, a in ipairs(items) do entries[i] = display_album(a, true) end
+                        mesg = "Saved Albums" .. SEP .. #items .. " albums"
+                        if #items == 0 then return end
+                        goto br_next
+                    else rofi_message("Failed to remove") end
                 elseif action == "Copy URL" then
                     copy_spotify_url("album", item.id)
                     rofi_message("Copied URL")
@@ -4012,7 +4208,20 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         if alt then
             if key == "Go to Album" then
                 local album = item.album
+                -- Fall back to the list's own album when the track cannot name
+                -- one (see the Return branch). api_get_album is memo- and
+                -- disk-cached and we are inside that very album, so this is a
+                -- cache hit rather than a request.
+                if not (album and album.id) and ctx_type == "album" and ctx_id then
+                    album = api_get_album(ctx_id)
+                end
                 if album and album.id and album_action_menu(album) then
+                    -- "Open Album" on the album we are already in: unwind
+                    -- instead of duplicating it, same as the Return branch.
+                    if album.id == ctx_id then
+                        if tmp_theme then os.remove(tmp_theme) end
+                        return
+                    end
                     browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
                 end
             elseif key == "Go to Artist" then
@@ -4045,6 +4254,19 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         elseif key == "Go to Album" then
             local album = item.album
+            -- Already inside this album's track list, so the destination IS the
+            -- menu directly beneath us: unwind to it rather than stacking a
+            -- second copy of the same view. browse_album passes ctx_type/ctx_id
+            -- through view_browse, so the context is already here.
+            --
+            -- The `not album.id` half catches tracks cached before api_get_album
+            -- learned to name the album it patches on -- for those this row did
+            -- nothing at all, which is how the dead end was found.
+            if ctx_type == "album" and ctx_id
+               and (not (album and album.id) or album.id == ctx_id) then
+                if tmp_theme then os.remove(tmp_theme) end
+                return
+            end
             if album and album.id then
                 browse_album(album.id, (album.name or "Unknown") .. album_suffix(album))
             end
@@ -4686,10 +4908,29 @@ end
 
 local function view_search(category)
     Util.scope({view="search", category=category}, function()
+    -- One history list per category, so Search Tracks and Search Albums do not
+    -- pollute each other.
+    local hkey = "search:" .. category
     while true do
         local key = category == "all" and "all" or category .. "s"
-        local query = rofi_dmenu({}, {prompt="Search " .. category:sub(1,1):upper() .. category:sub(2), mesg="Search " .. key, use_menu=true, theme=P.THEME_SEARCH, no_status=true, markup=true})
+        -- Past queries are offered as rows. `custom` stays enabled (the default),
+        -- so typing a new query still works exactly as before -- the history is
+        -- a suggestion list, not a menu you are confined to.
+        local hist = Util.hist_get(hkey)
+        local mesg = "Search " .. key
+        if #hist > 0 then mesg = mesg .. SEP .. #hist .. " recent" .. SEP .. "del to forget" end
+        local query = rofi_dmenu(hist, {prompt="Search " .. category:sub(1,1):upper() .. category:sub(2),
+            mesg=mesg, use_menu=true, theme=P.THEME_SEARCH, no_status=true, markup=true,
+            hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
         if not query then break end
+        -- rofi echoes a SELECTED row back pango-escaped (markup is on), so a
+        -- remembered query containing & or < would otherwise be searched for in
+        -- its escaped form. Free-typed text is never escaped, so it falls
+        -- through this loop untouched.
+        for _, h in ipairs(hist) do
+            if Util.pango_escape(h) == query then query = h; break end
+        end
+        Util.hist_add(hkey, query)
         if not Util.open_search_results(category, query) then break end
         if jump_to_track_pending then break end
     end
@@ -5139,21 +5380,22 @@ local function view_system()
                 row("jump to trail step", "tab"),
                 row("select", "return"),
                 row("close", "escape"),
-                row("clear session trail", "delete"),
+                row("dlete search history entry", "delete"),
                 row("clear input / back one level", "backspace"),
-                row("seek + / - 10s", "alt + = / -"),
-                row("jump to main menu", "alt + space"),
-                row("action menu (track / album / artist / playlist)", "shift + return"),
-                row("jump to current track's action menu", "alt + return"),
-                row("seek menu", "alt + e"),
-                row("liked tracks", "alt + l"),
-                row("recently played", "alt + p"),
-                row("album art of current track", "alt + a"),
-                row("lyrics of current track", "alt + y"),
-                row("cycle repeat modes", "alt + r"),
-                row("toggle shuffle", "alt + s"),
-                row("open Spotify URL from clipboard", "alt + g"),
-                row("jump to playing track (list)", "alt + c"),
+                row("seek + / - 10s", "alt = / -"),
+                row("jump to main menu", "alt space"),
+                row("action menu (track / album / artist / playlist)", "shift return"),
+                row("jump to current track's action menu", "alt return"),
+                row("clear session", "alt delete"),
+                row("seek menu", "alt e"),
+                row("liked tracks", "alt l"),
+                row("recently played", "alt p"),
+                row("album art of current track", "alt a"),
+                row("lyrics of current track", "alt y"),
+                row("cycle repeat modes", "alt r"),
+                row("toggle shuffle", "alt s"),
+                row("open Spotify URL from clipboard", "alt g"),
+                row("jump to playing track (list)", "alt c"),
                 row("jump to current lyric line (lyrics)"),
             }, "\n"), THEME_BINDS)
         elseif clean:match("^Volume") then
@@ -5210,7 +5452,15 @@ end
 -- entry carries no name of its own (see crumb_name); `open(s, prefer_current)`
 -- restores the view from that entry and must be the SAME function the live menu
 -- calls, so a restored step behaves identically to a freshly opened one.
-local function reg(view, label, open) VIEWS[view] = {label = label, open = open} end
+-- label_only marks a view that is a DETAIL of the step above it in the stack --
+-- always reached from a track's action menu, which has already shown that
+-- track's name. Those render their label ("Lyrics", "Seek") rather than
+-- repeating the name. Every other view shows its own name when it has one; see
+-- Util.parts_from_stack for why this is declared per view rather than inferred
+-- from two steps happening to share a string.
+local function reg(view, label, open, label_only)
+    VIEWS[view] = {label = label, open = open, label_only = label_only}
+end
 
 -- prefer_current (warm start only) follows the music across a restart, but only
 -- for a menu that was opened on the then-playing track -- see from_current in
@@ -5237,12 +5487,12 @@ reg("lyrics", "Lyrics", function(s, prefer_current)
         view_lyrics({id=s.track_id, name=s.lyrics_track_name or "", artists=s.lyrics_track_artists or {},
             unavail=s.lyrics_unavail})
     end
-end)
+end, true)
 reg("seek", "Seek", function(s)
     if not s.track_id then return end
     if current_track and current_track.id == s.track_id then view_seek(current_track)
     else view_seek({id=s.track_id, name=s.strack_name or "", duration_ms=s.track_duration_ms or 0}) end
-end)
+end, true)
 reg("album", "Album", function(s)
     if s.album_id then browse_album(s.album_id) end
 end)
@@ -5257,7 +5507,7 @@ reg("playlist-actions", "Playlist", function(s)
 end)
 reg("recommendations", "More Like", function(s)
     if s.track_id then Util.open_recommendations(s.track_id, s.recs_track_name) end
-end)
+end, true)
 reg("search-results", "Search", function(s)
     if s.query then Util.open_search_results(s.category, s.query) end
 end)
@@ -5266,7 +5516,7 @@ reg("category-playlists", "Category", function(s)
 end)
 reg("add-to-playlist", "Add to Playlist", function(s)
     if s.track_id then view_add_pl(s.track_id, s.track_name) end
-end)
+end, true)
 reg("artist-actions", "Artist", function(s)
     if s.artist_id then view_artist({id=s.artist_id, name=s.artist_name or ""}) end
 end)
@@ -5346,34 +5596,30 @@ function Util.view_trail_jump(stack)
     local first = true
     -- Same guard as Util.parts_from_stack: a junk stack entry must not be able
     -- to take the whole menu down.
-    local function step_name(e, last_name)
-        if type(e) ~= "table" then return view_label(nil), last_name end
-        local name = crumb_name(e)
-        if name and name ~= last_name then return name, name end
-        return view_label(e.view), last_name
+    -- Same rule as Util.parts_from_stack, and it has to stay that way: this menu
+    -- lists the very steps that function renders, so the two disagreeing would
+    -- mean jumping to a step whose label you never saw.
+    local function step_name(e)
+        if type(e) ~= "table" then return view_label(nil) end
+        local v = VIEWS[e.view]
+        local name = not (v and v.label_only) and crumb_name(e) or nil
+        return name or view_label(e.view)
     end
     local function add_trail(stk, with_main)
         if with_main then
             push(first and "" or SEP, "Main", stk, 0)
             first = false
             if stk then
-                local last_name = nil
                 for i = 1, #stk do
-                    local e = stk[i]
-                    local name, ln = step_name(e, last_name)
-                    last_name = ln
-                    push("> ", name, stk, i)
+                    push(Util.crumb_arrow("> "), step_name(stk[i]), stk, i)
                 end
             end
             return
         end
         if not stk or #stk == 0 then return end
-        local last_name = nil
         for i = 1, #stk do
-            local e = stk[i]
-            local name, ln = step_name(e, last_name)
-            last_name = ln
-            push(i == 1 and (first and "" or SEP) or "> ", name, stk, i)
+            push(i == 1 and (first and "" or SEP) or Util.crumb_arrow("> "),
+                 step_name(stk[i]), stk, i)
         end
         first = false
     end
@@ -6361,6 +6607,49 @@ function Util.bsmon_mode()
     os.exit(0)
 end
 
+-- Interactive spoot is the one path with no error handling at all. An error
+-- anywhere in it used to print a traceback to stderr -- which nobody sees,
+-- because rofi has closed and a keybind launch has no terminal -- and then die
+-- WITHOUT reaching Util.clean_exit, so a pending like/unlike reconciliation was
+-- dropped by the missing flush_liked_cache() and the bsmon and scratch
+-- directories leaked. The window simply vanished.
+--
+-- The detached modes already have this covered: daemon_mode wraps
+-- pcall(daemon_loop) and recent_watch_mode wraps pcall(poll). The one-shot
+-- helpers write to /dev/null, so there is nobody to tell.
+--
+-- A function rather than an inline block because the chunk body is at Lua's
+-- 200-local ceiling (see the note above Util's declaration) -- these locals have
+-- to be function-scoped to fit.
+function Util.run_interactive(fn)
+    local ok, err = xpcall(fn, Util.traceback)
+    if ok then return end
+    err = tostring(err)
+    local log = P.tmp .. "/spoot_crash.log"
+    -- Every step below is individually guarded: a failure while REPORTING the
+    -- crash must not stop us reaching the cleanup at the end.
+    pcall(function()
+        -- Appended, not write_file: that does an atomic replace and would throw
+        -- away the previous crash, which is usually the one you want once a
+        -- second turns up.
+        local f = io.open(log, "a")
+        if f then
+            f:write("\n=== ", os.date("%Y-%m-%d %H:%M:%S"), " ===\n", err, "\n")
+            f:close()
+        end
+    end)
+    local first = err:match("^[^\n]*") or "unknown error"
+    pcall(io.stderr.write, io.stderr, err .. "\n")
+    -- notify-send as well as rofi: if the crash was in theme resolution then
+    -- rofi_message cannot draw at all, so the fallback must not need a theme.
+    pcall(os.execute, "notify-send -u critical --app-name=spoot 'spoot crashed' "
+        .. shell_quote(first) .. " 2>/dev/null &")
+    pcall(rofi_message, "spoot crashed\n" .. Util.pango_escape(first)
+        .. "\n\nfull trace: " .. log)
+    pcall(Util.clean_exit, 1)
+    os.exit(1)   -- only reached if clean_exit itself failed before its os.exit
+end
+
 if arg and arg[1] == "--daemon" then
     daemon_mode()
 elseif arg and arg[1] == "--recent-watch" then
@@ -6380,6 +6669,16 @@ elseif arg and arg[1] == "--bsmon" then
 elseif arg and arg[1] then
     os.exit(2)
 else
-    main()
+    -- Interactive spoot is the one path with no error handling at all. An error
+    -- anywhere in it used to print a traceback to stderr -- which nobody sees,
+    -- because rofi has closed and a keybind launch has no terminal -- and then
+    -- die WITHOUT reaching Util.clean_exit, so a pending like/unlike
+    -- reconciliation was dropped by the missing flush_liked_cache() and the
+    -- bsmon and scratch directories leaked. The window simply vanished.
+    --
+    -- The detached modes already have this covered: daemon_mode wraps
+    -- pcall(daemon_loop) and recent_watch_mode wraps pcall(poll). The one-shot
+    -- helpers write to /dev/null, so there is nobody to tell.
+    Util.run_interactive(main)
 end
 end)()
