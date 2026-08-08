@@ -113,20 +113,6 @@ element.alternate.active {
     text-color: @alternate-active-foreground;
 }
 
-/* Painted UNDER the artwork in the themes that show a cover (action, album), so
- * this is what you see in the frame before rofi has decoded the image. It used
- * to inherit the transparent normal-background and show the window's pure
- * black, which read as a hole punched in the layout -- and it recurs on every
- * redraw, since each one is a fresh rofi process. Matching the message bar makes
- * that frame look like an empty panel filling in. rofi has no fades, so the
- * frame cannot be removed, only made unremarkable.
- *
- * Deliberately NOT extended to element-icon (the album grid and the art viewer).
- * That was tried and reverted: colouring 15 grid tiles does not improve the
- * load-in, it just trades black squares for grey ones.
- *
- * Here rather than in action.rasi and album.rasi because it is identical in
- * both; the size and the url() stay with the themes, which set them differently. */
 icon-current-entry {
     background-color: #16191d;
 }
