@@ -77,7 +77,7 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><td><kbd>escape</kbd></td><td>Close</td><td>Universal</td></tr>
       <tr><td><kbd>backspace</kbd></td><td>Clear filter / Delete input / Back one level</td><td>Universal</td></tr>
       <tr><td><kbd>alt = / -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
-      <tr><td><kbd>shift return</kbd></td><td>Selected item's Action Menu</td><td>Contextual</td></tr>
+      <tr><td><kbd>shift return</kbd></td><td>Hovered item's Action Menu</td><td>Contextual</td></tr>
       <tr><td><kbd>alt return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
       <tr><td><kbd>alt delete</kbd></td><td>Clear session</td><td>Universal</td></tr>
       <tr><td><kbd>alt space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
