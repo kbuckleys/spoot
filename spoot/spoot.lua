@@ -115,6 +115,12 @@ P.menu_hist  = P.cache .. "/menu_history.json"
 P.view_pos   = P.cache .. "/view_pos.json"
 P.queue      = P.cache .. "/playback_queue.json"
 P.art        = P.cache .. "/art"
+-- One response-header dump per PROCESS, so they are pid-named and there can be
+-- one per live spoot. They used to sit loose in the cache root as `.api_hdr.<pid>`,
+-- where a helper that os.exits without unwinding left its file behind and the
+-- root accumulated them. Their own directory keeps the root readable and lets
+-- the sweep name a whole directory instead of a dotfile glob.
+P.api        = P.cache .. "/api"
 P.liked_ids  = P.cache .. "/liked_ids.json"
 P.volume     = P.cache .. "/volume.json"
 P.recent     = P.cache .. "/recently_played.json"
@@ -380,25 +386,22 @@ Util.THUMB_ROWS = 3
 Util.THUMB_THREADS = 16
 
 -- Every rofi argument a thumbnail GRID needs, in one named place rather than
--- inline in the middle of rofi_dmenu's argument builder. Three things that only
--- ever travel together: the row count the window is sized by, the thread pool
--- the icon fetcher runs on, and the column override.
+-- inline in the middle of rofi_dmenu's argument builder. Two things that only
+-- ever travel together: the row count the window is sized by, and the thread
+-- pool the icon fetcher runs on. Rows come from the theme's own column count,
+-- capped at its `lines`. Appends in place and returns nothing -- args is the
+-- caller's list.
 --
--- `cols` overrides BOTH the theme and Util.THUMB_COLS: a caller with a handful
--- of tiles gets a tidier shape than the 5-wide default without a second theme
--- file existing to drift from style/thumbs.rasi. The row cap is the theme's
--- `lines`. Appends in place and returns nothing -- args is the caller's list.
-function Util.grid_args(args, n, cols)
-    cols = tonumber(cols) or Util.THUMB_COLS
-    local rows = math.ceil((tonumber(n) or 0) / cols)
+-- There used to be a `cols` override that emitted a -theme-str replacing the
+-- theme's column count. Its only two callers were the Collections and Podcasts
+-- grids, and they were the only grids whose tiles rendered blank; dropping the
+-- override was the bisect that fixed them, which left nothing able to reach it.
+function Util.grid_args(args, n)
+    local rows = math.ceil((tonumber(n) or 0) / Util.THUMB_COLS)
     if rows > Util.THUMB_ROWS then rows = Util.THUMB_ROWS end
     if rows < 1 then rows = 1 end
     args[#args+1] = "-l"; args[#args+1] = tostring(rows)
     args[#args+1] = "-threads"; args[#args+1] = tostring(Util.THUMB_THREADS)
-    if cols ~= Util.THUMB_COLS then
-        args[#args+1] = "-theme-str"
-        args[#args+1] = "listview { columns: " .. cols .. "; }"
-    end
 end
 
 -- Refreshes that cached_fetch asked for while the menu they belong to was
@@ -604,6 +607,7 @@ local THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_META, THEM
         Util.THEME_THUMBS = P.dir .. "/style/thumbs.rasi"
         Util.THEME_TRAIL  = P.dir .. "/style/trail.rasi"
         Util.THEME_PODS   = P.dir .. "/style/pods.rasi"
+        Util.THEME_MAIN   = P.dir .. "/style/main.rasi"
         Util.THEME_LISTEN = P.dir .. "/style/listen.rasi"
         return P.dir .. "/style/menu.rasi", P.dir .. "/style/lyrics.rasi",
                P.dir .. "/style/message.rasi", P.dir .. "/style/sub.rasi", P.dir .. "/style/binds.rasi",
@@ -638,6 +642,9 @@ local THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_META, THEM
     -- fields are all short values; having its own file means it can be restyled
     -- without touching Album and Track Details.
     Util.THEME_PODS = resolve(d.."/pods.rasi","pods")
+    -- The root grid's own theme. A copy of thumbs.rasi, so the five top-level
+    -- tiles can be restyled without dragging every other thumbnail grid along.
+    Util.THEME_MAIN = resolve(d.."/main.rasi","main")
     -- The Listen window. art.rasi at asset size: art.rasi fills the screen with
     -- a 1000px cover, and style/assets is 300x300, so sharing it would upscale
     -- the icon 3.3x.
@@ -666,7 +673,8 @@ local function ensure_cache()
     -- traverse in to reach them. One fork per process instead of per file.
     -- -m sets the mode at creation, so there is no window where it is 0755.
     os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics)
-        .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres") .. Util.art_kind_dirs()
+        .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.api)
+        .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres") .. Util.art_kind_dirs()
         .. "; mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
 
     -- Curations became Collections, and the art kind was renamed with it rather
@@ -679,8 +687,14 @@ local function ensure_cache()
     -- state costs no fork and no stat. Not migrated: renaming the files would
     -- have to rewrite the index to match, for artwork one background fetch
     -- replaces.
-    os.execute("rm -rf " .. shell_quote(P.art .. "/curations") .. " "
-        .. shell_quote(P.cache .. "/curation_art.json") .. " 2>/dev/null")
+    -- Header dumps moved into P.api, and the sweep only looks there now, so
+    -- anything the old layout left loose in the cache root as `.api_hdr.<pid>`
+    -- would never be collected -- 17 of them on this account at the time of the
+    -- move. Shares this shell rather than forking a second one, and the glob
+    -- stays OUTSIDE the quotes so the shell still expands it.
+    os.execute("{ rm -rf " .. shell_quote(P.art .. "/curations") .. " "
+        .. shell_quote(P.cache .. "/curation_art.json") .. ";"
+        .. " rm -f " .. shell_quote(P.cache) .. "/.api_hdr.*; } 2>/dev/null")
 
     -- The housekeeping sweeps below are throttled to once an hour by the mtime of
     -- a stamp file. They used to run in EVERY process -- including the --notify
@@ -716,7 +730,7 @@ local function ensure_cache()
         --
         -- One backgrounded shell for all three, rather than three.
         os.execute("{ find " .. shell_quote(P.art) .. " -name '*.tmp*' -mmin +10 -delete;"
-            .. " find " .. shell_quote(P.cache) .. " -maxdepth 1 -name '.api_hdr.*' -mmin +10 -delete;"
+            .. " find " .. shell_quote(P.api) .. " -maxdepth 1 -name 'hdr.*' -mmin +10 -delete;"
             .. " for d in " .. shell_quote(P.tmp) .. "/spoot.[0-9]*; do"
             .. " p=${d##*/spoot.};"
             .. " [ -d \"$d\" ] && [ ! -e \"/proc/$p\" ] && rm -rf \"$d\";"
@@ -768,7 +782,7 @@ end
 function Util.api_hdr_path()
     if not Util._api_hdr then
         ensure_cache()
-        Util._api_hdr = P.cache .. "/.api_hdr." .. tostring(Util.get_own_pid() or "x")
+        Util._api_hdr = P.api .. "/hdr." .. tostring(Util.get_own_pid() or "x")
     end
     return Util._api_hdr
 end
@@ -1276,7 +1290,14 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn, opts)
     -- since re-reading the copy it was spawned to replace would make it a no-op.
     if Util.revalidating then
         local fresh = fetch_fn()
-        if fresh ~= nil and not (type(fresh) == "table" and next(fresh) == nil) then
+        -- Empty is written here for the same reason it is below: failure already
+        -- signals itself as nil, so {} is a successful empty result and dropping
+        -- it leaves the previous non-empty file in place forever. This path is
+        -- the one that matters most for it -- saved_shows, saved_episodes,
+        -- my_playlists and liked_tracks all revalidate, so a shelf emptied on
+        -- ANOTHER device only ever arrives through here. Changes made inside
+        -- spoot bust the file outright (Util.lib_write) and never reach this.
+        if fresh ~= nil then
             mem_set(key, fresh, ttl)
             if disk_path then disk_set(disk_path, fresh, opts.tag) end
         end
@@ -1305,12 +1326,23 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn, opts)
     -- caller is decorating a menu, not opening one, and must not pay for a fetch.
     if not Util.cache_only then
         v = fetch_fn()
+        -- An empty result used to be thrown away here, on the theory that it
+        -- probably meant a failed request. It does not: FAILURE ALREADY SIGNALS
+        -- ITSELF AS NIL. Util.paged_fetch returns nil the moment a request fails
+        -- and {} only on a successful empty page, and every library loader
+        -- propagates that. Discarding {} meant the previous non-empty file
+        -- survived forever, so unfollowing every podcast left the Podcasts tile
+        -- wearing a cover for a shelf that no longer had anything on it -- and
+        -- made "this list is genuinely empty" impossible to know, which is what
+        -- Util.shelf_head needs to dim a row.
+        --
+        -- Loaders that must not report {} already convert it to nil themselves,
+        -- inside their own fetch_fn: api_get_top_tracks and Util.api_get_top_artists
+        -- use nil to fall through medium_term -> long_term -> short_term. They
+        -- never hand {} to this function, so nothing here changes for them.
         if v ~= nil then
-            local empty = type(v) == "table" and next(v) == nil
-            if not empty then
-                mem_set(key, v, ttl)
-                if disk_path then disk_set(disk_path, v, opts.tag) end
-            end
+            mem_set(key, v, ttl)
+            if disk_path then disk_set(disk_path, v, opts.tag) end
         end
     end
     -- Nothing came back. A list the user is looking at is better served by what we
@@ -1640,7 +1672,7 @@ end
 -- it was really there for is about view identity, not string equality: "Lyrics"
 -- reads better than a repeated track name because Lyrics is a DETAIL of the step
 -- above it, which is now stated directly by label_only (see reg).
-function Util.parts_from_stack(stack, extra)
+function Util.parts_from_stack(stack)
     local parts = {"Main"}
     if stack then
         for _, e in ipairs(stack) do
@@ -1657,17 +1689,16 @@ function Util.parts_from_stack(stack, extra)
             end
         end
     end
-    if extra and extra ~= "" then parts[#parts+1] = extra end
     return parts
 end
 
-function Util.breadcrumb_parts(extra)
-    return Util.parts_from_stack(_session_stack, extra)
+function Util.breadcrumb_parts()
+    return Util.parts_from_stack(_session_stack)
 end
 
 -- The arrow between trail steps. Darker and heavier than the step names it
 -- separates, so the names read first and the arrows recede into punctuation --
--- the whole crumb is otherwise one flat #6a707f, arrows included.
+-- the whole crumb is otherwise one flat Util.DIM, arrows included.
 --
 -- One definition shared by the two places a trail is drawn: the breadcrumb in
 -- every menu's mesg, and the rows of the Trail Steps menu. The literal
@@ -1677,7 +1708,7 @@ function Util.crumb_arrow(s)
     return Util.markup('<span foreground="#454a55"><b>') .. s .. Util.markup('</b></span>')
 end
 
-local function breadcrumb(extra)
+local function breadcrumb()
     local parts = {}
     -- Archived trails are rebuilt from their saved STACK, not from their saved
     -- label string. session_clear writes that label with a plain " > ", so
@@ -1699,7 +1730,7 @@ local function breadcrumb(extra)
             parts[#parts+1] = type(t) == "table" and t.label or t
         end
     end
-    parts[#parts+1] = table.concat(Util.breadcrumb_parts(extra), Util.crumb_arrow(" > "))
+    parts[#parts+1] = table.concat(Util.breadcrumb_parts(), Util.crumb_arrow(" > "))
     return table.concat(parts, "  " .. Util.markup('<span foreground="#a3a9bd">\u{F17B7}</span>') .. "  ")
 end
 
@@ -1725,7 +1756,7 @@ local format_entries
 local api_get_playlist_tracks
 
 local function status_mesg()
-    local DIM = "#6a707f"
+    local DIM = Util.DIM
     local r
     if repeat_state == "track" then r = Util.markup('<span foreground="#fab387">\u{F0458}</span>')
     elseif repeat_state == "context" then r = "\u{F0456}"
@@ -1773,7 +1804,6 @@ local function rofi_dmenu(entries, opts)
     -- between main.rasi and menu.rasi, and with one of them gone it selected
     -- between a thing and itself at 21 call sites.
     local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or THEME_MENU)
-    local eh       = opts.eh
     local sel      = opts.sel
     -- Blanket cursor memory: any menu given a pos_key restores the row it was
     -- last left on and records the row chosen, on disk, so it survives both
@@ -1930,11 +1960,10 @@ local function rofi_dmenu(entries, opts)
     if opts.custom == false then args[#args+1] = "-no-custom" end
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
     if by_index then args[#args+1] = "-format"; args[#args+1] = "i" end
-    if eh then args[#args+1] = "-eh"; args[#args+1] = tostring(eh) end
     -- Grids only: \0icon rows come from Util.album_thumbs and nowhere else, so
     -- a text list has no icons to lose and no reason to carry -threads.
     if opts.thumbs then
-        Util.grid_args(args, #(entries or {}), opts.thumbs_cols)
+        Util.grid_args(args, #(entries or {}))
     end
     if sel and sel > 0 then args[#args+1] = "-selected-row"; args[#args+1] = tostring(sel) end
     if not opts.no_status and not opts.thumbs then
@@ -1945,9 +1974,9 @@ local function rofi_dmenu(entries, opts)
     -- so printing it above them says nothing, and the line is better spent on
     -- what Tab does from where you are standing.
     if not opts.no_crumb then
-        local crumb = breadcrumb(opts.crumb)
+        local crumb = breadcrumb()
         if crumb then
-            if markup then crumb = Util.markup('<span foreground="#6a707f">') .. crumb .. Util.markup('</span>') end
+            if markup then crumb = Util.dim(crumb) end
             mesg = (mesg and (mesg .. "\n") or "") .. crumb
         end
     end
@@ -3604,10 +3633,14 @@ local function load_liked_tracks()
         Util.write_liked_ids(t)
         fresh = true
         return t
-    end, {stale_ok = true, revalidate = "library"}) or {}
+    end, {stale_ok = true, revalidate = "library"})
+    -- The `or {}` this used to end on is gone on purpose: it turned "not cached"
+    -- into "empty", and Util.shelf_head has to tell those apart to know whether
+    -- the Liked Tracks row is genuinely empty or merely unread. The two callers
+    -- that need a table now say so themselves.
     -- The artist index is per-process, so it has to exist before the first return
     -- of a run -- and be rebuilt when the list underneath it just changed.
-    if fresh or not liked_by_artist_id then build_liked_artist_index(tracks) end
+    if fresh or not liked_by_artist_id then build_liked_artist_index(tracks or {}) end
     return tracks
 end
 
@@ -3882,6 +3915,19 @@ function Util.now_playing(txt)
     return Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>')
 end
 
+-- Its counterpart: the grey every menu uses to say "here, but not available" --
+-- Seek with nothing playing, an unavailable track, the breadcrumb's arrows, a
+-- container whose shelf is empty. The colour was spelled out at ten sites and
+-- had to be kept in step by hand; one of them said `color` and the rest
+-- `foreground`, which pango treats alike but a reader does not.
+-- The colour itself is published too: a few callers build a span incrementally
+-- (the trail hint, the queue separator) and open it without closing it on the
+-- same line, so they cannot wrap a finished string.
+Util.DIM = "#6a707f"
+function Util.dim(txt)
+    return Util.markup('<span foreground="' .. Util.DIM .. '">') .. txt .. Util.markup('</span>')
+end
+
 -- Coarse duration for list rows. Deliberately not the %d:%02d the details sheet
 -- and the seek bar use: those describe a position inside a track, where seconds
 -- are the unit that matters, and a 97-minute podcast rendered that way reads as
@@ -3932,7 +3978,7 @@ function Util.display_episode(item, hide_artist, hide_liked, hide_single_artist)
         -- Same dim as an unplayable track: one for "cannot play", one for
         -- "already heard". Both mean "skip past this one", which is what the
         -- colour is telling you.
-        txt = Util.markup('<span color="#6a707f">') .. txt .. Util.markup('</span>')
+        txt = Util.dim(txt)
     end
     return txt
 end
@@ -3952,7 +3998,7 @@ display_track = function(item, hide_artist, hide_liked, hide_single_artist)
         -- Not licensed in our market, so it will not play. Same dim as the
         -- disabled action rows. Never applied to the current track: if it IS
         -- playing, whatever the cache says, green wins.
-        txt = Util.markup('<span color="#6a707f">') .. txt .. Util.markup('</span>')
+        txt = Util.dim(txt)
     end
     return txt
 end
@@ -6406,7 +6452,7 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
     -- Same contract as view_actions' rebuild_actions: volatile labels derived
     -- from live state on every draw, and rows dimmed rather than removed so a
     -- fixed index never shifts under the cursor.
-    local DIM = '<span color="#6a707f">'
+    local DIM = '<span foreground="' .. Util.DIM .. '">'
     local function rebuild_actions()
         local playing_this = item.id ~= nil and item.id == current_id
         actions[1]        = playing_this and (is_playing and "Pause" or "Resume")
@@ -6552,7 +6598,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- than patched by hand in the selection branches, so they stay right when a
     -- nested action menu (Alt+Return from here) plays or likes this same track
     -- and rofi_dmenu redraws without this loop running.
-    local DIM = '<span color="#6a707f">'
+    local DIM = '<span foreground="' .. Util.DIM .. '">'
     local function rebuild_actions()
         local playing_this = item.id ~= nil and item.id == current_id
         is_liked = item.id and liked[item.id]
@@ -6874,7 +6920,7 @@ function Util.search_page_pick(results, page)
         local row = (pg.icon ~= false and Util.type_icon(pg.icon or pg.key) or "")
             .. pg.label .. SEP .. n
         if n == 0 then
-            row = Util.markup('<span color="#6a707f">') .. row .. Util.markup('</span>')
+            row = Util.dim(row)
         elseif i == page then
             row = Util.markup('<span foreground="#b6e0a4">') .. "\u{f00c} " .. row .. Util.markup('</span>')
         end
@@ -6955,7 +7001,7 @@ function Util.open_playlist_actions(pl, on_change)
             end
         end
         local is_empty = total == 0 and not (pl.owner and pl.owner.id == "spotify")
-        local acts = {is_empty and Util.markup('<span color="#6a707f">Playlist is empty</span>')
+        local acts = {is_empty and Util.dim("Playlist is empty")
                       or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy Web Link"}
         while true do
             local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), custom=false,
@@ -7588,7 +7634,7 @@ end)
 end
 
 local function view_liked_tracks()
-    local tracks = load_liked_tracks()
+    local tracks = load_liked_tracks() or {}
     if #tracks == 0 then rofi_message("No liked tracks"); return end
     Util.scope({view="liked"}, function()
     local entries = format_entries(tracks, nil, true)
@@ -7682,11 +7728,17 @@ Util.PODCAST_TOPICS = {
 Util.PODCAST_TILES = (function()
     local t = {
         {key = "followed", label = "Followed", open = function() Util.view_saved_shows() end,
-         art = function() return (Util.load_saved_shows() or {})[1] end},
+         art = function() return Util.shelf_head(Util.load_saved_shows) end},
+        -- The SHOW's cover, not the newest episode's. Util.latest_episodes
+        -- asks shows/{id}/episodes once PER FOLLOWED SHOW -- twenty requests to
+        -- decorate one tile, paid again by every warm. An episode's artwork
+        -- falls through to its parent show anyway (Util.src_images), so the
+        -- image drawn is usually the identical file for none of the cost. The
+        -- menu itself still builds the real feed.
         {key = "latest",   label = "Latest Episodes", open = function() Util.view_latest_episodes() end,
-         art = function() return Util.latest_episodes()[1] end},
+         art = function() return Util.shelf_head(Util.load_saved_shows) end},
         {key = "saved",    label = "Saved Episodes", open = function() Util.view_saved_episodes() end,
-         art = function() return (Util.load_saved_episodes() or {})[1] end},
+         art = function() return Util.shelf_head(Util.load_saved_episodes) end},
         {key = "search",   label = "Search", fallback = Util.ART_GENRE,
          open = function() Util.podcast_search_prompt() end},
     }
@@ -7698,8 +7750,10 @@ Util.PODCAST_TILES = (function()
             label = topic,
             open = function() Util.open_podcast_search(topic) end,
             art = function()
-                local r = api_search(topic)
-                return r and r.shows and r.shows[1]
+                return Util.shelf_head(function()
+                    local r = api_search(topic)
+                    return r and r.shows
+                end)
             end,
         }
     end
@@ -7828,15 +7882,15 @@ end
 -- first open where the shelf-backed ones cannot.
 Util.LIBRARY_ROWS = {
     {key = "liked",     label = "Liked Tracks",     open = function() view_liked_tracks() end,
-     art = function() return (load_liked_tracks())[1] end},
+     art = function() return Util.shelf_head(load_liked_tracks) end},
     {key = "top",       label = "Top Tracks",       open = function() view_top_tracks() end,
-     art = function() return (api_get_top_tracks() or {})[1] end},
+     art = function() return Util.shelf_head(api_get_top_tracks) end},
     {key = "albums",    label = "Saved Albums",     open = function() view_saved_albums() end,
-     art = function() return (load_saved_albums())[1] end},
+     art = function() return Util.shelf_head(load_saved_albums) end},
     {key = "artists",   label = "Followed Artists", open = function() view_followed_artists() end,
-     art = function() return (load_followed_artists())[1] end},
+     art = function() return Util.shelf_head(load_followed_artists) end},
     {key = "playlists", label = "Playlists",        open = function() view_playlists() end,
-     art = function() return (api_get_my_playlists() or {})[1] end},
+     art = function() return Util.shelf_head(api_get_my_playlists) end},
 }
 
 -- The account name is resolved per call rather than baked into the spec: it
@@ -7889,25 +7943,25 @@ Util.COLLECTION_TILES = {
     -- until you follow one.
     {key = "podcasts",       label = "Podcasts",
      open = function() Util.view_podcasts() end,
-     art = function() return Util.load_saved_shows()[1] end},
+     art = function() return Util.shelf_head(Util.load_saved_shows) end},
     {key = "madeforyou",     label = "Made For You",
      open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.made_for_you, "Made For You") end,
-     art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.made_for_you) or {})[1] end},
+     art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.made_for_you) end},
     {key = "discoverweekly", label = "Discover Weekly",
      open = function() Util.open_discover_weekly() end,
-     art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.discover) or {})[1] end},
+     art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.discover) end},
     {key = "topartists",     label = "Top Artists",
      open = function() Util.view_top_artists() end,
-     art = function() return (Util.api_get_top_artists() or {})[1] end},
+     art = function() return Util.shelf_head(Util.api_get_top_artists) end},
     {key = "featured",       label = "Featured Playlists",
      open = function() Util.open_featured_playlists() end,
-     art = function() local d = api_get_featured_playlists(); return d and d.items and d.items[1] end},
+     art = function() return Util.shelf_head(function() local d = api_get_featured_playlists(); return d and d.items end) end},
     {key = "newreleases",    label = "New Releases",
      open = function() view_new_releases() end,
-     art = function() return (api_get_new_releases() or {})[1] end},
+     art = function() return Util.shelf_head(api_get_new_releases) end},
     {key = "charts",         label = "Charts",
      open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.charts, "Charts") end,
-     art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.charts) or {})[1] end},
+     art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.charts) end},
     -- The two picker rows. Discover by Genre is a picker over 126 genre names
     -- and Categories one over Spotify's browse categories, not shelves of
     -- objects, so there is nothing whose cover could stand for either -- the
@@ -7925,12 +7979,12 @@ Util.COLLECTION_TILES = {
 --
 -- Runs entirely under Util.cache_only: reading every shelf for real would cost a
 -- dozen requests before the grid could draw, which is the exact cost this shape
--- exists to remove. A shelf never opened simply yields no object -- and that is
--- reported as `art_unknown` rather than as "no artwork", because Util.keyed_art
--- treats the second as proof the cover was withdrawn and deletes it. The second
--- return value tells the caller to warm the cold shelves in the background. The
--- exception is a row declaring `art_definite`, whose nil means "there is nothing
--- here" rather than "not read yet" -- see the loop below.
+-- exists to remove. A shelf never opened yields "unknown", which is reported as
+-- `art_unknown` rather than as "no artwork", because Util.keyed_art treats the
+-- second as proof the cover was withdrawn and deletes it. A shelf that WAS read
+-- and turned out to be empty is the opposite, and wants exactly that deletion --
+-- see Util.shelf_head, which is what tells the two apart. The second return
+-- value tells the caller to warm the cold shelves in the background.
 -- Where a tile's source actually keeps its cover, by kind: an album, artist,
 -- playlist or show carries its own, an episode's is on its parent show, and a
 -- TRACK's is on its album. Same fall-through thumb_resolve makes for ordinary
@@ -7963,17 +8017,26 @@ Util.TILE_LABEL_MAX = 22
 --
 -- Guarded, like the art resolvers: these run against caches that may be
 -- half-populated, and one row's bad day must not take the grid down.
-function Util.tile_label(t)
+-- `res` is the row's resolved entry from Util.shelf_tiles, when the caller has
+-- one. It carries art_empty: the shelf behind this row was read and holds
+-- nothing, so the caption is dimmed the same way Seek dims with nothing playing.
+-- A row that is merely UNREAD is never dimmed -- claiming a list is empty
+-- because we have not looked yet would be a guess.
+function Util.tile_label(t, res)
     if type(t) ~= "table" then return "?" end
+    local empty = res and res.art_empty
     if t.name then
         local ok, n, live = pcall(t.name)
         if ok and type(n) == "string" and trim(n) ~= "" then
             n = truncate_text(trim(n), Util.TILE_LABEL_MAX)
-            if live then n = Util.now_playing(Util.transport_glyph() .. n) end
-            return n
+            -- Green wins over grey, exactly as it does for a track row: if this
+            -- row is what is playing, that is the more useful thing to say.
+            if live then return Util.now_playing(Util.transport_glyph() .. n) end
+            return empty and Util.dim(n) or n
         end
     end
-    return t.label or "?"
+    local lbl = t.label or "?"
+    return empty and Util.dim(lbl) or lbl
 end
 
 function Util.src_images(src)
@@ -7985,31 +8048,68 @@ function Util.src_images(src)
     return nil
 end
 
+-- What a container row actually learned about the shelf behind it.
+--
+-- `list[1]`, which every tile used to take, collapses three different answers
+-- into one nil: the shelf is not cached, the shelf is cached and EMPTY, and the
+-- shelf's first entry simply carries no artwork. They want opposite treatment --
+-- one must leave the existing cover alone, one must replace it with the row's
+-- asset and dim the row, one must replace it and NOT dim -- so the state comes
+-- back alongside the item.
+--
+--   item, "ok"       first entry that actually carries artwork
+--   nil,  "noart"    entries, but not one with artwork: fallback, do NOT dim
+--   nil,  "empty"    read, and genuinely nothing in it: fallback, and dim
+--   nil,  "unknown"  nothing was learned: leave the existing art alone
+--
+-- Scanning for the first ARTED entry rather than the first entry costs nothing
+-- (the list is already decoded) and is what stops a coverless row at the head of
+-- a shelf from blanking the whole tile. It is also the entire fetch budget for a
+-- container: one cover, never a walk into what the container holds.
+--
+-- Extra arguments are forwarded to the loader, so a shelf that takes one
+-- (a category id) needs no closure at the call site.
+function Util.shelf_head(load, ...)
+    if type(load) ~= "function" then return nil, "unknown" end
+    -- Guarded like every other shelf read: these run against half-populated
+    -- caches by design, and one shelf's bad day must not take the grid down.
+    local ok, list = pcall(load, ...)
+    if not ok or type(list) ~= "table" then return nil, "unknown" end
+    for _, it in ipairs(list) do
+        if Util.src_images(it) then return it, "ok" end
+    end
+    return nil, (#list == 0) and "empty" or "noart"
+end
+
 function Util.shelf_tiles(list)
     local was = Util.cache_only
     Util.cache_only = true
     local tiles, cold = {}, false
     for i, t in ipairs(list or {}) do
-        local src, unknown = nil, false
+        local src, state = nil, nil
         if t.art then
             -- Guarded: these run against half-populated caches by design, and
             -- one shelf's bad day must not take the whole grid down.
-            local ok, v = pcall(t.art)
-            src = ok and v or nil
-            -- For most rows a nil is a GAP -- the shelf behind them has not been
-            -- read yet -- so it is reported as unknown and the grid is warmed.
-            -- A row declaring `art_definite` means the opposite: its nil is an
-            -- ANSWER. Playback returns nil when nothing is playing, and warming
-            -- cannot conjure a current track, so calling that a gap made
-            -- Util.keyed_art go on serving art/main/playback.jpg -- the cover of
-            -- whatever played LAST -- on every cold start, and spawned a warmer
-            -- per draw that could never fill it. A thrown error is still a gap
-            -- either way, which is what `ok` separates from a clean nil.
-            if not src then
-                unknown = not (ok and t.art_definite)
-                cold = cold or unknown
-            end
+            local ok, v, st = pcall(t.art)
+            if ok then src, state = v, st else src, state = nil, "unknown" end
+            -- A row that answers with a bare value and no state gets the
+            -- CONSERVATIVE reading: a value is "ok", and a nil is "unknown", not
+            -- "empty". Defaulting a bare nil to empty would have dimmed the
+            -- account row and deleted its avatar whenever the profile simply was
+            -- not cached yet, because api_get_me answers nil for that too. A row
+            -- that genuinely means "there is nothing here" says so itself -- see
+            -- the Playback tile -- and Util.shelf_head always states its case.
+            if not state then state = src and "ok" or "unknown" end
         end
+        -- Only an unread shelf leaves the existing cover alone and asks for a
+        -- warm. "empty" and "noart" are ANSWERS: they fall through to
+        -- Util.keyed_art's artwork-withdrawn path, which drops the stale file
+        -- and returns the fallback -- which is exactly what a container whose
+        -- contents went away should show. Warming them is pointless besides;
+        -- nothing it fetches could fill a shelf that is genuinely empty, and it
+        -- was being spawned on every draw for precisely that case.
+        local unknown = (state == "unknown") or nil
+        if unknown then cold = true end
         -- An episode's cover lives on the show patched onto it by
         -- Util.api_get_show, so fall through to that when it has none of its own.
         -- A tile with no cover of its own can be given one by DROPPING A FILE:
@@ -8021,7 +8121,10 @@ function Util.shelf_tiles(list)
         if not cache_exists(asset) then asset = nil end
         tiles[i] = {id = t.key, images = Util.src_images(src),
                     art_fallback = asset or t.fallback,
-                    art_unknown = unknown or nil}
+                    art_unknown = unknown,
+                    -- Read by the caption builders, which dim a row whose shelf
+                    -- was read and found to hold nothing.
+                    art_empty = (state == "empty") or nil}
     end
     Util.cache_only = was
     return tiles, cold
@@ -8035,8 +8138,8 @@ function Util.view_tile_grid(spec)
     local list = spec.tiles
     -- keys, not row indexes, are what the cursor is remembered by -- so a list
     -- can be reordered without moving anyone\'s cursor.
-    local items, keys = {}, {}
-    for i, t in ipairs(list) do items[i] = Util.tile_label(t); keys[i] = t.key end
+    local keys = {}
+    for i, t in ipairs(list) do keys[i] = t.key end
     Util.scope({view = spec.view}, function()
     local pk = spec.view .. ":"
     local pre_sel = Util.pos_row(pk, keys)
@@ -8046,36 +8149,39 @@ function Util.view_tile_grid(spec)
     -- this one stays as fast as it was when the menu was plain text.
     if cold then Util.spawn_shelf_warm(spec.kind) end
     local entries = {}
+    -- Re-resolved per draw, not per open: a tile named from live state (the
+    -- account, the playing track) has to follow it, and a row asks its resolved
+    -- tile whether the shelf behind it turned out to be empty.
+    local function labels()
+        for i, t in ipairs(list) do entries[i] = Util.tile_label(t, tiles[i]) end
+    end
     -- Re-resolves the tiles rather than re-decorating the ones this draw started
     -- with. Those carry no images for a shelf that was cold, so redecorating them
     -- could only ever reproduce the same placeholders -- which made F5 a no-op
     -- and left backing out and reopening as the only way to see art the warmer
     -- had already written.
+    --
+    -- Captions are rebuilt here too. Re-resolving `tiles` without them meant a
+    -- refresh picked up new artwork but not a row that had just emptied or
+    -- filled, so a shelf could change under an open grid and only the picture
+    -- would say so.
     local function redraw()
         tiles = Util.shelf_tiles(list)
+        labels()
         Util.album_thumbs(entries, tiles, spec.kind, pre_sel, spec.view .. "||")
         return entries
     end
     while true do
-        -- Re-resolved per draw, not per open: a tile named from live state (the
-        -- account, the playing track) has to follow it.
-        for i, t in ipairs(list) do entries[i] = Util.tile_label(t) end
+        labels()
         Util.album_thumbs(entries, tiles, spec.kind, pre_sel, spec.view .. "||")
         -- by_index, like every other thumbnail grid here: album_thumbs appends a
         -- \0icon field to each row, so matching rofi\'s echo back against the row
         -- TEXT is exactly the comparison that suffix would break.
         local idx = rofi_dmenu(entries, {prompt=spec.prompt, mesg=spec.prompt,
             custom=false, by_index=true, no_status=true, markup=true, sel=pre_sel,
-            -- No thumbs_cols. These two were the only callers that passed it,
-            -- which made them the only grids sending rofi a
-            -- `-theme-str "listview { columns: N; }"` on top of the theme -- and
-            -- the only two whose tiles rendered blank despite Util.thumb_log
-            -- reporting every row resolved to a real cached file
-            -- (cached=25, missing=0, placeholders=0). Drawing at the theme's own
-            -- 5 columns, like every grid that works, is the bisect.
             thumbs=true, refresh=redraw})
         if not idx then return end
-        if idx >= 1 and idx <= #items then
+        if idx >= 1 and idx <= #list then
             pre_sel = idx - 1
             Util.pos_put(pk, keys[idx])
             if list[idx].open then list[idx].open() end
@@ -8424,15 +8530,19 @@ local function view_playback()
         local function add(label, key) items[#items+1] = label; keys[#keys+1] = key end
         local play_label = current_track and (is_playing and "Pause" or "Resume") or nil
         if play_label then add(play_label, "play") end
-        add(current_track and "Seek" or Util.markup('<span color="#6a707f">Seek</span>'), "seek")
+        add(current_track and "Seek" or Util.dim("Seek"), "seek")
         add("Next Track", "next")
         add("Previous Track", "prev")
         add("Shuffle " .. (is_shuffle and Util.markup("<b>ON</b>") or Util.markup("<b>OFF</b>")), "shuffle")
         add("Repeat " .. (repeat_state=="off" and Util.markup("<b>OFF</b>") or (repeat_state=="track" and Util.markup("<b>TRACK</b>") or Util.markup("<b>CONTEXT</b>"))), "repeat")
         add("Your Queue", "queue")
-        add("Recently Played", "recent")
-        add("Listen\u{2026}", "listen")
+        -- Dimmed when there is genuinely nothing in it. A local file read, not
+        -- a request -- unlike Your Queue, which is me/player/queue and would
+        -- cost one on every draw to learn the same thing.
+        Util.recent_reload()
+        add(#recent_tracks > 0 and "Recently Played" or Util.dim("Recently Played"), "recent")
         add("Open Web Link", "openurl")
+        add("Listen\u{2026}", "listen")
         return items
     end
     -- Hoisted out of the loop: re-deriving it each pass read the stored value
@@ -8454,6 +8564,13 @@ local function view_playback()
                 pre_sel = i - 1; Util.pos_put(pb_key, keys[i]); break
             end
         end
+        -- Compared plain from here down. A dimmed row echoes back carrying its
+        -- markup, so `si == "Recently Played"` would silently stop matching the
+        -- moment the row went grey -- the branch would vanish exactly when the
+        -- user most needs to be told why. Stripping once keeps every branch
+        -- below written in the label it displays. Rows that must stay inert when
+        -- dimmed already guard themselves (Seek checks current_track).
+        si = Util.strip_markup(si)
         if si == "Pause" then
             if not Util.transport(false) then rofi_message("Failed to pause") end
         elseif si == "Resume" then
@@ -8901,7 +9018,7 @@ function Util.menu_hist_rows(live)
             table.remove(parts, 1)
             local row = leaf
             if #parts > 0 then
-                row = row .. Util.markup('<span foreground="#6a707f">') .. "  \u{F01D8}  "
+                row = row .. Util.markup('<span foreground="' .. Util.DIM .. '">') .. "  \u{F01D8}  "
                     .. table.concat(parts, " > ") .. Util.markup("</span>")
             end
             rows[#rows+1] = row
@@ -8994,14 +9111,14 @@ function Util.view_trail_jump(stack)
             elseif have_trail then
                 other = "trail"
             end
-            -- All one dimmed grey, the same #6a707f the breadcrumb uses for a
+            -- All one dimmed grey, the same Util.DIM the breadcrumb uses for a
             -- trail step. This line is a footnote about a key, not content: it
             -- should sit behind the rows, not compete with them.
             -- Names the menu Tab goes TO, so the line reads as the pair of
             -- titles rather than as prose describing them. With one side empty
             -- there is nowhere to switch to, and it says that instead of
             -- advertising a dead key.
-            local hint = Util.markup('<span foreground="#6a707f">') .. "tab  "
+            local hint = Util.markup('<span foreground="' .. Util.DIM .. '">') .. "tab  "
                 .. (other == "history" and "trail history"
                  or other == "trail" and "trail steps"
                  or (mode == "trail" and "nothing closed yet" or "no trail to go back to"))
@@ -9238,10 +9355,15 @@ Util.MAIN_TILES = {
         if not current_track then return nil end
         return current_track.name, true
      end,
-     -- Nothing playing is an answer, not an unread shelf: fall through to
-     -- style/assets/playback.png instead of the last track's cover.
-     art_definite = true,
-     art  = function() return current_track end},
+     -- States its case rather than returning a bare nil: nothing playing is an
+     -- ANSWER, not an unread shelf, so this falls through to
+     -- style/assets/playback.png instead of the last track's cover. It is not
+     -- dimmed for it -- Playback is always openable -- which is why the state is
+     -- "noart" and not "empty".
+     art  = function()
+        if current_track then return current_track, "ok" end
+        return nil, "noart"
+     end},
     -- No `art`: this one wears style/assets/collections.png rather than borrowing
     -- the cover of whatever happens to sit first on a Collections shelf. A row
     -- with no art source at all resolves straight to its drop-in asset, and
@@ -9333,9 +9455,14 @@ local function main()
         -- so this list is only correct for as long as that has not changed.
         -- Captions resolved per draw: two of these rows name themselves from
         -- live state -- the account, and the track currently playing.
+        -- Tiles first, captions second: a caption asks its resolved tile whether
+        -- the shelf behind it turned out to be empty, so it has to exist by then.
         local entries = {}
-        for i, t in ipairs(Util.MAIN_TILES) do entries[i] = Util.tile_label(t) end
         local tiles, cold = Util.shelf_tiles(Util.MAIN_TILES)
+        local function labels()
+            for i, t in ipairs(Util.MAIN_TILES) do entries[i] = Util.tile_label(t, tiles[i]) end
+        end
+        labels()
         if cold then Util.spawn_shelf_warm("main") end
         Util.album_thumbs(entries, tiles, "main", focus, main_key)
         -- by_index, like every other thumbnail grid: album_thumbs appends a
@@ -9345,11 +9472,17 @@ local function main()
         --
         -- `sel` is set only on the first draw; passing nil leaves rofi_dmenu's
         -- own pos_key restore in charge, which is what every later draw wants.
+        -- `theme` overrides only the theme choice; `thumbs` still selects the
+        -- grid's row count, icon thread pool and status-line suppression.
         local sel = rofi_dmenu(entries, {prompt="Spotify", mesg=mesg, pos_key=main_key,
             custom=false, by_index=true, markup=true, thumbs=true,
+            theme=Util.THEME_MAIN,
             no_status=not current_track, sel=first_sel, alt_select=true,
             refresh=function()
                 tiles = Util.shelf_tiles(Util.MAIN_TILES)
+                -- Captions too, not just art: a redraw is how the grid picks up
+                -- a shelf that emptied (or filled) since this draw began.
+                labels()
                 Util.album_thumbs(entries, tiles, "main", Util.pos_get(main_key), main_key)
                 return entries
             end})
@@ -9864,12 +9997,14 @@ Util.SHELF_KINDS = {
 }
 
 -- The pid file below stops two warmers running AT ONCE; this stops one running
--- on every single open. Util.shelf_tiles reports `cold` whenever a tile's art
--- fetcher came back empty, and it cannot tell "shelf not cached yet" from
--- "shelf is genuinely empty" -- so a Podcasts grid with nothing followed, or
--- Collections' featured row whose endpoint is documented as one every caller must
--- tolerate answering nil, is cold forever and spawned a process each time the
--- grid was drawn. A warm that just ran cannot have anything new to fetch.
+-- on every single open, for the plain reason that a warm which just ran cannot
+-- have anything new to fetch.
+--
+-- It used to be load-bearing for a second reason: Util.shelf_tiles could not
+-- tell "shelf not cached yet" from "shelf is genuinely empty", so a Podcasts
+-- grid with nothing followed reported `cold` forever and spawned a process on
+-- every draw. Util.shelf_head tells those apart now and `cold` is set only for
+-- an unread shelf, so this is back to being an ordinary rate limit.
 function Util.spawn_shelf_warm(kind)
     if not Util.SHELF_KINDS[kind] then return end
     local stamps = disk_get(P.warm) or {}
