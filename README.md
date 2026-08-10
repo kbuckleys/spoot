@@ -48,7 +48,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```spotifyd``` &nbsp; ```rofi 1.7+``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```perl``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font```
 
-> JetBrainsMono is spoot's font of choice for three very important reasons; legibility, near-perfect dimension uniformity across different language scripts, and lastly; nerd icons support. While you may use whatever typeface you want, **you need AT LEAST one nerd font installed**, otherwise you'll see no iconography
+> JetBrainsMono is spoot's font of choice for three very important reasons; legibility, near-perfect dimension uniformity across different language scripts, and lastly; nerd icons support. While you may use whatever typeface you want, **you need AT LEAST one nerd font installed**, otherwise; iconography will be artifacted with no fallback
 
 # Installation
 First things first; spoot is designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life -- as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow the first step in particular for an optimal experience.
