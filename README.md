@@ -46,17 +46,9 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
-- Wayland session
-- Spotify Premium ```no way around it```
-- spotifyd
-- rofi 1.7+
-- lua 5.4+
-- lua-cjson
-- playerctl
-- curl
-- perl
-- wl-clipboard
-- JetBrainsMono Nerd Font
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```spotifyd``` &nbsp; ```rofi 1.7+``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```perl``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font```
+
+> While you may use whatever typeface you want, **you need AT LEAST one nerd font installed**, otherwise you'll see no iconography. In addition, JetBrainsMono is spoot's font of choice for three very important reasons; legibility, near-perfect dimension uniformity across different language scripts, and lastly; nerd icons support
 
 # Installation
 First things first; spoot is designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life -- as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow the first step in particular for an optimal experience.
