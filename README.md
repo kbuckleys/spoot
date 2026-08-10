@@ -70,26 +70,26 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>f5</kbd></td><td>grid redraw failsafe (you'll probably never use this)</td><td>Universal</td></tr>
-      <tr><td><kbd>tab</kbd></td><td>Trail Menu / History -- Search type filter</td><td>Contextual</td></tr>
-      <tr><td><kbd>return</kbd></td><td>Select -- play/pause/resume selected item</td><td>Contextual</td></tr>
-      <tr><td><kbd>delete</kbd></td><td>Delete an entry in search or trail history</td><td>Contextual</td></tr>
-      <tr><td><kbd>escape</kbd></td><td>Collapse the current menu</td><td>Universal</td></tr>
-      <tr><td><kbd>backspace</kbd></td><td>Clear filter / Delete input / Back one level</td><td>Universal</td></tr>
-      <tr><td><kbd>alt = / -</kbd></td><td>Quick seek +10s / -10s</td><td>Universal</td></tr>
-      <tr><td><kbd>shift return</kbd></td><td>Hovered item's Action Menu</td><td>Contextual</td></tr>
-      <tr><td><kbd>alt return</kbd></td><td>Jump to current track's Action Menu</td><td>Universal</td></tr>
-      <tr><td><kbd>alt delete</kbd></td><td>Clear session</td><td>Universal</td></tr>
-      <tr><td><kbd>alt space</kbd></td><td>Jump to Main Menu</td><td>Universal</td></tr>
-      <tr><td><kbd>alt e</kbd></td><td>Jump to Seek menu</td><td>Universal</td></tr>
-      <tr><td><kbd>alt l</kbd></td><td>Jump to Liked Tracks</td><td>Universal</td></tr>
-      <tr><td><kbd>alt p</kbd></td><td>Jump to Recently Played</td><td>Universal</td></tr>
-      <tr><td><kbd>alt y</kbd></td><td>Jump to current track's lyrics</td><td>Universal</td></tr>      
-      <tr><td><kbd>alt a</kbd></td><td>View albumart of current track</td><td>Universal</td></tr>
-      <tr><td><kbd>alt r</kbd></td><td>Cycle through Repeat modes</td><td>Universal</td></tr>
-      <tr><td><kbd>alt s</kbd></td><td>Toggle Shuffle</td><td>Universal</td></tr>
-      <tr><td><kbd>alt g</kbd></td><td>Paste and go to a Spotify web link</td><td>Universal</td></tr>
-      <tr><td><kbd>alt c</kbd></td><td>Jump to current track in list / Jump to current lyric line</td><td>Contextual</td></tr>
+      <tr><td><kbd>f5</kbd></td><td>grid redraw failsafe (you'll probably never use this)</td><td>universal</td></tr>
+      <tr><td><kbd>tab</kbd></td><td>trail menu / history -- search type filter</td><td>contextual</td></tr>
+      <tr><td><kbd>return</kbd></td><td>select -- play/pause/resume selected item</td><td>contextual</td></tr>
+      <tr><td><kbd>delete</kbd></td><td>delete entry in search or trail history</td><td>contextual</td></tr>
+      <tr><td><kbd>escape</kbd></td><td>collapse current menu</td><td>universal</td></tr>
+      <tr><td><kbd>backspace</kbd></td><td>clear input / back one level</td><td>universal</td></tr>
+      <tr><td><kbd>alt = / -</kbd></td><td>quick seek +10s / -10s</td><td>universal</td></tr>
+      <tr><td><kbd>shift return</kbd></td><td>hovered item's action menu</td><td>contextual</td></tr>
+      <tr><td><kbd>alt return</kbd></td><td>jump to current track's Action Menu</td><td>universal</td></tr>
+      <tr><td><kbd>alt delete</kbd></td><td>clear session</td><td>universal</td></tr>
+      <tr><td><kbd>alt space</kbd></td><td>jump to main menu</td><td>universal</td></tr>
+      <tr><td><kbd>alt e</kbd></td><td>jump to seek menu</td><td>universal</td></tr>
+      <tr><td><kbd>alt l</kbd></td><td>jump to liked tracks</td><td>universal</td></tr>
+      <tr><td><kbd>alt p</kbd></td><td>jump to recently played</td><td>universal</td></tr>
+      <tr><td><kbd>alt y</kbd></td><td>jump to lyrics of current track</td><td>universal</td></tr>      
+      <tr><td><kbd>alt a</kbd></td><td>jump to albumart of current track</td><td>universal</td></tr>
+      <tr><td><kbd>alt r</kbd></td><td>cycle repeat modes</td><td>universal</td></tr>
+      <tr><td><kbd>alt s</kbd></td><td>toggle shuffle</td><td>universal</td></tr>
+      <tr><td><kbd>alt g</kbd></td><td>open spotify web link</td><td>universal</td></tr>
+      <tr><td><kbd>alt c</kbd></td><td>jump to current track in list / jump to current lyric line in lyrics view</td><td>contextual</td></tr>
     </tbody>
   </table>
 </body>
