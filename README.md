@@ -32,7 +32,7 @@ But most importantly, a music player should pretty much know its place. It's not
 # Limitations:
 Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception
 
-- **Remove from queue (Spotify Web API limitation)**
+- **Remove from queue -- Spotify Web API limitation**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
     - It adds complexity and relative bloat for what it's supposed to do
     - Local implementation also means zero sync with other Spotify clients/connect devices
