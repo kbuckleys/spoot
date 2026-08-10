@@ -61,8 +61,12 @@ message {
     background-color: #16191d;
     padding: 5px 30px 5px 30px;
 }
+/* Propo, not the mono face: in mono a Nerd Font glyph is squeezed to a single
+ * fixed cell with almost no side bearing, so the one space Util.status_icons
+ * emits before each of liked/explicit/lyrics reads as tighter here than in
+ * every other theme. This was the only rule in style/ naming a non-Propo face. */
 textbox {
     text-color: #b6e0a4;
     horizontal-align: 0.5;
-    font: "JetBrainsMono Nerd Font Bold 12";
+    font: "JetBrainsMono Nerd Font Propo Bold 12";
 }

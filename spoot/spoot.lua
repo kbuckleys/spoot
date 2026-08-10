@@ -38,8 +38,11 @@ local P = {
     -- this is one number by the endpoint's own design and the request limit and
     -- the display cap cannot drift -- an invariant the split search could never
     -- have, since it had two of these to keep in step. It costs bytes: 229 KB
-    -- per uncached search against 23.5 KB when the combined list showed 5 of
-    -- each. Still exactly one round trip, and a round trip is ~530 ms TTFB here.
+    -- per uncached search when Util.SEARCH_TYPES held four types, against
+    -- 23.5 KB when the combined list showed 5 of each. Shows and episodes have
+    -- since joined it, and both carry long descriptions, so the real figure is
+    -- now materially higher and has not been re-measured. Still exactly one
+    -- round trip, and a round trip is ~530 ms TTFB here.
     max       = 50,
     -- Top tracks are paged past the 50-per-request ceiling to here. A multiple
     -- of 50 so the cap lands on a page boundary; the account reports 1578
@@ -69,6 +72,37 @@ P.token      = P.cache .. "/token.json"
 P.liked      = P.cache .. "/liked_tracks.json"
 P.albums     = P.cache .. "/saved_albums.json"
 P.artists    = P.cache .. "/followed_artists.json"
+-- Deliberately NOT part of the library fingerprint below: shows are fetched
+-- lazily on first open, the way playlists are, so a cold start never blocks on
+-- a section the user may never visit. See Util.REVALIDATORS.saved_shows.
+P.shows      = P.cache .. "/saved_shows.json"
+P.episodes   = P.cache .. "/saved_episodes.json"
+-- Where you stopped in each podcast episode, recorded HERE because Spotify does
+-- not record it for us: probing 50 episodes of a show that had been played and
+-- paused found zero with a non-zero resume_position_ms and none marked
+-- fully_played. Playback goes through spotifyd/librespot, which reports neither
+-- listening history nor playback position -- the same reason the local
+-- recently-played recorder had to stay.
+P.eresume    = P.cache .. "/episode_resume.json"
+-- Within this much of the end an episode counts as finished, so the next play
+-- starts from the top instead of dropping you into the credits.
+P.eresume_end_ms  = 30 * 1000
+-- Below this, a poll tick is not worth a rewrite -- a paused episode reports the
+-- same position every 25s and would otherwise rewrite the file forever.
+P.eresume_min_ms  = 5 * 1000
+P.eresume_max     = 200
+
+-- Util.view_listen. songrec's own --request-interval defaults to 10s, so this
+-- has to allow at least two attempts to be worth calling a timeout; 30 is two
+-- with headroom. The poll is what makes the window dismissable -- it is how
+-- often the loop asks whether a match landed or the user closed the window, so
+-- it wants to be short enough to feel instant and long enough not to spin.
+P.listen_timeout = 30
+P.listen_poll    = 0.3
+
+-- When each tile grid's artwork was last warmed, one timestamp per art kind.
+-- Not a cache of anything -- a rate limit; see Util.spawn_shelf_warm.
+P.warm       = P.cache .. "/shelf_warm.json"
 -- What the three files above looked like from Spotify's side last time we asked:
 -- one head fingerprint each, plus when the last full re-page ran. Kept apart
 -- from the caches themselves so confirming freshness never rewrites megabytes.
@@ -113,13 +147,42 @@ P.art_kinds = {
                 field = "images", highres = P.art .. "/playlists/highres"},
     category = {dir = P.art .. "/categories", index = P.cache .. "/category_art.json",
                 field = "icons"},
-    -- Curations tiles are keyed by ROW, not by any Spotify object: each one
+    -- Collections tiles are keyed by ROW, not by any Spotify object: each one
     -- borrows the artwork of the first thing on the shelf behind it, and the
     -- shelf's contents rotate constantly. Filing them under the row's own name
     -- means the tile is replaced when that first item changes, exactly as a
     -- playlist cover is replaced when its art changes.
-    curation = {dir = P.art .. "/curations", index = P.cache .. "/curation_art.json",
+    collection = {dir = P.art .. "/collections", index = P.cache .. "/collection_art.json",
                 field = "images"},
+    -- The root menu. Row-keyed like the grids below, and the one whose art moves
+    -- most: the Playback tile wears whatever is playing.
+    main     = {dir = P.art .. "/main", index = P.cache .. "/main_art.json",
+                field = "images"},
+    -- Your library, keyed by ROW like the two grids below: each tile borrows the
+    -- cover of the first thing on the list behind it, and that changes as you
+    -- like, save and follow things.
+    library  = {dir = P.art .. "/library", index = P.cache .. "/library_art.json",
+                field = "images"},
+    -- The Podcasts grid, keyed by ROW for exactly the reason collections are: a
+    -- topic tile wears the cover of the first show that topic currently returns,
+    -- and what that show is changes as Spotify's index does.
+    podcast  = {dir = P.art .. "/podcasts", index = P.cache .. "/podcast_art.json",
+                field = "images"},
+}
+-- The two "is this in my library" endpoints that share a URL grammar: an ?ids=
+-- collection you PUT to save and DELETE to remove, and a /contains sibling that
+-- answers without paging the whole thing. Named per kind so Util.lib_write and
+-- Util.lib_has can be one function each rather than one pair per kind.
+--
+-- Artists deliberately do NOT live here. me/following?type=artist and
+-- me/following/contains take the kind as a QUERY PARAMETER rather than in the
+-- path, so folding them in would need an escape hatch -- which is the point
+-- where a table stops being simpler than the two functions it replaced.
+P.lib_kinds = {
+    album = {ids = "me/albums", contains = "me/albums/contains",
+             mem = "saved_albums", file = P.albums, noun = "album"},
+    show  = {ids = "me/shows",  contains = "me/shows/contains",
+             mem = "saved_shows",  file = P.shows,  noun = "podcast"},
 }
 -- Images shipped with the themes. Named once here so the layout is not
 -- repeated at each use, same as every other path in this table.
@@ -152,11 +215,22 @@ local MESG_NAME_MAX_CHARS = 49
 -- and must survive truncation, so a long title costs title characters and never
 -- the icons.
 local STATUS_GLYPHS = {[0xf05d] = true, [0xf071] = true, [0xF0188] = true, [0xF0189] = true}
+-- One glyph per type, keyed by the PLURAL name search stamps rows with
+-- (`_stype`). Read only through Util.type_icon, so the glyphs live here and
+-- nowhere else.
+--
+-- The first four are search-only: they say which kind each row is in a list that
+-- mixes them, and a music note on every row of Liked Tracks would say nothing.
+-- Shows and episodes are the exception -- Util.display_show and
+-- Util.display_episode carry theirs, so a podcast is marked as one in every list
+-- it appears in.
 local ICON_PREFIX = {
     tracks    = "\u{F0387} ",
     albums    = "\u{F405} ",
     artists   = "\u{F415} ",
     playlists = "\u{F0411} ",
+    shows     = "\u{F2CE} ",
+    episodes  = "\u{F07C5} ",
 }
 local liked = {}  -- set of liked track IDs
 
@@ -238,7 +312,7 @@ local function parse_spotify_url(url)
     url = url:gsub("[?#].*$", "")
     url = url:gsub("/+$", "")
     url = url:gsub("open%.spotify%.com/intl%-[^/]+/", "open.spotify.com/")
-    local kinds = {"track", "album", "artist", "playlist"}
+    local kinds = {"track", "album", "artist", "playlist", "show", "episode"}
     for _, kind in ipairs(kinds) do
         local id = url:match("open%.spotify%.com/" .. kind .. "/([%w%-_]+)")
         if id then return kind, id end
@@ -270,6 +344,12 @@ end
 -- whole script body is a single function and Lua caps it at 200 locals.
 local Util = {}
 
+-- The one reader of ICON_PREFIX. Answers "" rather than nil so every caller can
+-- concatenate unguarded.
+function Util.type_icon(stype)
+    return ICON_PREFIX[stype or ""] or ""
+end
+
 -- The shape of style/thumbs.rasi's grid. rofi_dmenu sizes the window from these,
 -- and THUMB_SYNC above is several screens of their product -- so change the
 -- theme's `columns`/`lines` and change these with it, or the window will be the
@@ -298,6 +378,28 @@ Util.THUMB_ROWS = 3
 -- is non-exclusive: idle threads are reclaimed, so asking for more costs nothing
 -- when nothing needs them.
 Util.THUMB_THREADS = 16
+
+-- Every rofi argument a thumbnail GRID needs, in one named place rather than
+-- inline in the middle of rofi_dmenu's argument builder. Three things that only
+-- ever travel together: the row count the window is sized by, the thread pool
+-- the icon fetcher runs on, and the column override.
+--
+-- `cols` overrides BOTH the theme and Util.THUMB_COLS: a caller with a handful
+-- of tiles gets a tidier shape than the 5-wide default without a second theme
+-- file existing to drift from style/thumbs.rasi. The row cap is the theme's
+-- `lines`. Appends in place and returns nothing -- args is the caller's list.
+function Util.grid_args(args, n, cols)
+    cols = tonumber(cols) or Util.THUMB_COLS
+    local rows = math.ceil((tonumber(n) or 0) / cols)
+    if rows > Util.THUMB_ROWS then rows = Util.THUMB_ROWS end
+    if rows < 1 then rows = 1 end
+    args[#args+1] = "-l"; args[#args+1] = tostring(rows)
+    args[#args+1] = "-threads"; args[#args+1] = tostring(Util.THUMB_THREADS)
+    if cols ~= Util.THUMB_COLS then
+        args[#args+1] = "-theme-str"
+        args[#args+1] = "listview { columns: " .. cols .. "; }"
+    end
+end
 
 -- Refreshes that cached_fetch asked for while the menu they belong to was
 -- already drawing from the expired copy. A fetcher cannot be handed to another
@@ -357,7 +459,8 @@ function Util.api_write_bg(verb, url, token, opts)
 end
 
 -- Every background self-spawn (--daemon, --recent-watch, --bsmon, --prefetch-*,
--- --notify): 8 hand-built sites. args are quoted individually so a title with a
+-- --notify, --revalidate, --warm-shelf): 10 hand-built sites. args are
+-- quoted individually so a title with a
 -- quote cannot break out; the flags gain quotes the shell strips right back off.
 -- pidf records the child's pid -- `echo $!` must run in the same shell as the
 -- spawn, which is why this builds a command string rather than using os.execute.
@@ -489,14 +592,20 @@ function Util.strip_markup(s)
     return (s:gsub("<[^>]+>", ""))
 end
 
-local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_META, THEME_ART = (function()
-    if arg and arg[1] and arg[1]:match("^%-%-") then
+local THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_META, THEME_ART = (function()
+    -- --listen is the one flag that DOES open rofi, so it resolves themes like
+    -- an interactive run. Without this it would draw against the raw style/
+    -- paths, whose `@import "ZENON"` is exactly what resolve() below exists to
+    -- rewrite -- the window would come up unstyled.
+    if arg and arg[1] and arg[1]:match("^%-%-") and arg[1] ~= "--listen" then
         -- Non-interactive modes (--daemon, --prefetch-lyrics) never open rofi.
         -- Skip the shared /tmp theme files so background processes can't wipe
         -- the resolved themes the interactive app is already using.
         Util.THEME_THUMBS = P.dir .. "/style/thumbs.rasi"
         Util.THEME_TRAIL  = P.dir .. "/style/trail.rasi"
-        return P.dir .. "/style/main.rasi", P.dir .. "/style/menu.rasi", P.dir .. "/style/lyrics.rasi",
+        Util.THEME_PODS   = P.dir .. "/style/pods.rasi"
+        Util.THEME_LISTEN = P.dir .. "/style/listen.rasi"
+        return P.dir .. "/style/menu.rasi", P.dir .. "/style/lyrics.rasi",
                P.dir .. "/style/message.rasi", P.dir .. "/style/sub.rasi", P.dir .. "/style/binds.rasi",
                P.dir .. "/style/meta.rasi", P.dir .. "/style/art.rasi"
     end
@@ -524,7 +633,16 @@ local THEME, THEME_MENU, THEME_LYR, THEME_MSG, THEME_SUB, THEME_BINDS, THEME_MET
     -- sub.rasi, so they look exactly as they did; having their own means they can
     -- be styled apart from every other sub-menu without touching those.
     Util.THEME_TRAIL = resolve(d.."/trail.rasi","trail")
-    return resolve(d.."/main.rasi","main"), resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
+    -- Podcast and episode details. Starts life as a copy of meta.rasi at a wider
+    -- window, because a show description runs to sentences where an album's
+    -- fields are all short values; having its own file means it can be restyled
+    -- without touching Album and Track Details.
+    Util.THEME_PODS = resolve(d.."/pods.rasi","pods")
+    -- The Listen window. art.rasi at asset size: art.rasi fills the screen with
+    -- a 1000px cover, and style/assets is 300x300, so sharing it would upscale
+    -- the icon 3.3x.
+    Util.THEME_LISTEN = resolve(d.."/listen.rasi","listen")
+    return resolve(d.."/menu.rasi","menu"), resolve(d.."/lyrics.rasi","lyrics"),
            resolve(d.."/message.rasi","message"), resolve(d.."/sub.rasi","sub"), resolve(d.."/binds.rasi","binds"),
            resolve(d.."/meta.rasi","meta"), resolve(d.."/art.rasi","art")
 end)()
@@ -550,6 +668,19 @@ local function ensure_cache()
     os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics)
         .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.art) .. " " .. shell_quote(P.art .. "/highres") .. Util.art_kind_dirs()
         .. "; mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
+
+    -- Curations became Collections, and the art kind was renamed with it rather
+    -- than left as a name on disk matching nothing in the code. The six covers
+    -- re-download on the next warm; what would otherwise be left behind forever
+    -- is a directory and an index no reader can reach.
+    --
+    -- Unguarded because rm -rf on a path that is not there is already a silent
+    -- no-op, and it rides the same shell as the mkdir above -- so the steady
+    -- state costs no fork and no stat. Not migrated: renaming the files would
+    -- have to rewrite the index to match, for artwork one background fetch
+    -- replaces.
+    os.execute("rm -rf " .. shell_quote(P.art .. "/curations") .. " "
+        .. shell_quote(P.cache .. "/curation_art.json") .. " 2>/dev/null")
 
     -- The housekeeping sweeps below are throttled to once an hour by the mtime of
     -- a stamp file. They used to run in EVERY process -- including the --notify
@@ -659,12 +790,33 @@ Util.secure_write = function(p, d)
     os.execute("chmod 600 " .. shell_quote(p) .. " 2>/dev/null")
 end
 
--- Normalize an MPRIS mpris:trackid (which comes as a DBus object path or a
--- spotify: URI, sometimes quoted) down to the bare Spotify track ID.
+-- The two halves of one conversion: an id out of any Spotify reference, and a
+-- URI back out of any object. Both are KIND-AGNOSTIC on purpose -- an episode
+-- arrives as spotify:episode:<id>, and the track-only patterns these used to
+-- carry fell through to the passthrough below, so `now.json`'s id never matched
+-- `now_track.json`'s and Util.fast_now_track answered false on every call,
+-- costing every menu a me/player round trip it did not need.
+-- Returns the id AND, as a second value, the kind it was carrying (nil for a
+-- bare id). The daemon is the reason: MPRIS is the only place the kind survives
+-- at all, so re-deriving it there would mean a second copy of these two
+-- patterns. Every call site assigns or compares, never concatenates -- keep it
+-- that way, for the reason spelled out above Util.strip_markup.
 function Util.extract_track_id(raw)
     if not raw then return "" end
     local cleaned = trim(raw):gsub("^'", ""):gsub("'$", "")
-    return cleaned:match("^/spotify/track/(.+)") or cleaned:match("^spotify:track:(.+)") or cleaned
+    local kind, id = cleaned:match("^/spotify/([^/]+)/(.+)")
+    if not id then kind, id = cleaned:match("^spotify:([^:]+):(.+)") end
+    if id then return id, kind end
+    return cleaned, nil
+end
+
+-- Defaults to "track" rather than reading item.uri, which is never there to
+-- read: Util.mark_availability prunes `uri` as a DEAD_FIELD on the way in. The
+-- default is load-bearing too -- api_get_playlist_tracks' field mask and the
+-- daemon's now-playing write both used to omit `type` entirely.
+function Util.item_uri(item)
+    if not (item and item.id) then return nil end
+    return "spotify:" .. (item.type or "track") .. ":" .. item.id
 end
 
 local function strip_nulls(t)
@@ -778,6 +930,68 @@ local function disk_set(path, data, tag)
     write_file(path, json.encode({data=data, fetched_at=os.time(), tag=tag}))
 end
 local function disk_bust(path) os.remove(path) end
+
+-- EPISODE RESUME -- see P.eresume.
+
+-- Returns the stored position (nil when there is none) AND whether the episode
+-- was finished here. Two values because "no position" is true of both a
+-- never-played episode and one played to the end, and only the second should be
+-- dimmed as played.
+--
+-- Every caller assigns or compares -- never concatenates -- for the reason
+-- spelled out above Util.strip_markup.
+function Util.eresume_get(id)
+    if not id then return nil, false end
+    local m = disk_get(P.eresume)
+    local e = type(m) == "table" and m[id]
+    if type(e) ~= "table" then return nil, false end
+    local ms = tonumber(e.ms)
+    return (ms and ms > 0) and ms or nil, e.done == true
+end
+
+-- Records a position, or FORGETS one. `dur` is the episode length when known:
+-- inside P.eresume_end_ms of it the episode is finished, and the entry is
+-- dropped so the next play starts from zero rather than the credits.
+--
+-- Returns whether anything was written, which is what the tests assert on.
+function Util.eresume_put(id, ms, dur)
+    if not id then return false end
+    ms = tonumber(ms) or 0
+    local m = disk_get(P.eresume)
+    if type(m) ~= "table" then m = {} end
+    local prev = type(m[id]) == "table" and tonumber(m[id].ms) or nil
+    local finished = dur and dur > 0 and ms >= dur - P.eresume_end_ms
+    if ms <= 0 then
+        -- Position zero says nothing -- it is where an unplayed episode sits.
+        if m[id] == nil then return false end
+        m[id] = nil
+    elseif finished then
+        -- Kept, not deleted: the next play must start from the top, which a nil
+        -- ms already achieves, but the LIST still wants to show it as played.
+        if type(m[id]) == "table" and m[id].done then return false end
+        m[id] = {ms = 0, done = true, at = os.time()}
+    else
+        -- A paused episode reports an unchanged position on every tick; only a
+        -- real move earns a write.
+        if prev and math.abs(ms - prev) < P.eresume_min_ms then return false end
+        m[id] = {ms = ms, at = os.time()}
+        -- Bounded like the recently-played list. Oldest `at` goes first.
+        local n = 0
+        for _ in pairs(m) do n = n + 1 end
+        while n > P.eresume_max do
+            local oldest, oldest_at = nil, nil
+            for k, v in pairs(m) do
+                local at = type(v) == "table" and tonumber(v.at) or 0
+                if not oldest_at or at < oldest_at then oldest, oldest_at = k, at end
+            end
+            if not oldest then break end
+            m[oldest] = nil
+            n = n - 1
+        end
+    end
+    disk_set(P.eresume, m)
+    return true
+end
 
 -- "This copy is still current" without rewriting the copy. Used by the library
 -- revalidator, which asks Spotify whether anything changed for about a kilobyte
@@ -1027,6 +1241,15 @@ function Util.mark_availability(o)
         if t.is_playable == false then t.unavail = true
         elseif t.is_playable == true then t.unavail = nil end
         t.is_playable = nil
+        -- Episodes hosted outside Spotify's CDN are `is_playable = true` and
+        -- still cannot be streamed: librespot answers "Unable to load audio
+        -- item" and the play request 2xxs, so without this do_play reports
+        -- success for something that will never make a sound. Collapsed here,
+        -- with the region check, because this is the one place availability is
+        -- decided -- the comment above says so, and a second site would be the
+        -- hand-written kind this function replaced.
+        if t.is_externally_hosted == true then t.unavail = true end
+        t.is_externally_hosted = nil
         -- Riding the walk this function already performs, so the pruning costs
         -- no extra traversal.
         for k in pairs(DEAD_FIELDS) do t[k] = nil end
@@ -1167,6 +1390,23 @@ P.menu_hist_max = 100
 function Util.menu_hist_all()
     if not Util._mhist then Util._mhist = disk_get(P.menu_hist) or {} end
     return Util._mhist
+end
+
+-- Removes one remembered menu. By IDENTITY, not by index: Util.menu_hist_rows
+-- hides every entry still reachable from the live stack or a stored trail, so
+-- its row numbers and this list's indexes are different things. It hands back
+-- the entries alongside the rows precisely so a caller can pass one here.
+function Util.menu_hist_remove(entry)
+    if type(entry) ~= "table" then return false end
+    local all = Util.menu_hist_all()
+    for i = #all, 1, -1 do
+        if all[i] == entry then
+            table.remove(all, i)
+            Util.menu_hist_save()
+            return true
+        end
+    end
+    return false
 end
 
 function Util.menu_hist_save()
@@ -1352,17 +1592,31 @@ end
 
 -- BREADCRUMB
 
+-- A label may be a function, resolved at render time. Only one view needs it --
+-- the library menu is named after the Spotify account, which is not known until
+-- the profile has been read, and can change. Everything else passes a string and
+-- is unaffected.
 local function view_label(view)
     local v = VIEWS[view]
-    return (v and v.label) or view or "?"
+    local l = v and v.label
+    if type(l) == "function" then
+        local ok, name = pcall(l)
+        l = ok and name or nil
+    end
+    return l or view or "?"
 end
 
 local function crumb_name(entry)
     if type(entry) ~= "table" then return nil end
     if entry.artist_name and entry.artist_name ~= "" then return entry.artist_name end
     if entry.track_name and entry.track_name ~= "" then return entry.track_name end
+    if entry.episode_name and entry.episode_name ~= "" then return entry.episode_name end
     if entry.playlist_name and entry.playlist_name ~= "" then return entry.playlist_name end
     if entry.album_name and entry.album_name ~= "" then return entry.album_name end
+    -- Below album_name and below episode_name on purpose: an episode-action
+    -- entry carries BOTH show_name and episode_name, and the episode is the
+    -- thing that step is about.
+    if entry.show_name and entry.show_name ~= "" then return entry.show_name end
     if entry.category_name and entry.category_name ~= "" then return entry.category_name end
     if entry.query and entry.query ~= "" then return entry.query end
     return nil
@@ -1506,13 +1760,19 @@ local function rofi_dmenu(entries, opts)
     Util.back_pressed = false
     Util.alt_pressed = false
     Util.tab_pressed = false
+    Util.del_pressed = false
     if main_pending or liked_pending or recent_pending or Util.trail_jump_pending then return nil end
     opts = opts or {}
     local prompt   = opts.prompt or ""
     local mesg_fn  = opts.mesg
     local markup   = opts.markup
     local by_index = opts.by_index
-    local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or (opts.use_menu and THEME_MENU or THEME))
+    -- Two themes, one choice: a thumbnail grid or a plain list. main.rasi was a
+    -- third -- the root menu's own -- and the root is a grid now, so nothing
+    -- reached it. The `use_menu` flag went with it: it existed only to pick
+    -- between main.rasi and menu.rasi, and with one of them gone it selected
+    -- between a thing and itself at 21 call sites.
+    local theme    = opts.theme or (opts.thumbs and Util.THEME_THUMBS or THEME_MENU)
     local eh       = opts.eh
     local sel      = opts.sel
     -- Blanket cursor memory: any menu given a pos_key restores the row it was
@@ -1570,6 +1830,7 @@ local function rofi_dmenu(entries, opts)
     local function reenter(res)
         Util.back_pressed = false
         Util.alt_pressed = false
+        Util.del_pressed = false
         if main_pending or liked_pending or recent_pending or Util.trail_jump_pending
            or jump_to_track_pending then return false end
         local row = row_of(res)
@@ -1656,7 +1917,12 @@ local function rofi_dmenu(entries, opts)
     -- sharing the slot costs nothing except that Alt+Delete does not clear the
     -- trail while you are sitting in a search box -- where you are typing, not
     -- navigating.
-    args[#args+1] = "-kb-custom-15"; args[#args+1] = opts.hist_key and "Delete" or "Alt+Delete"
+    -- Delete deletes a ROW in the menus that own rows worth deleting -- the
+    -- search box's history and Trail History. Everywhere else the slot is
+    -- Alt+Delete, which clears the trail. One binding, two meanings, decided by
+    -- whether the caller opted in.
+    args[#args+1] = "-kb-custom-15"
+    args[#args+1] = (opts.hist_key or opts.del_select) and "Delete" or "Alt+Delete"
     args[#args+1] = "-kb-custom-16"; args[#args+1] = "Alt+equal"
     args[#args+1] = "-kb-custom-17"; args[#args+1] = "Alt+minus"
     args[#args+1] = "-kb-custom-18"; args[#args+1] = "Shift+Return"
@@ -1665,25 +1931,10 @@ local function rofi_dmenu(entries, opts)
     if markup then args[#args+1] = "-markup-rows"; args[#args+1] = "-markup" end
     if by_index then args[#args+1] = "-format"; args[#args+1] = "i" end
     if eh then args[#args+1] = "-eh"; args[#args+1] = tostring(eh) end
+    -- Grids only: \0icon rows come from Util.album_thumbs and nowhere else, so
+    -- a text list has no icons to lose and no reason to carry -threads.
     if opts.thumbs then
-        -- Util.THUMB_COLS is style/thumbs.rasi's `columns` -- the grid is sized
-        -- from it, so the two must agree. thumbs_cols overrides BOTH: a caller
-        -- with a handful of tiles (Curations, 7) gets a tidier shape than the
-        -- 5-wide default without a second theme file existing to drift from this
-        -- one. The row cap is the theme's `lines`.
-        local cols = tonumber(opts.thumbs_cols) or Util.THUMB_COLS
-        local n = #(entries or {})
-        local rows = math.ceil(n / cols)
-        if rows > Util.THUMB_ROWS then rows = Util.THUMB_ROWS end
-        if rows < 1 then rows = 1 end
-        args[#args+1] = "-l"; args[#args+1] = tostring(rows)
-        -- Grids only: \0icon rows come from Util.album_thumbs and nowhere else,
-        -- so a text list has no icons to lose and no reason to carry this.
-        args[#args+1] = "-threads"; args[#args+1] = tostring(Util.THUMB_THREADS)
-        if cols ~= Util.THUMB_COLS then
-            args[#args+1] = "-theme-str"
-            args[#args+1] = "listview { columns: " .. cols .. "; }"
-        end
+        Util.grid_args(args, #(entries or {}), opts.thumbs_cols)
     end
     if sel and sel > 0 then args[#args+1] = "-selected-row"; args[#args+1] = tostring(sel) end
     if not opts.no_status and not opts.thumbs then
@@ -1749,6 +2000,15 @@ local function rofi_dmenu(entries, opts)
                 sel = math.max(0, math.min(row, #(entries or {}) - 2))
             end
             goto menu_redo
+        end
+        -- Opt-in, like alt_select: the caller owns the list and has to do the
+        -- removal AND rebuild its rows, so this comes back as an ordinary accept
+        -- with a flag rather than closing the menu. Read Util.del_pressed
+        -- immediately -- the next rofi_dmenu clears it.
+        if opts.del_select then
+            Util.del_pressed = true
+            local row = row_of(result)
+            return by_index and (row and row + 1 or nil) or (row and (entries or {})[row + 1] or nil)
         end
         Util.clear_trail(); main_pending = true; return nil
     end
@@ -1938,6 +2198,20 @@ end
 
 -- TOKEN
 
+-- Hoisted out of oauth_get_token so the granted set can be RECORDED into
+-- token.json. Adding a scope does not invalidate a stored refresh token -- the
+-- new scope is simply never granted -- so a feature added after the last
+-- authorisation would fail with nothing to point at. Writing down what was
+-- actually granted is the same "know rather than guess" move as P.lib_fp and a
+-- playlist's snapshot_id; Util.reauth is how you widen it.
+local OAUTH_SCOPES = "app-remote-control playlist-modify playlist-modify-private playlist-modify-public"
+    .. " playlist-read playlist-read-collaborative playlist-read-private streaming"
+    .. " user-follow-modify user-follow-read user-library-modify user-library-read"
+    .. " user-top-read"
+    .. " user-modify-playback-state user-read-currently-playing user-read-playback-state"
+    .. " user-read-private"
+    .. " user-read-playback-position"
+
 get_token = function()
     local cached = mem_get("token")
     if cached then return cached end
@@ -1980,13 +2254,7 @@ local function oauth_get_token()
     local verifier = trim(shell("openssl rand -base64 96 | tr -d '=+\\n/' | head -c 128"))
     local challenge = trim(shell("echo -n " .. shell_quote(verifier)
         .. " | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='"))
-    local scopes = "app-remote-control playlist-modify playlist-modify-private playlist-modify-public"
-        .. " playlist-read playlist-read-collaborative playlist-read-private streaming"
-        .. " user-follow-modify user-follow-read user-library-modify user-library-read"
-        .. " user-top-read"
-        .. " user-modify-playback-state user-read-currently-playing user-read-playback-state"
-        .. " user-read-private"
-        .. " user-read-playback-position"
+    local scopes = OAUTH_SCOPES
     local auth_url = "https://accounts.spotify.com/authorize"
         .. "?client_id=" .. P.spotify
         .. "&response_type=code"
@@ -2033,6 +2301,10 @@ local function oauth_get_token()
                     access_token = d.access_token,
                     refresh_token = d.refresh_token,
                     expires_at = os.time() + (d.expires_in or 3600) - 60,
+                    -- What this token can actually do. d.scope is what Spotify
+                    -- says it GRANTED, which is the authority; OAUTH_SCOPES is
+                    -- only what was asked for.
+                    scopes = d.scope or OAUTH_SCOPES,
                 }))
                 os.execute("chmod 600 " .. shell_quote(P.token) .. " 2>/dev/null")
                 return d.access_token
@@ -2055,6 +2327,16 @@ local function ensure_auth()
     oauth_get_token()
 end
 
+-- Discards the stored token so the next ensure_auth runs the full flow. The only
+-- way to widen the granted scope set: a refresh grant returns whatever was
+-- authorised originally, no matter what OAUTH_SCOPES has grown to since.
+function Util.reauth()
+    os.remove(P.token)
+    mem_bust("token")
+    ensure_auth()
+    return get_token() ~= nil
+end
+
 -- NOTIFY
 
 local function artist_names(item)
@@ -2063,8 +2345,22 @@ local function artist_names(item)
     return table.concat(a, ", ")
 end
 
-local function album_suffix(item)
+-- "Who is this by", for anything with a name. Artists for tracks and albums,
+-- the show for an episode, the publisher for a show itself. One function
+-- because the alternative is `or item.publisher` sprinkled across the five
+-- sites that caption a row -- track_mesg, display_episode, display_show,
+-- view_art and album_suffix -- which is exactly the drift artist_names already
+-- exists to prevent. Returns "" rather than nil so every caller can concatenate.
+function Util.subtitle(item)
+    if not item then return "" end
     local an = artist_names(item)
+    if an ~= "" then return an end
+    if item.show and item.show.name then return item.show.name end
+    return item.publisher or ""
+end
+
+local function album_suffix(item)
+    local an = Util.subtitle(item)
     if an == "" then return "" end
     return SEP .. an
 end
@@ -2379,10 +2675,14 @@ end
 Util.ART_NONE     = P.assets .. "/noart.png"     -- album with no cover
 Util.ART_PLAYLIST = P.assets .. "/playlist.png"  -- playlist with no cover
 Util.ART_NEW      = P.assets .. "/new.png"       -- the Create New Playlist tile
--- Discover by Genre: a picker over genre NAMES, so there is no object whose
--- cover could stand for it. It is the only permanently artless tile in the file,
--- which is why it gets artwork of its own rather than the "no cover" mark.
-Util.ART_GENERIC  = P.assets .. "/generic.jpg"
+-- Tiles that open a PICKER rather than a shelf, so no object's cover can stand
+-- for them and they would otherwise wear the "no cover" mark. ART_GENRE serves
+-- Collections' Discover by Genre AND the Podcasts grid's Search tile -- both are
+-- "type a name and see what comes back" -- while ART_CATEGORIES serves
+-- Collections' Categories. A dedicated search asset would suit the third better
+-- than the genre picture it borrows.
+Util.ART_GENRE      = P.assets .. "/genre.png"
+Util.ART_CATEGORIES = P.assets .. "/categories.png"
 
 -- Playlist covers are cached ONE FILE PER PLAYLIST, keyed by playlist id rather
 -- than by art hash. Spotify regenerates these constantly -- weekly editorial
@@ -2477,6 +2777,22 @@ function Util.keyed_art(kind, item, fetch, hi, fallback)
     local hash = Util.art_hash(url)
 
     if not hash then
+        -- "No url" means two completely different things, and conflating them
+        -- was destructive. `art_unknown` says the CALLER could not resolve this
+        -- row's source right now -- a tile grid reading its shelves under
+        -- Util.cache_only, where a shelf simply is not on disk yet. That is not
+        -- evidence the artwork went away, and treating it as such unlinked every
+        -- cover in the grid on each cold draw, so the warmer re-downloaded all
+        -- of them and the next cold draw deleted them again.
+        --
+        -- For a row-keyed kind the file at <dir>/<key>.jpg IS that row's
+        -- artwork; the url only ever decides whether it has gone stale. With no
+        -- url to judge by, serving what we have beats drawing a placeholder over
+        -- a perfectly good cover.
+        if item.art_unknown then
+            if idx[key] and Util._art_valid_file(path) then return path end
+            return fallback
+        end
         -- Artwork removed upstream: drop ours rather than serving a stale one.
         if idx[key] then
             os.remove(path)
@@ -2632,7 +2948,7 @@ local function thumb_resolve(it, kind)
         -- Playlist" above the real ones, so without a sentinel entries and items
         -- sit one apart and every tile shows its neighbour's cover.
         if it.__new then return Util.ART_NEW end
-        -- A row may name its own stand-in: the Curations genre tile has no
+        -- A row may name its own stand-in: the Collections genre tile has no
         -- object behind it and would otherwise wear the "no cover" mark, which
         -- reads as a failure rather than as what it is.
         local fb = it.art_fallback
@@ -3192,6 +3508,43 @@ local function load_followed_artists()
     return items or {}, items ~= nil and (fresh or not tried)
 end
 
+-- Followed podcasts. Deliberately NOT part of the library triple above: those
+-- three are fetched together by fetch_library_with_fallback and share one
+-- fingerprint, so joining them would make every cold start page a section that
+-- may never be opened. This follows api_get_my_playlists instead -- its own
+-- cache, its own revalidator, fetched lazily the first time Podcasts is opened.
+--
+-- Util.paged_fetch's `each` does the me/shows envelope unwrap; it drops nil
+-- returns, so a malformed row needs no guard, and any failed page answers nil
+-- so a partial list is never cached.
+function Util.load_saved_shows()
+    return cached_fetch("saved_shows", P.shows, P.ttl, function()
+        local out = Util.paged_fetch("me/shows",
+            function(o) return Util.with_market("limit=50&offset=" .. o) end,
+            function(d, items) return #items == 0 or not d.next end,
+            function(e) return e.show end)
+        if not out then return nil end
+        return Util.lib_sorted(out)
+    end, {stale_ok = true, revalidate = "saved_shows"})
+end
+Util.REVALIDATORS.saved_shows = function() return Util.load_saved_shows() end
+
+-- Episodes you saved individually, which Spotify surfaces as "Your Episodes".
+-- Same shape as the shows loader above, and equally lazy -- a podcast section
+-- nobody opens should cost a cold start nothing.
+--
+-- NOT sorted by name: this is a save list, and the order Spotify returns it in
+-- is most-recently-saved first, which is the order that means something here.
+function Util.load_saved_episodes()
+    return cached_fetch("saved_episodes", P.episodes, P.ttl, function()
+        return Util.paged_fetch("me/episodes",
+            function(o) return Util.with_market("limit=50&offset=" .. o) end,
+            function(d, items) return #items == 0 or not d.next end,
+            function(e) return e.episode end)
+    end, {stale_ok = true, revalidate = "saved_episodes"})
+end
+Util.REVALIDATORS.saved_episodes = function() return Util.load_saved_episodes() end
+
 local function fetch_library_with_fallback()
     local tracks, albums, artists = parallel_fetch_library()
     if not tracks then tracks = load_liked_tracks_full() end
@@ -3306,6 +3659,21 @@ function Util.lib_fp_write(fp)
     disk_set(P.lib_fp, fp)
 end
 
+-- The one definition of "re-page the library and write down what it looked
+-- like". The background revalidator below and System > Refresh Library both ran
+-- byte-identical copies of this. `fp` is the fingerprint the caller already
+-- holds, if any -- the revalidator has one from its probes, a manual refresh
+-- does not and lets Util.lib_fp_write take its own.
+function Util.rebuild_library(fp)
+    local tracks, albums, artists = fetch_library_with_fallback()
+    -- Reporting success unconditionally announced it even when all three
+    -- fetches had failed and save_library_cache had written nothing.
+    if not tracks then return false end
+    save_library_cache(tracks, albums, artists)
+    Util.lib_fp_write(fp)
+    return true
+end
+
 Util.REVALIDATORS.library = function()
     local fp = disk_get(P.lib_fp) or {}
     local now = {}
@@ -3329,10 +3697,7 @@ Util.REVALIDATORS.library = function()
             return
         end
     end
-    local tracks, albums, artists = fetch_library_with_fallback()
-    if not tracks then return end
-    save_library_cache(tracks, albums, artists)
-    Util.lib_fp_write(now)
+    Util.rebuild_library(now)
 end
 
 -- PLAYBACK STATE
@@ -3346,7 +3711,12 @@ get_playback = function()
     -- persists the field and anything downstream that reads current_track --
     -- record_recent_play included -- sees the same shape every other track
     -- source produces.
-    local d = api_get("me/player", Util.with_market())
+    -- additional_types is NOT optional. Without it Spotify answers with
+    -- item: null whenever an episode is playing, which the nil branch below
+    -- reads as spotifyd having dropped out -- and recover_playback then starts
+    -- a TRACK over the podcast you are listening to. Every me/player read in
+    -- this file carries it for that reason.
+    local d = api_get("me/player", Util.with_market("additional_types=episode"))
     last_playback = os.time()
     if not d or not d.item then
         local cool = tonumber((read_file(P.tmp .. "/spoot_rate_cooldown") or ""):match("%d+"))
@@ -3373,7 +3743,7 @@ get_playback = function()
 end
 
 inv_playback = function()
-    current_track = nil; current_id = nil; is_playing = false
+    current_track = nil; current_id = nil; previous_id = nil; is_playing = false
 end
 
 function Util.fast_now_track()
@@ -3437,6 +3807,17 @@ open_url = function(url)
             Util.open_playlist(d)
             if jump_to_track_pending then return end
         else rofi_message("Playlist not found") end
+    elseif kind == "show" then
+        -- Util.open_show does its own fetch and reports its own failures, so
+        -- unlike the branches above there is nothing to look up first.
+        Util.open_show(id)
+        if jump_to_track_pending then return end
+    elseif kind == "episode" then
+        local d = api_get("episodes/" .. id, Util.with_market())
+        -- Straight to view_actions, whose type dispatch sends it to the episode
+        -- menu -- the same route a pasted track URL takes.
+        if d then view_actions(d)
+        else rofi_message("Episode not found") end
     end
 end
 
@@ -3444,6 +3825,13 @@ end
 --
 -- Write-through on every record so the always-on --recent-watch process and
 -- interactive sessions can each read-modify-write the file safely.
+--
+-- Local on purpose, and briefly replaced by Spotify's own
+-- me/player/recently-played before being put back. That endpoint answers with an
+-- EMPTY list for this account: playback goes through spotifyd/librespot, and
+-- librespot does not report plays to Spotify's listening history. The remote
+-- list is authoritative for every other client and useless for this one, which
+-- is the whole reason this recorder exists.
 
 -- Empty, NOT disk_get: this runs at chunk load, so every process paid for it --
 -- including --notify, which the daemon spawns on every single track change, and
@@ -3477,14 +3865,89 @@ end
 
 -- DISPLAY HELPERS
 
+-- The two marks every list puts on the row that is PLAYING: the transport glyph
+-- in front of it, and green around the whole thing. Four row builders and the
+-- root grid's Playback tile draw them, and they had a copy each -- so a change
+-- to either had to be made in five places or the lists would disagree about
+-- what "playing" looks like.
+--
+-- Kept as two functions rather than one because the glyph does not always lead:
+-- display_album puts its single-track glyph first, on purpose, so that a fixed
+-- leading column reads the same whether or not something is playing.
+function Util.transport_glyph()
+    return is_playing and "\u{f04b} " or "\u{f04c} "
+end
+
+function Util.now_playing(txt)
+    return Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>')
+end
+
+-- Coarse duration for list rows. Deliberately not the %d:%02d the details sheet
+-- and the seek bar use: those describe a position inside a track, where seconds
+-- are the unit that matters, and a 97-minute podcast rendered that way reads as
+-- "97:31". Here the question is only "how long is this", so minutes, with hours
+-- once there are any.
+function Util.dur_short(ms)
+    local secs = math.floor((ms or 0) / 1000)
+    if secs <= 0 then return "" end
+    if secs < 60 then return secs .. "s" end
+    local mins = math.floor(secs / 60)
+    if mins < 60 then return mins .. "m" end
+    local h, m = math.floor(mins / 60), mins % 60
+    -- "1h", not "1h 0m": the trailing zero is noise, and these sit inside a row
+    -- that already carries the episode name and the podcast.
+    return h .. "h" .. (m > 0 and (" " .. m .. "m") or "")
+end
+
+-- Episodes are track-like enough to share every list, formatter and playback
+-- path with tracks, and different enough to need their own row: no artists, no
+-- like state, no explicit glyph, and a listened-position that is the whole
+-- reason anyone opens a podcast list. display_track dispatches here rather than
+-- format_entries doing it, so Util.format_mixed_item's `tracks` arm gets it too
+-- without a second branch.
+--
+-- resume_point is a snapshot from FETCH time, so it is not rendered on the row
+-- that is currently playing -- the ▶ marker already says what that row is doing,
+-- and a frozen "12m/58m" beside it would read as a live position that has stuck.
+function Util.display_episode(item, hide_artist, hide_liked, hide_single_artist)
+    local hide = hide_artist or hide_single_artist
+    local playing = item.id == current_id
+    local p = playing and Util.transport_glyph() or ""
+    local pos, done = Util.episode_progress(item)
+    local dur = Util.dur_short(item.duration_ms)
+    local meta = dur
+    if not playing and dur ~= "" then
+        if done then meta = dur .. SEP .. "played"
+        elseif pos > 0 then meta = Util.dur_short(pos) .. "/" .. dur end
+    end
+    local by = hide and "" or Util.subtitle(item)
+    -- Icon after the transport marker, not before it: the marker says what this
+    -- row is DOING and belongs in the leading column, the icon says what it IS.
+    local txt = p .. Util.type_icon("episodes") .. (item.name or "Unknown")
+        .. (by ~= "" and (SEP .. by) or "")
+        .. (meta ~= "" and (SEP .. meta) or "")
+    if playing then
+        txt = Util.now_playing(txt)
+    elseif item.unavail or done then
+        -- Same dim as an unplayable track: one for "cannot play", one for
+        -- "already heard". Both mean "skip past this one", which is what the
+        -- colour is telling you.
+        txt = Util.markup('<span color="#6a707f">') .. txt .. Util.markup('</span>')
+    end
+    return txt
+end
+
 display_track = function(item, hide_artist, hide_liked, hide_single_artist)
+    if item.type == "episode" then
+        return Util.display_episode(item, hide_artist, hide_liked, hide_single_artist)
+    end
     local hide = hide_artist or (hide_single_artist and #(item.artists or {}) <= 1)
     local an = hide and "" or artist_names(item)
-    local p  = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
+    local p  = item.id == current_id and Util.transport_glyph() or ""
     local l  = (not hide_liked) and item.id and liked[item.id] and "\u{f05d} " or ""
     local e  = item.explicit and "\u{f071} " or ""
     local txt = p .. l .. e .. (item.name or "Unknown") .. (hide and "" or SEP .. an)
-    if item.id == current_id then txt = Util.markup('<span foreground="#b6e0a4">') .. txt .. Util.markup('</span>')
+    if item.id == current_id then txt = Util.now_playing(txt)
     elseif item.unavail then
         -- Not licensed in our market, so it will not play. Same dim as the
         -- disabled action rows. Never applied to the current track: if it IS
@@ -3512,11 +3975,11 @@ local function display_album(item, show_artist)
     -- Single glyph FIRST, transport marker after it: the glyph is what the row
     -- is, the marker is what it is doing, and a fixed leading column reads
     -- better than one that shifts right whenever playback starts.
-    local mark = playing and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
+    local mark = playing and Util.transport_glyph() or ""
     body = Util.markup('<span foreground="#fab387">') .. "\u{F069F}"
            .. Util.markup("</span>") .. " " .. mark .. body
     if playing then
-        body = Util.markup('<span foreground="#b6e0a4">') .. body .. Util.markup("</span>")
+        body = Util.now_playing(body)
     end
     return body
 end
@@ -3545,13 +4008,34 @@ local function display_playlist(item)
     return prefix .. (item.name or "Unknown")
 end
 
+-- album_suffix resolves through Util.subtitle, which answers a show's publisher,
+-- so a podcast captions itself the way an album captions itself with its artist.
+--
+-- The icon is carried HERE rather than by the caller, so it appears in every
+-- list a show can reach: Followed Podcasts, each topic grid, a search result and
+-- the show action menu's own header.
+function Util.display_show(item)
+    return Util.type_icon("shows") .. (item.name or "Unknown") .. album_suffix(item)
+end
+
+-- Every _stype needs an arm of its own: the fallback is display_playlist, so a
+-- kind that forgets one does not misrender loudly, it renders as a playlist.
 function Util.format_mixed_item(t, i)
-    local st = t._stype or "track"
-    local pfx = ICON_PREFIX[st] or ""
+    -- Plural, like every arm below and like the keys format_search_results
+    -- stamps. The singular default this replaces matched nothing, so an
+    -- unstamped row fell through to display_playlist -- a bare name with no
+    -- artist, no marker and no heart.
+    local st = t._stype or "tracks"
+    -- Shows and episodes carry their icon inside their own display function, so
+    -- that they keep it outside search too. Adding it again here would render it
+    -- twice on exactly the rows that already have it.
+    local pfx = (st == "shows" or st == "episodes") and "" or Util.type_icon(st)
     local body
     if st == "tracks" then body = display_track(t)
     elseif st == "albums" then body = display_album(t, true)
     elseif st == "artists" then body = display_artist(t)
+    elseif st == "shows" then body = Util.display_show(t)
+    elseif st == "episodes" then body = Util.display_episode(t)
     else body = display_playlist(t) end
     return string.format("%2d. %s", i, pfx .. body)
 end
@@ -3703,9 +4187,13 @@ function Util.status_icons(item)
     return out
 end
 
+-- Util.subtitle, not artist_names: an episode has no artists, so this rendered
+-- "Episode Title <SEP> " with a dangling separator -- in view_actions, in
+-- view_playback, in view_seek and in the main menu's own header.
 local function track_mesg(item)
-    local p = item.id == current_id and (is_playing and "\u{f04b} " or "\u{f04c} ") or ""
-    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. SEP .. artist_names(item)
+    local p = item.id == current_id and Util.transport_glyph() or ""
+    local by = Util.subtitle(item)
+    return (p ~= "" and (p .. " ") or "") .. (item.name or "") .. (by ~= "" and (SEP .. by) or "")
         .. " " .. Util.status_icons(item)
 end
 
@@ -3745,17 +4233,21 @@ local function load_queue()
     local d = safe_decode(raw)
     if d then
         if type(d.tracks) == "table" then
-            -- Bare track-ID strings, matching every writer (save_queue collapses
-            -- to t.id, do_add_queue appends an id, flush_queue round-trips it).
-            -- This used to keep only type(t) == "table" entries -- the one thing
-            -- the file never holds -- so queue_tracks came back empty from every
-            -- launch, taking recover_playback's fallback and get_playback's
-            -- recovery with it. Tables with an .id are still accepted, so an
-            -- older build's file still loads.
+            -- Full spotify: URIs, matching every writer (save_queue and
+            -- do_add_queue both go through Util.item_uri, flush_queue
+            -- round-trips them). They used to be BARE IDS, which silently meant
+            -- "track" everywhere they were read back -- so an episode in the
+            -- queue was resumed as spotify:track:<episode id>, which resolves to
+            -- nothing. A string with no ":" is one of those older files; it can
+            -- only have held tracks, so prefixing it is exact rather than a
+            -- guess. Tables with an .id are still accepted too.
             local clean = {}
             for _, t in ipairs(d.tracks) do
-                if type(t) == "string" then clean[#clean+1] = t
-                elseif type(t) == "table" and t.id then clean[#clean+1] = t.id end
+                if type(t) == "string" then
+                    clean[#clean+1] = t:find(":", 1, true) and t or ("spotify:track:" .. t)
+                elseif type(t) == "table" and t.id then
+                    clean[#clean+1] = Util.item_uri(t)
+                end
             end
             queue_tracks = clean
         else
@@ -3767,17 +4259,22 @@ local function load_queue()
     end
 end
 
--- `idx` indexes the caller's list; `tids` drops every entry without an .id, so
+-- `idx` indexes the caller's list; `uris` drops every entry without an .id, so
 -- the two only line up while nothing is dropped. One id-less row (a local file,
 -- an unavailable episode) shifted every position after it, leaving queue_idx
 -- pointing at the wrong track -- which is what recover_playback's
 -- Next/Previous fallback then resumes from. Mapping the index inside the same
 -- filtering pass keeps it on the track the caller actually meant.
+--
+-- Stores URIs rather than ids for the same reason: a URI says what it is, so
+-- nothing downstream has to assume. A parallel array of kinds would have been
+-- the alternative, and it is precisely the two-arrays-that-must-stay-aligned
+-- shape the paragraph above exists to describe going wrong.
 local function save_queue(items, idx, context_uri)
     local tids, new_idx = {}, nil
     for i, t in ipairs(items or {}) do
         if type(t) == "table" and t.id then
-            tids[#tids+1] = t.id
+            tids[#tids+1] = Util.item_uri(t)
             if i == idx then new_idx = #tids end
         end
     end
@@ -3788,6 +4285,12 @@ local function save_queue(items, idx, context_uri)
     queue_idx     = idx
     queue_context = context_uri
     write_file(P.queue, json.encode({tracks=tids, idx=idx, context=context_uri}))
+    -- RETURNED so do_play can send the same index it stored. The two used to
+    -- differ: this one indexes the filtered array, do_play sent the caller's
+    -- unfiltered one as offset.position, and recover_playback later reused
+    -- queue_idx as a context position -- so one id-less row ahead of the played
+    -- one made a resume land on the wrong track.
+    return idx
 end
 
 local function flush_queue()
@@ -3813,15 +4316,20 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
     if ctx_type and ctx_id then context_uri = "spotify:" .. ctx_type .. ":" .. ctx_id
     end
 
-    if all_items and idx then save_queue(all_items, idx, context_uri) end
+    -- save_queue drops id-less rows, so the position it stored is the one that
+    -- indexes what Spotify will actually be given.
+    if all_items and idx then idx = save_queue(all_items, idx, context_uri) end
     local token = get_token()
     if not token then return false end
     local device_id = get_spotifyd_device()
     local dparam = device_id and "?device_id=" .. device_id or ""
 
-    local body
+    -- Assembled as a TABLE and encoded once below. Each branch used to encode
+    -- its own string, which meant position_ms -- orthogonal to every one of them
+    -- -- could only be added four times over.
+    local b
     if context_uri and idx then
-        body = json.encode({context_uri=context_uri, offset={position=idx-1}})
+        b = {context_uri=context_uri, offset={position=idx-1}}
     elseif context_uri and item and item.id then
         -- Context known, position NOT known. This used to fall into the branch
         -- above as `(idx or 1)-1`, i.e. position 0, so it silently played the
@@ -3834,19 +4342,26 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
         -- playback still continues through the album afterwards -- while landing
         -- on the right track. Better than dropping to a bare uris play, which
         -- would start the correct track but strand it with no context.
-        body = json.encode({context_uri=context_uri,
-                            offset={uri="spotify:track:" .. item.id}})
+        b = {context_uri=context_uri, offset={uri=Util.item_uri(item)}}
     elseif all_items and idx then
         local uris = {}
         for i = idx, math.min(#all_items, idx + 49) do
-            if all_items[i] and all_items[i].id then uris[#uris+1] = "spotify:track:" .. all_items[i].id end
+            local u = all_items[i] and Util.item_uri(all_items[i])
+            if u then uris[#uris+1] = u end
         end
-        if #uris > 0 then body = json.encode({uris=uris, offset={position=0}}) end
+        if #uris > 0 then b = {uris=uris, offset={position=0}} end
     elseif item and item.id then
         -- Guarded: an item with no id used to raise a concat error here rather
-        -- than failing gracefully. `body` stays nil and the caller returns false.
-        body = json.encode({uris={"spotify:track:" .. item.id}})
+        -- than failing gracefully. `b` stays nil and the caller returns false.
+        b = {uris={Util.item_uri(item)}}
     end
+    -- Podcasts resume where you stopped. Resolved here rather than passed in, so
+    -- every path that plays an episode -- a list, an action menu, a search
+    -- result, a replayed session -- resumes without a caller having to know to
+    -- ask. Util.episode_resume_ms answers nil for anything that is not an
+    -- episode, so a track costs nothing.
+    if b then b.position_ms = Util.episode_resume_ms(item) end
+    local body = b and json.encode(b) or nil
     if body then
         local code = Util.api_write("PUT", "https://api.spotify.com/v1/me/player/play" .. dparam,
             token, {timeout=3, body=body})
@@ -4079,69 +4594,67 @@ local function do_follow_artist(artist_id, follow)
     return false
 end
 
-local function do_add_queue(track_id)
+-- Takes the ITEM, not an id: the endpoint wants a URI and the local mirror now
+-- stores one, and neither can be built from an id alone once episodes exist.
+local function do_add_queue(item)
+    local uri = Util.item_uri(item)
+    if not uri then return end
     local token = get_token()
     if not token then rofi_message("Cannot add to queue: no token"); return end
-    local url = "https://api.spotify.com/v1/me/player/queue?uri=spotify:track:" .. track_id
+    local url = "https://api.spotify.com/v1/me/player/queue?uri=" .. uri
     local r = Util.api_write("POST", url, token)
     if not Util.is2xx(r) then rofi_message("Failed to add to queue"); return end
     mem_bust("queue")
     -- also add to local queue tracking
     if not queue_tracks then queue_tracks = {}; queue_idx = 0 end
-    queue_tracks[#queue_tracks+1] = track_id
+    queue_tracks[#queue_tracks+1] = uri
     flush_queue()
 end
 
-local function do_save_album(album_id)
+-- Save or unsave one library item. `kind` keys P.lib_kinds, which is where the
+-- endpoint and the two caches to bust live, so albums and podcasts share this
+-- rather than each carrying a save/remove pair of their own -- the shape the
+-- album version grew into when removing was made reachable from an album's own
+-- action menu instead of only from the Saved Albums list.
+function Util.lib_write(kind, id, save)
+    local k = P.lib_kinds[kind]
+    if not (k and id) then return false end
     local token = get_token()
-    if not token then rofi_message("Cannot save album: no token"); return false end
-    local url = "https://api.spotify.com/v1/me/albums?ids=" .. album_id
-    local r = Util.api_write("PUT", url, token)
-    if Util.is2xx(r) then
-        mem_bust("saved_albums")
-        disk_bust(P.albums)
-        return true
-    end
-    return false
-end
-
--- The mirror of do_save_album. This used to exist only inline in view_browse's
--- Saved Albums branch, which is why removing an album was reachable from that
--- ONE list and nowhere else -- an album's own action menu could save it but
--- never unsave it.
-function Util.do_remove_album(album_id)
-    local token = get_token()
-    if not token then rofi_message("Cannot remove album: no token"); return false end
-    local url = "https://api.spotify.com/v1/me/albums?ids=" .. album_id
-    local r = Util.api_write("DELETE", url, token)
-    if Util.is2xx(r) then
-        mem_bust("saved_albums")
-        disk_bust(P.albums)
-        return true
-    end
-    return false
-end
-
--- "Is this album in the library?", answered without stalling the menu.
---
--- Reads the saved-albums cache DIRECTLY rather than calling load_saved_albums:
--- that function refetches every page when the cache is cold, which would turn
--- opening an album's action menu into a multi-second paginated crawl. When
--- there is no cache to consult it asks Spotify instead -- one small request,
--- the same shape api_check_following already uses for artists.
---
--- A cache written before an album was saved elsewhere can be stale, exactly as
--- Util.is_liked can be for tracks; acting on the row corrects it either way,
--- since both writers bust the cache.
-function Util.album_is_saved(album_id)
-    if not album_id then return false end
-    local items = mem_get("saved_albums")
-    if not items then items = disk_get(P.albums) end
-    if type(items) == "table" then
-        for _, a in ipairs(items) do if a.id == album_id then return true end end
+    if not token then
+        rofi_message("Cannot " .. (save and "save " or "remove ") .. k.noun .. ": no token")
         return false
     end
-    local r = api_get("me/albums/contains", "ids=" .. album_id)
+    local url = "https://api.spotify.com/v1/" .. k.ids .. "?ids=" .. id
+    local r = Util.api_write(save and "PUT" or "DELETE", url, token)
+    if Util.is2xx(r) then
+        mem_bust(k.mem)
+        disk_bust(k.file)
+        return true
+    end
+    return false
+end
+
+-- "Is this in the library?", answered without stalling the menu.
+--
+-- Reads the cache DIRECTLY rather than calling the loader: that refetches every
+-- page when the cache is cold, which would turn opening an action menu into a
+-- multi-second paginated crawl. When there is no cache to consult it asks
+-- Spotify instead -- one small request, the same shape api_check_following
+-- already uses for artists.
+--
+-- A cache written before the item was saved elsewhere can be stale, exactly as
+-- Util.is_liked can be for tracks; acting on the row corrects it either way,
+-- since Util.lib_write busts both caches.
+function Util.lib_has(kind, id)
+    local k = P.lib_kinds[kind]
+    if not (k and id) then return false end
+    local items = mem_get(k.mem)
+    if not items then items = disk_get(k.file) end
+    if type(items) == "table" then
+        for _, a in ipairs(items) do if a.id == id then return true end end
+        return false
+    end
+    local r = api_get(k.contains, "ids=" .. id)
     return type(r) == "table" and r[1] == true
 end
 
@@ -4157,7 +4670,7 @@ local function do_save_playlist(playlist_id)
     return false
 end
 
--- Shared "Open / Save / Copy URL" action menu for albums and playlists.
+-- Shared "Open / Save / Copy Web Link" action menu for albums and playlists.
 -- Handles Save/Copy internally; returns true if the caller should open the
 -- item (via browse_album / api_get_playlist_tracks) themselves, since the
 -- follow-up navigation (session push/pop depth, pending-seek handling) differs
@@ -4168,9 +4681,9 @@ local function album_action_menu(album)
     -- label -- the same problem Util.pos_row exists for in view_actions and
     -- view_playback. Remembering the label meant that saving an album (and so
     -- relabelling the row) dropped the cursor back to the top next time.
-    local is_saved = Util.album_is_saved(album.id)
+    local is_saved = Util.lib_has("album", album.id)
     local acts  = {"Open Album", is_saved and "Remove from Saved Albums" or "Save Album",
-                   "Albumart", "Copy URL", "Album Details"}
+                   "Albumart", "Copy Web Link", "Album Details"}
     local akeys = {"open", "save", "art", "url", "details"}
     if (album.artists or {})[1] then
         table.insert(acts, 2, "Go to Artist")
@@ -4194,13 +4707,13 @@ local function album_action_menu(album)
         end
     end
     if action == "Save Album" then
-        rofi_message(do_save_album(album.id) and "Album saved" or "Failed to save album")
+        rofi_message(Util.lib_write("album", album.id, true) and "Album saved" or "Failed to save album")
     elseif action == "Remove from Saved Albums" then
-        rofi_message(Util.do_remove_album(album.id) and "Removed from Saved Albums"
+        rofi_message(Util.lib_write("album", album.id, false) and "Removed from Saved Albums"
             or "Failed to remove album")
-    elseif action == "Copy URL" then
+    elseif action == "Copy Web Link" then
         copy_spotify_url("album", album.id)
-        rofi_message("Copied URL")
+        rofi_message("Copied web link")
     elseif action == "Go to Artist" then
         local ar = (album.artists or {})[1]
         if ar then Util.open_artist({id=ar.id, name=ar.name or ""}, alt) end
@@ -4212,8 +4725,45 @@ local function album_action_menu(album)
     return action == "Open Album"
 end
 
+-- album_action_menu's shape for podcasts, down to the stable-key cursor: row 2
+-- flips between Follow and Unfollow with the library state, so remembering the
+-- cursor by the visible label would drop it back to the top the moment the row
+-- was relabelled. Returns whether the caller should open the show, which is the
+-- contract album_action_menu and playlist_action_menu already answer with.
+function Util.show_action_menu(show)
+    local followed = Util.lib_has("show", show.id)
+    local acts  = {"Open Podcast", followed and "Unfollow Podcast" or "Follow Podcast",
+                   "Podcast Art", "Copy Web Link", "Podcast Details"}
+    local akeys = {"open", "follow", "art", "url", "details"}
+    local sh_ac_key = "show-ac:" .. (show.id or "")
+    local pre_sel = Util.pos_row(sh_ac_key, akeys)
+    local action = rofi_dmenu(acts,
+        {prompt=show.name or "Podcast", mesg=Util.display_show(show), custom=false,
+         theme=THEME_SUB, no_status=true, sel=pre_sel, markup=true})
+    if action then
+        for i, a in ipairs(acts) do
+            if a == action then Util.pos_put(sh_ac_key, akeys[i]); break end
+        end
+    end
+    if action == "Follow Podcast" then
+        rofi_message(Util.lib_write("show", show.id, true) and "Podcast followed"
+            or "Failed to follow podcast")
+    elseif action == "Unfollow Podcast" then
+        rofi_message(Util.lib_write("show", show.id, false) and "Podcast unfollowed"
+            or "Failed to unfollow podcast")
+    elseif action == "Copy Web Link" then
+        copy_spotify_url("show", show.id)
+        rofi_message("Copied web link")
+    elseif action == "Podcast Art" then
+        view_art(show)
+    elseif action == "Podcast Details" then
+        Util.view_show_details(show)
+    end
+    return action == "Open Podcast"
+end
+
 local function playlist_action_menu(pl)
-    local acts = {"Open Playlist", "Save Playlist", "Playlist Art", "Copy URL"}
+    local acts = {"Open Playlist", "Save Playlist", "Playlist Art", "Copy Web Link"}
     local pl_ac_key = "pl-ac:" .. (pl.id or "")
     local pre_sel = 0
     local saved = Util.pos_get(pl_ac_key)
@@ -4229,9 +4779,9 @@ local function playlist_action_menu(pl)
         view_art(pl)
     elseif action == "Save Playlist" then
         rofi_message(do_save_playlist(pl.id) and "Playlist saved" or "Failed to save playlist")
-    elseif action == "Copy URL" then
+    elseif action == "Copy Web Link" then
         copy_spotify_url("playlist", pl.id)
-        rofi_message("Copied URL")
+        rofi_message("Copied web link")
     end
     return action == "Open Playlist"
 end
@@ -4269,7 +4819,7 @@ recover_playback = function(direction, force)
     else
         local uris = {}
         for i = new_idx, math.min(#queue_tracks, new_idx + 49) do
-            uris[#uris+1] = "spotify:track:" .. queue_tracks[i]
+            uris[#uris+1] = queue_tracks[i]
         end
         if #uris > 0 then body = json.encode({uris=uris, offset={position=0}}) end
     end
@@ -4339,12 +4889,144 @@ local function api_get_album(album_id)
     end, {revalidate = "album", revalidate_arg = album_id})
 end
 
+-- A podcast and its episodes, in the shape api_get_album answers with: the show
+-- object itself, plus `episodes` as a flat array rather than the paging envelope
+-- Spotify wraps it in.
+--
+-- The synthetic `show` patched onto each episode matters for exactly the reason
+-- the album version's does: shows/{id}/episodes answers with SimplifiedEpisode,
+-- which carries NO parent, and that stunted object escapes this view -- do_play
+-- assigns it to current_track, view_art captions from it, Go to Podcast and
+-- Copy URL read it, and the episode list's backdrop resolves its cover through
+-- it. `publisher` is in the patch because Util.subtitle falls back to it.
+--
+-- No snapshot_id exists for a show, so unlike a playlist there is nothing to
+-- hand cached_fetch as a validity tag; the long TTL plus the revalidator is the
+-- honest version of "we cannot know, so serve fast and refresh behind you".
+function Util.api_get_show(show_id)
+    return cached_fetch("show_" .. show_id, P.mass .. "/show_" .. show_id .. ".json", CACHE_TTL_LONG, function()
+        local d = api_get("shows/" .. show_id, Util.with_market())
+        if not d then return nil end
+        local eps = {}
+        if d.episodes and d.episodes.items then
+            for _, e in ipairs(d.episodes.items) do eps[#eps+1] = e end
+            local next_url = d.episodes.next
+            while next_url do
+                local params = next_url:match("%?(.+)")
+                local page = api_get("shows/" .. show_id .. "/episodes", params)
+                if not page then return nil end
+                if not page.items or #page.items == 0 then break end
+                for _, e in ipairs(page.items) do eps[#eps+1] = e end
+                next_url = page.next
+            end
+        end
+        for _, e in ipairs(eps) do
+            if not e.show then e.show = {} end
+            e.show.id        = e.show.id        or d.id
+            e.show.name      = e.show.name      or d.name
+            e.show.publisher = e.show.publisher or d.publisher
+            if d.images and #d.images > 0
+               and (not e.show.images or #e.show.images == 0) then
+                e.show.images = d.images
+            end
+        end
+        d.episodes = eps
+        return d
+    end, {revalidate = "show", revalidate_arg = show_id})
+end
+-- Where an episode should actually start, asked at the moment of playing.
+--
+-- resume_point cannot be read off the episode we already hold: it arrives inside
+-- the show payload, and Util.api_get_show caches that for CACHE_TTL_LONG, so
+-- after the first fetch of a show the position is frozen for a day. Resume
+-- therefore never survived a restart -- or even a second play in the same
+-- session -- and always restarted from zero.
+--
+-- One small request, and only when starting an EPISODE that is not already the
+-- current item (Util.play_or_toggle turns that case into a transport toggle
+-- before do_play is reached), so tracks pay nothing and a double press does not
+-- refetch. fully_played is honoured for the reason it always was: a finished
+-- episode's position sits at the very end, and resuming there drops you into
+-- the last seconds of the credits.
+-- What an episode's progress looks like, resolved WITHOUT touching the network
+-- -- this runs per row, on every draw. Local first for the same reason
+-- Util.episode_resume_ms prefers it: the recorder is the only thing that sees
+-- this player's progress, and Spotify answers zero for everything spotifyd
+-- played. Returns milliseconds (0 when unknown) and whether it is finished.
+function Util.episode_progress(item)
+    if not item then return 0, false end
+    local ms, done = Util.eresume_get(item.id)
+    if ms then return ms, false end
+    if done then return 0, true end
+    local rp = item.resume_point or {}
+    if rp.fully_played then return 0, true end
+    return rp.resume_position_ms or 0, false
+end
+
+function Util.episode_resume_ms(item)
+    if not (item and item.id and item.type == "episode") then return nil end
+    -- Local first, and it ends the lookup: the recorder below is the only thing
+    -- that sees this player's progress, so its answer is the true one -- and
+    -- returning here means starting an episode costs no request at all. Spotify
+    -- would answer 0 for everything played through spotifyd and overwrite a
+    -- perfectly good position with it.
+    local local_ms, local_done = Util.eresume_get(item.id)
+    if local_ms then return local_ms end
+    -- Finished HERE. Start from the top, and do not spend a request asking
+    -- Spotify about an episode we already know the answer for.
+    if local_done then return nil end
+    -- Nothing recorded here. Now the API is worth asking, because this is
+    -- exactly the case it can answer: an episode you were listening to on a
+    -- phone or the web player, where Spotify's own client did record a position.
+    local d = api_get("episodes/" .. item.id, Util.with_market())
+    local rp = (d and d.resume_point) or item.resume_point
+    if not rp or rp.fully_played then return nil end
+    local ms = rp.resume_position_ms or 0
+    return ms > 0 and ms or nil
+end
+
+-- Lifts CURRENT resume points onto a cached episode list, so the progress figure
+-- and the played-dimming in a show's list are not a day old.
+--
+-- Bounded on purpose: one request for the newest 50 however large the catalogue
+-- (Darknet Diaries is 227 episodes over five pages, and re-paging that on every
+-- open to refresh a progress number would be absurd). Episodes past the newest
+-- 50 keep whatever the show cache holds -- they are the back catalogue, and the
+-- play path reads the live value anyway.
+function Util.merge_resume_points(show_id, eps)
+    if not (show_id and eps and #eps > 0) then return eps end
+    local fresh = cached_fetch("show_resume_" .. show_id,
+        P.mass .. "/show_resume_" .. show_id .. ".json", CACHE_TTL_SHORT, function()
+            local d = api_get("shows/" .. show_id .. "/episodes",
+                Util.with_market("limit=50"))
+            if not (d and d.items) then return nil end
+            local map = {}
+            for _, e in ipairs(d.items) do
+                if e and e.id and e.resume_point then map[e.id] = e.resume_point end
+            end
+            if not next(map) then return nil end
+            return map
+        end)
+    if type(fresh) ~= "table" then return eps end
+    for _, e in ipairs(eps) do
+        if e.id and fresh[e.id] then e.resume_point = fresh[e.id] end
+    end
+    return eps
+end
+
+Util.REVALIDATORS.show = function(show_id)
+    if show_id and #show_id > 0 then return Util.api_get_show(show_id) end
+end
+
 -- The aligned label/value sheet behind Album and Track Details, which carried
 -- byte-identical copies of the row builder, skip-empties wrapper and artist
 -- collapse. add() drops nil and empty values, making most callers' `if d.x`
 -- guards redundant -- kept only where a guard maps a value (explicit -> "yes")
 -- or reaches through an absent table. Popularity 0 still shows: "0" isn't "".
-function Util.detail_sheet()
+-- `theme` overrides the sheet's window only -- every caller shares the same row
+-- builder, so an album sheet and a podcast sheet cannot drift in how they render
+-- a field. Defaults to THEME_META.
+function Util.detail_sheet(theme)
     local lines = {}
     local s = {}
     function s.add(label, val)
@@ -4363,7 +5045,7 @@ function Util.detail_sheet()
         if #names > 0 then s.add("Artists", table.concat(names, ", ")) end
     end
     function s.show()
-        rofi_message(#lines > 0 and table.concat(lines, "\n") or "No details available", THEME_META)
+        rofi_message(#lines > 0 and table.concat(lines, "\n") or "No details available", theme or THEME_META)
     end
     return s
 end
@@ -4418,6 +5100,50 @@ Util.view_track_details = function(item)
     s.show()
 end
 
+-- Both sheets below reuse Util.detail_sheet unchanged; s.artists simply goes
+-- unused, since neither a show nor an episode has any.
+Util.view_show_details = function(show)
+    local d = Util.api_get_show(show.id)
+    if not d then
+        rofi_message("Could not load podcast details")
+        return
+    end
+    local s = Util.detail_sheet(Util.THEME_PODS)
+    s.add("Name", d.name)
+    s.add("Publisher", d.publisher)
+    s.add("Episodes", d.total_episodes or (d.episodes and #d.episodes))
+    s.add("Type", d.media_type)
+    s.add("Languages", d.languages and #d.languages > 0 and table.concat(d.languages, ", ") or nil)
+    if d.explicit then s.add("Explicit", "yes") end
+    s.add("Description", d.description)
+    s.add("URL", d.external_urls and d.external_urls.spotify)
+    s.add("ID", d.id)
+    s.show()
+end
+
+Util.view_episode_details = function(item)
+    local d = api_get("episodes/" .. (item.id or ""), Util.with_market())
+    if not d then
+        rofi_message("Could not load episode details")
+        return
+    end
+    local s = Util.detail_sheet(Util.THEME_PODS)
+    s.add("Name", d.name)
+    s.add("Podcast", d.show and d.show.name)
+    s.add("Release date", d.release_date)
+    s.add("Duration", Util.dur_short(d.duration_ms))
+    -- Reads the same resolver the list rows do, so the sheet and the row can
+    -- never disagree about how far in you are.
+    local pos, done = Util.episode_progress(d)
+    if done then s.add("Progress", "played")
+    elseif pos > 0 then s.add("Progress", Util.dur_short(pos) .. " in") end
+    if d.explicit then s.add("Explicit", "yes") end
+    s.add("Description", d.description)
+    s.add("URL", d.external_urls and d.external_urls.spotify)
+    s.add("ID", d.id)
+    s.show()
+end
+
 -- `snapshot` is the playlist's snapshot_id, which Spotify changes exactly when
 -- its contents change. Handed to cached_fetch as the validity tag, it replaces
 -- guessing with knowing: a playlist you have opened before is a disk read for as
@@ -4435,8 +5161,11 @@ api_get_playlist_tracks = function(playlist_id, snapshot)
             -- out of a playlist lost its explicit glyph in list rows, in the
             -- message bar and in Track Details. `is_playable` is in for the same
             -- reason -- the mask would otherwise drop the one field that says
-            -- whether the track can actually play here.
-            function(o) return Util.with_market("limit=100&offset=" .. o .. "&fields=items(track(id,name,duration_ms,explicit,is_playable,artists,album(id,name,images,artists)),added_at),next") end,
+            -- whether the track can actually play here. `type` joined them for
+            -- the same reason: a playlist may legally hold episodes, and
+            -- without it one arrives shaped like an artist-less track and plays
+            -- as spotify:track:<episode id>, which resolves to nothing.
+            function(o) return Util.with_market("limit=100&offset=" .. o .. "&fields=items(track(id,name,type,duration_ms,explicit,is_playable,artists,album(id,name,images,artists)),added_at),next") end,
             function(d, items) return #items == 0 or not d.next end,
             function(entry)
                 if entry.track and entry.track.id then
@@ -4533,18 +5262,126 @@ end
 -- One search, one shape: all four types in one request, P.max of each. Neither
 -- the type list nor the limit is a parameter any more -- there is no second
 -- caller to vary them, and both belonged to the type picker that is gone.
+-- The one list of what a search covers. It used to be three hand-maintained
+-- copies -- the type= parameter, the plural keys the response is unwrapped by,
+-- and format_search_results' display order -- which is exactly the drift the
+-- comments around here keep warning about. `key` is the plural Spotify answers
+-- with and the _stype every row is stamped with; `t` is the singular the
+-- endpoint asks for. Order is display order.
+Util.SEARCH_TYPES = {
+    {key = "tracks",    t = "track"},
+    {key = "albums",    t = "album"},
+    {key = "artists",   t = "artist"},
+    {key = "playlists", t = "playlist"},
+    {key = "shows",     t = "show"},
+    {key = "episodes",  t = "episode"},
+}
+
+-- The pages the one results list is split into, and the only thing that knows
+-- the split is not 1:1 with Util.SEARCH_TYPES: "All" spans every type, and
+-- Podcasts holds shows AND episodes, because "podcast" as a thing you look for
+-- means both the show and a particular episode of it.
+--
+-- `keys = nil` means "every type, in SEARCH_TYPES order" rather than a copy of
+-- that list, so the All page cannot drift when a type is added or removed.
+-- `icon` names the _stype whose glyph stands for the page, and defaults to the
+-- page key. Only the two pages whose key is not itself a type need it: All spans
+-- every type and so gets none, and Podcasts spans two and takes the show's.
+Util.SEARCH_PAGES = {
+    {key = "all",       label = "All",                             icon = false},
+    {key = "tracks",    label = "Tracks",    keys = {"tracks"}},
+    {key = "albums",    label = "Albums",    keys = {"albums"}},
+    {key = "artists",   label = "Artists",   keys = {"artists"}},
+    {key = "playlists", label = "Playlists", keys = {"playlists"}},
+    {key = "podcasts",  label = "Podcasts",  keys = {"shows", "episodes"}, icon = "shows"},
+}
+
+-- Which _stype keys a page shows, resolved once so callers never special-case
+-- the nil that means "all of them".
+function Util.search_page_keys(page)
+    local pg = Util.SEARCH_PAGES[page]
+    if pg and pg.keys then return pg.keys end
+    local all = {}
+    for _, e in ipairs(Util.SEARCH_TYPES) do all[#all+1] = e.key end
+    return all
+end
+
+-- One search, described once. api_search issues it through api_get; the
+-- parallel prefetcher below builds a curl for the same thing, and they must
+-- agree on the query, the cache key and the shape stored under it or the
+-- prefetch would fill a cache api_search never reads.
+function Util.search_query(query)
+    local ts = {}
+    for _, e in ipairs(Util.SEARCH_TYPES) do ts[#ts+1] = e.t end
+    local stype, limit = table.concat(ts, ","), P.max
+    return Util.with_market("q=" .. url_encode(query) .. "&type=" .. stype .. "&limit=" .. limit),
+           "search:" .. query .. ":" .. stype .. ":" .. limit
+end
+
+-- Collapses each type's paging envelope to a bare array. api_get already ran on
+-- the api_search path; the prefetcher decodes raw, so this is the one place that
+-- knows what a cached search looks like.
+function Util.search_unwrap(d)
+    if not d then return nil end
+    for _, e in ipairs(Util.SEARCH_TYPES) do
+        if d[e.key] and d[e.key].items then d[e.key] = d[e.key].items end
+    end
+    return d
+end
+
 local function api_search(query)
-    local stype, limit = "track,album,artist,playlist", P.max
-    local key = "search:" .. query .. ":" .. stype .. ":" .. limit
+    local params, key = Util.search_query(query)
     return cached_fetch(key, Util.search_cache_path(key), CACHE_TTL_LONG, function()
-        local d = api_get("search", Util.with_market("q=" .. url_encode(query) .. "&type=" .. stype .. "&limit=" .. limit))
-        if d then
-            for _, k in ipairs({"tracks","albums","artists","playlists"}) do
-                if d[k] and d[k].items then d[k] = d[k].items end
+        return Util.search_unwrap(api_get("search", params))
+    end)
+end
+
+-- Fills the search cache for many queries AT ONCE. The shelf warm behind the
+-- Podcasts grid is 21 topic searches, and issued one at a time -- each ~500ms of
+-- latency and almost no transfer -- that alone was 11 of the 27 seconds a
+-- brand-new warm took, during which every tile draws a placeholder.
+--
+-- Same fire-a-batch-and-wait idiom parallel_fetch_library uses, and the same
+-- reason: these are latency-bound, so the wall time is one round trip rather
+-- than the sum of them. Already-cached queries are skipped, so a warm start
+-- issues nothing.
+function Util.search_prefetch(queries)
+    local token = get_token()
+    if not token then return end
+    local auth = "Authorization: Bearer " .. token
+    local want = {}
+    for _, q in ipairs(queries or {}) do
+        local params, key = Util.search_query(q)
+        local path = Util.search_cache_path(key)
+        if disk_get(path, CACHE_TTL_LONG) == nil then
+            want[#want+1] = {q = q, params = params, path = path, tmp = path .. ".tmp"}
+        end
+    end
+    if #want == 0 then return end
+    ensure_cache()
+    local BATCH = 8
+    for i = 1, #want, BATCH do
+        local cmds = {}
+        for j = i, math.min(i + BATCH - 1, #want) do
+            local w = want[j]
+            cmds[#cmds+1] = string.format("curl -s --max-time 15 -H %s %s -o %s 2>/dev/null",
+                shell_quote(auth),
+                shell_quote("https://api.spotify.com/v1/search?" .. w.params),
+                shell_quote(w.tmp))
+        end
+        os.execute(table.concat(cmds, " & ") .. " & wait")
+        for j = i, math.min(i + BATCH - 1, #want) do
+            local w = want[j]
+            local d = safe_decode(read_file(w.tmp) or "")
+            os.remove(w.tmp)
+            -- Through the same collapse and the same availability pass api_get
+            -- would have applied, so a prefetched entry is byte-comparable with
+            -- one api_search wrote.
+            if d and not d.error then
+                disk_set(w.path, Util.search_unwrap(Util.mark_availability(d)))
             end
         end
-        return d
-    end)
+    end
 end
 
 local function api_get_me()
@@ -4555,6 +5392,22 @@ end
 -- Util.market() needs this, and it is declared far above where this local
 -- exists. Published rather than duplicated so there stays one profile fetch.
 Util.api_get_me = api_get_me
+
+-- What to call the menu holding your library. api_get_me is disk-cached for an
+-- hour and cached_fetch serves a stale copy rather than nothing, so this is a
+-- file read in the normal case and survives being offline.
+--
+-- Falls back through the account id to a plain word: display_name is optional on
+-- a Spotify profile and comes back null for some accounts, and a menu row is not
+-- the place to discover that.
+function Util.account_name()
+    local me = api_get_me()
+    local n = me and me.display_name
+    if type(n) == "string" and trim(n) ~= "" then return trim(n) end
+    n = me and me.id
+    if type(n) == "string" and trim(n) ~= "" then return trim(n) end
+    return "Library"
+end
 
 -- Five minutes is shorter than the gap between two ordinary uses of spoot, so
 -- this expired before nearly every open and the Playlists menu paid a ~340ms
@@ -4632,7 +5485,14 @@ function Util.spawn_revalidate(name, arg2)
     -- One per name, not one per open: a menu redraws freely, and without this
     -- guard every draw during a slow refresh would start another refresh. Same
     -- pid-file liveness idiom as spawn_art_prefetch and spawn_plindex.
-    local pidf = P.tmp .. "/spoot_reval_" .. name:gsub("[^%w_]", "") .. ".pid"
+    -- The ARGUMENT is in the name too. Four revalidators are parameterised by an
+    -- id -- show, show_latest, category_playlists, playlist_meta -- and a pid
+    -- file keyed on the revalidator alone made them contend for one slot: with
+    -- twenty followed podcasts, one open of Latest Episodes refreshed exactly
+    -- one show and silently dropped the other nineteen, the same one every time
+    -- since Util.load_saved_shows is name-sorted.
+    local pidf = P.tmp .. "/spoot_reval_" .. name:gsub("[^%w_]", "")
+        .. (arg2 and ("_" .. tostring(arg2):gsub("[^%w_]", "")) or "") .. ".pid"
     if Util.pidfile_owner_alive(pidf, "--revalidate") then return end
     local args = {"--revalidate", name}
     if arg2 then args[#args+1] = tostring(arg2) end
@@ -5063,11 +5923,25 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                   or ctx == "liked-by-artist" or ctx == "top-by-artist"
                   or ctx == "recommendations"
                   or ctx == "recently-played" or ctx == "genre"
+                  -- A show's EPISODE list. It carries no ctx_type/ctx_id pair
+                  -- because there is no context_uri to build from them: Spotify
+                  -- documents context_uri for albums, artists and playlists
+                  -- only, and a spotify:show: context fails inside librespot's
+                  -- connect-state resolver with nothing surfacing back here. So
+                  -- episodes take do_play's `uris` branch, exactly as Liked
+                  -- Tracks and Top Tracks already do.
+                  or ctx == "show"
+                  -- Episode lists that are not one podcast's own: Saved
+                  -- Episodes and Latest Episodes. Same reasoning as "show" --
+                  -- no context_uri exists for either, so they play through
+                  -- do_play's uris branch.
+                  or ctx == "episode-list"
                   or (ctx_type and ctx_id)
     local is_album_list   = ctx == "album-list" or (ctx_type == "album" and not ctx_id) or ctx == "album"
     local is_album_grid   = ctx == "album-list" or (ctx_type == "album" and not ctx_id)
     local is_artist_list  = ctx == "artist-list"
     local is_playlist_list = (ctx_type == "playlist" and not ctx_id)
+    local is_show_grid    = ctx == "show-list"
     -- The search's one results list, mixing all four types. "track", "artist",
     -- "search-album" and "search-playlist" used to arrive here too, one per
     -- single-category search; every one of them died with the type picker, and
@@ -5077,7 +5951,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
     -- tostring() of each flag, and callers wanting the default pass nil -- so a
     -- literal `false` here made "nil" ~= "false", and the first refresh of every
     -- such list rebuilt the whole entry array for nothing.
-    local hide_single_artist = (ctx == "album" or ctx == "liked-by-artist" or ctx == "top-by-artist") or nil
+    -- ctx == "show" is here for the reason the comment above rebuild() gives:
+    -- Util.open_show builds its rows with this flag set, so leaving it out made
+    -- the first refresh re-render every episode WITH the podcast name it had
+    -- just been asked to leave off.
+    local hide_single_artist = (ctx == "album" or ctx == "liked-by-artist"
+                                or ctx == "top-by-artist" or ctx == "show") or nil
 
     local v_key = ctx .. "|" .. (ctx_type or "") .. "|" .. (ctx_id or "")
     -- Left nil so rofi_dmenu's pos_key restores the remembered row. It is only
@@ -5115,7 +5994,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
     -- from under every later search.
     --
     -- nil for everything else, which lets rofi_dmenu fall back to its usual
-    -- use_menu/thumbs selection.
+    -- thumbs/plain-list selection.
     local view_theme = album_theme or (is_search and Util.THEME_RESULTS) or nil
     -- Regenerates rows carrying live state (▶ marker, liked heart). Handed to
     -- rofi_dmenu as `refresh` so a redraw from inside -- a track played or liked
@@ -5142,7 +6021,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
         -- ones about to be rendered.
         local at = pre_sel or Util.pos_get(v_key)
         if is_album_grid then Util.album_thumbs(entries, items, nil, at, v_key)
-        elseif is_playlist_list then Util.album_thumbs(entries, items, "playlist", at, v_key) end
+        elseif is_playlist_list then Util.album_thumbs(entries, items, "playlist", at, v_key)
+        -- "show" rather than the default "album": shows are hash-keyed like
+        -- albums (they are absent from P.art_kinds on purpose), but the kind is
+        -- part of Util._thumb_memo's key, so naming it keeps a show grid's memo
+        -- from colliding with an album grid's.
+        elseif is_show_grid then Util.album_thumbs(entries, items, "show", at, v_key) end
         return entries
     end
     while true do
@@ -5152,11 +6036,27 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
         -- Album/artist/playlist rows open content on Return and actions on
         -- Shift+Return, so those lists claim the key. An album's TRACK list is
         -- is_album_list too, but is_track wins the dispatch and keeps the default.
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search or is_playlist_list or is_artist_list or is_album_list), theme=view_theme, use_menu=true, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search, thumbs=is_album_grid or is_playlist_list, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
-            alt_select=((is_album_list and not is_track) or is_artist_list or is_playlist_list or is_search) or nil})
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, custom=false, by_index=true, markup=(is_track or is_search or is_playlist_list or is_artist_list or is_album_list or is_show_grid), theme=view_theme, sel=pre_sel, pos_key=v_key, no_status=no_status or is_search, thumbs=is_album_grid or is_playlist_list or is_show_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
+            -- is_show_grid claims Shift+Return for the show action menu. The
+            -- EPISODE list deliberately does not: it is is_track, and a track
+            -- list must leave Shift+Return to rofi_dmenu's default handler,
+            -- which is what routes an episode to its own action menu.
+            -- The search list claims Tab for its type picker, so it must not
+            -- bubble up as the trail jump. Same opt-in the trail menu itself
+            -- uses; every other list here leaves Tab alone.
+            tab_select=is_search or nil,
+            alt_select=((is_album_list and not is_track) or is_artist_list or is_playlist_list or is_search or is_show_grid) or nil})
         -- Read before anything else: the next rofi_dmenu call clears the flag.
         local alt = Util.alt_pressed
         Util.alt_pressed = false
+        -- Handed back to Util.open_search_results rather than paged here: this
+        -- function never had the results object, only one page's worth of rows,
+        -- and giving it that just to switch pages would widen its signature for
+        -- one caller. A flag read immediately, like Util.alt_pressed above.
+        if Util.tab_pressed then
+            Util.tab_pressed = false
+            if is_search then Util.search_tab = true; return end
+        end
         if jump_to_track_pending then
             jump_to_track_pending = false
             if current_id then
@@ -5177,7 +6077,14 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
             pre_sel = idx - 1
         elseif is_search then
             local st = item._stype
-            if st == "tracks" and alt then
+            -- Tracks and episodes are the two PLAYABLE result kinds, and they
+            -- behave identically here: Shift+Return opens an action menu (which
+            -- view_actions routes by type), Return plays with the other rows of
+            -- its own kind as continuation. Sharing the branch rather than
+            -- copying it is what keeps the sub-list filter below correct for
+            -- both -- it is the reason the filter exists at all.
+            local playable = (st == "tracks" or st == "episodes")
+            if playable and alt then
                 -- This list claims Shift+Return for its album and playlist rows,
                 -- so a track row has to reproduce what rofi_dmenu's default
                 -- handler would have done for it.
@@ -5186,10 +6093,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                 if jump_to_track_pending then return end
                 rebuild()
                 pre_sel = idx - 1
-            elseif st == "tracks" then
+            elseif playable then
+                -- Only rows of the SAME kind, so playback continues through the
+                -- results without stepping onto an album or artist row.
                 local tctx, tcidx = nil, nil
-                for j, it in ipairs(items) do
-                    if it._stype == "tracks" then
+                for _, it in ipairs(items) do
+                    if it._stype == st then
                         if not tctx then tctx = {} end
                         tctx[#tctx+1] = it
                         if it == item then tcidx = #tctx end
@@ -5222,8 +6131,15 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                     Util.open_playlist(item)
                     if jump_to_track_pending then return end
                 end
+            elseif st == "shows" then
+                if not alt or Util.show_action_menu(item) then
+                    Util.open_show(item)
+                    if jump_to_track_pending then return end
+                end
             end
-            if st ~= "tracks" then
+            -- The playable kinds went through rebuild() above, which re-renders
+            -- the whole list; everything else repaints only the row it touched.
+            if not playable then
                 entries[idx] = Util.format_mixed_item(item, idx)
                 pre_sel = idx - 1
             end
@@ -5239,7 +6155,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
             -- single plays it, asking for the album by name opens it.
             local from_menu = false
             if alt and ctx == "album-list" then
-                local acts = {"Open Album", "Remove from Library", "Albumart", "Copy URL", "Album Details"}
+                local acts = {"Open Album", "Remove from Library", "Albumart", "Copy Web Link", "Album Details"}
                 if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
                 -- act_alt, not alt: this list's own Shift+Return is already bound
                 -- to the `alt` above, which is what opened this menu.
@@ -5249,9 +6165,9 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                 if action == "Open Album" then
                     do_open = true; from_menu = true
                 elseif action == "Remove from Library" then
-                    -- Shares Util.do_remove_album with the album action menu;
-                    -- only the row-pruning below is specific to this list.
-                    if Util.do_remove_album(item.id) then
+                    -- Shares Util.lib_write with the album action menu; only
+                    -- the row-pruning below is specific to this list.
+                    if Util.lib_write("album", item.id, false) then
                         rofi_message("Removed from library")
                         table.remove(items, idx)
                         entries = Util.album_entries(items)
@@ -5259,9 +6175,9 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                         if #items == 0 then return end
                         goto br_next
                     else rofi_message("Failed to remove") end
-                elseif action == "Copy URL" then
+                elseif action == "Copy Web Link" then
                     copy_spotify_url("album", item.id)
-                    rofi_message("Copied URL")
+                    rofi_message("Copied web link")
                 elseif action == "Go to Artist" then
                     local ar = (item.artists or {})[1]
                     if ar then
@@ -5292,6 +6208,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
             pre_sel = idx - 1
         elseif is_playlist_list then
             if not alt or playlist_action_menu(item) then Util.open_playlist(item) end
+            pre_sel = idx - 1
+        -- No row rewrite, unlike the artist arm: this grid carries \0icon
+        -- suffixes from Util.album_thumbs, and a show has no live playback state
+        -- worth re-rendering at the cost of losing its thumbnail.
+        elseif is_show_grid then
+            if not alt or Util.show_action_menu(item) then Util.open_show(item) end
             pre_sel = idx - 1
         end end
         ::br_next::
@@ -5361,6 +6283,49 @@ function Util.open_album(al, want_browse)
     return browse_album(al.id, (al.name or "Unknown") .. album_suffix(al))
 end
 
+-- A podcast's episode list. The one function both the live menu and
+-- reg("show", …) call, per the rule the trail depends on: opening a view is ONE
+-- function, so a replayed step behaves exactly like a freshly opened one.
+--
+-- Takes an id, not a show object, because that is all a replayed stack entry
+-- can carry -- `name` is only a label to save the fetch showing a blank header.
+function Util.open_show(show_id, show_name)
+    if type(show_id) == "table" then show_id, show_name = show_id.id, show_id.name end
+    if not show_id then return false end
+    local sd = Util.api_get_show(show_id)
+    if not sd then rofi_message("Failed to load podcast"); return false end
+    local eps = sd.episodes or {}
+    if #eps == 0 then
+        local mk = Util.market()
+        rofi_message("Podcast has no available episodes" .. (mk and (" in " .. mk) or ""))
+        return false
+    end
+    -- Before the rows are built: display_episode reads resume_point for its
+    -- progress figure and its played-dimming, and the copy inside the show cache
+    -- can be a day old.
+    Util.merge_resume_points(show_id, eps)
+    local name = sd.name or show_name or "Podcast"
+    -- Resolved here and handed to view_browse as art_path, the way
+    -- Util.open_playlist does it: items[1] is an EPISODE, so the ctx == "album"
+    -- backdrop branch would have nothing of the show's to look at. Shows are
+    -- hash-keyed art, so this is ensure_art rather than Util.keyed_art.
+    local url = sd.images and sd.images[1] and sd.images[1].url
+    local cover = url and ensure_art(Util.art_url(url, "1e02"), nil, Util.ART_DECOR) or nil
+    Util.scope({view="show", show_id=show_id, show_name=name}, function()
+        -- hide_single_artist so the show's own name is not repeated down every
+        -- row of its own episode list -- the same argument browse_album makes
+        -- for an album's artist.
+        local te = format_entries(eps, nil, nil, true)
+        -- ctx_id without a ctx_type, deliberately. The pair is what do_play
+        -- turns into a context_uri, and a spotify:show: context is the one thing
+        -- this must not produce -- but ctx_id alone still reaches view_browse's
+        -- v_key, which is what gives each podcast its OWN remembered cursor
+        -- instead of all of them sharing "show||".
+        view_browse(te, eps, name .. SEP .. #eps .. " episodes", "show", nil, show_id, nil, cover)
+    end)
+    return true
+end
+
 -- VIEW: ALBUM ART
 
 -- Tracks and albums carry their art on `item.album.images`; a playlist carries
@@ -5382,9 +6347,12 @@ view_art = function(item)
         art_path = ensure_art(Util.art_url(imgs[1].url), "highres")
     end
     if not art_path then rofi_message("No album art available"); return end
+    -- Util.subtitle, not artist_names: it answers the show for an episode and
+    -- the publisher for a podcast, both of which have no artists at all and
+    -- captioned themselves with a dangling separator before.
     local by = item.owner and (item.owner.display_name or item.owner.id or "Spotify")
-        or artist_names(item)
-    local mesg = Util.pango_escape((item.name or "Unknown") .. SEP .. by)
+        or Util.subtitle(item)
+    local mesg = Util.pango_escape((item.name or "Unknown") .. (by ~= "" and (SEP .. by) or ""))
     local entry_tf = Util.tmpfile("art.in")
     local ef = io.open(entry_tf, "w")
     if ef then
@@ -5405,7 +6373,107 @@ end
 
 -- VIEW: TRACK ACTIONS
 
+-- An episode's action menu. A sibling of view_actions rather than a branch
+-- inside it: an episode has no like state, no album, no artists, no playlist
+-- membership and no lyrics, so it shares exactly one row with a track's menu and
+-- would otherwise mean five dimmed-forever rows and a second meaning for half of
+-- view_actions' locals. Albums, artists and playlists each have their own menu
+-- for the same reason.
+--
+-- A real scoped view, unlike album_action_menu: it is reached from a track-like
+-- list where the trail already names the podcast, and its own reg entry is what
+-- makes a warm start replay it as an EPISODE menu -- reg("action") rebuilds a
+-- stub with no `type`, so a replayed episode would otherwise come back as a
+-- track.
+function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
+    return Util.scope({view="episode-action", episode_id=item.id,
+                  episode_name=item.name or "",
+                  show_id=(item.show and item.show.id) or nil,
+                  show_name=(item.show and item.show.name) or nil,
+                  track_duration_ms=item.duration_ms or 0,
+                  episode_unavail=item.unavail or nil,
+                  from_current=(item.id ~= nil and item.id == current_id) or nil}, function()
+    Util.sync_now()
+    local actions, akeys = {"Play"}, {"play"}
+    local seek_idx = #actions + 1
+    actions[seek_idx] = "Seek"; akeys[seek_idx] = "seek"
+    actions[#actions+1] = "Add to Queue"; akeys[#akeys+1] = "queue"
+    actions[#actions+1] = "Go to Podcast"; akeys[#akeys+1] = "show"
+    actions[#actions+1] = "Copy Web Link"; akeys[#akeys+1] = "url"
+    actions[#actions+1] = "Podcast Art"; akeys[#akeys+1] = "art"
+    actions[#actions+1] = "Episode Details"; akeys[#akeys+1] = "details"
+
+    -- Same contract as view_actions' rebuild_actions: volatile labels derived
+    -- from live state on every draw, and rows dimmed rather than removed so a
+    -- fixed index never shifts under the cursor.
+    local DIM = '<span color="#6a707f">'
+    local function rebuild_actions()
+        local playing_this = item.id ~= nil and item.id == current_id
+        actions[1]        = playing_this and (is_playing and "Pause" or "Resume")
+                            or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play")
+        actions[seek_idx] = playing_this and "Seek" or Util.markup(DIM .. 'Seek</span>')
+        return actions
+    end
+    rebuild_actions()
+
+    local ac_key = "ep-ac:" .. (item.id or "")
+    while true do
+        local pre_sel = Util.pos_row(ac_key, akeys)
+        -- `current` is carried for Alt+a, which opens this episode's art rather
+        -- than the playing track's. It also means Shift+Return nests a second
+        -- copy of this menu, exactly as it does in view_actions -- pointless
+        -- here, since no row of this one does anything different on alt, but
+        -- harmless (Backspace pops the one level) and consistent with the track
+        -- menu, which is worth more than special-casing the key away.
+        local sel = rofi_dmenu(actions, {prompt="Episode", mesg=function() return track_mesg(item) end,
+            custom=false, theme=THEME_SUB, no_status=true, markup=true, sel=pre_sel,
+            current=item, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild_actions})
+        if not sel then return end
+        local clean = Util.strip_markup(sel)
+        local key
+        for i, a in ipairs(actions) do
+            if Util.strip_markup(a) == clean then key = akeys[i]; Util.pos_put(ac_key, key); break end
+        end
+        if key == "play" then
+            -- The same call an episode ROW makes, so the menu and the list agree:
+            -- play it if it is not current, otherwise pause or resume. do_play
+            -- derives the resume position from item.resume_point itself.
+            Util.play_or_toggle(item, ctx_type, ctx_id, all_items, cidx)
+        elseif key == "seek" then
+            if item.id == current_id then view_seek(item)
+            else rofi_message("Seek only works on the playing episode") end
+        elseif key == "queue" then do_add_queue(item)
+        elseif key == "show" then
+            local sid = item.show and item.show.id
+            if sid then
+                Util.open_show(sid, item.show.name)
+                if jump_to_track_pending then return end
+            else rofi_message("Episode carries no podcast") end
+        elseif key == "url" then
+            copy_spotify_url("episode", item.id)
+            rofi_message("Copied web link")
+        elseif key == "art" then
+            -- view_art resolves item.images, and the synthetic show patched on by
+            -- Util.api_get_show is what gives an episode without its own artwork
+            -- the podcast's cover to fall back to.
+            view_art({images=(item.images and #item.images > 0) and item.images
+                             or (item.show and item.show.images),
+                      name=item.name, show=item.show})
+        elseif key == "details" then Util.view_episode_details(item) end
+        if jump_to_track_pending then return end
+        rebuild_actions()
+    end
+    end)
+end
+
 view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
+    -- Episodes get their own menu. Dispatching HERE rather than at each call
+    -- site covers every entry point at once: rofi_dmenu's Shift+Return handler,
+    -- Alt+Return on the current track, the search list, an action-on-action, a
+    -- pasted URL, and reg("action")'s replay.
+    if item and item.type == "episode" then
+        return Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
+    end
     -- Action-on-action is a real extra level now that rofi_dmenu redraws the
     -- menu underneath instead of closing it; popping the parent would leave a
     -- visible menu with no stack entry.
@@ -5475,7 +6543,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     actions[rm_idx] = "Remove from Playlist"; akeys[rm_idx] = "rmpl"
     local lyrics_idx = #actions + 1
     actions[lyrics_idx] = "Lyrics"; akeys[lyrics_idx] = "lyrics"
-    actions[#actions+1] = "Copy URL"; akeys[#akeys+1] = "url"
+    actions[#actions+1] = "Copy Web Link"; akeys[#akeys+1] = "url"
     actions[#actions+1] = "More Like This"; akeys[#akeys+1] = "more"
     actions[#actions+1] = "Albumart"; akeys[#akeys+1] = "art"
     actions[#actions+1] = "Track Details"; akeys[#akeys+1] = "details"
@@ -5517,7 +6585,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         local pick_key = "artist-pick:" .. (item.id or "")
         while true do
             local aidx = rofi_dmenu(ae, {prompt="Artists", mesg=(item.name or "") .. SEP .. #arts .. " artists",
-                custom=false, by_index=true, use_menu=true, theme=THEME_SUB, pos_key=pick_key,
+                custom=false, by_index=true, theme=THEME_SUB, pos_key=pick_key,
                 markup=true, alt_select=true})
             -- Shift+Return on the picker reaches the hub even when plain Return
             -- (want_hub false) is what opened it.
@@ -5628,7 +6696,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             end
         elseif key == "Pause" then
             Util.transport(false)
-        elseif key == "Add to Queue" then do_add_queue(item.id)
+        elseif key == "Add to Queue" then do_add_queue(item)
         elseif key == "Like" or key == "Unlike" then
             if do_like(item, key == "Unlike") then
                 is_liked = not is_liked
@@ -5668,7 +6736,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                 local names = {}
                 for i, t in ipairs(rm_targets) do names[i] = t.name end
                 local pick = rofi_dmenu(names, {prompt="Remove from", mesg=(item.name or "") .. SEP .. #rm_targets .. " playlists",
-                    custom=false, by_index=true, use_menu=true, theme=THEME_SUB, markup=true, pos_key="remove-from-playlist"})
+                    custom=false, by_index=true, theme=THEME_SUB, markup=true, pos_key="remove-from-playlist"})
                 target = pick and rm_targets[pick] or nil
             end
             if target then
@@ -5699,9 +6767,9 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                 end
             end
         elseif key == "Lyrics" then view_lyrics(item)
-        elseif key == "Copy URL" then
+        elseif key == "Copy Web Link" then
             copy_spotify_url("track", item.id)
-            rofi_message("Copied URL")
+            rofi_message("Copied web link")
         elseif key == "More Like This" then
             Util.open_recommendations(item.id, item.name)
         elseif key == "Albumart" then view_art(item)
@@ -5761,12 +6829,17 @@ end
 -- hide results that were already paid for. The flat "no more than P.max rows in
 -- total" cap this used to carry was exactly that mistake -- harmless while a
 -- combined search fetched 20 items, but it would now throw away three types.
-local function format_search_results(results, query)
+-- `page` indexes Util.SEARCH_PAGES. Rows keep their _stype stamp whatever the
+-- page, so view_browse's per-type dispatch is untouched by the split -- a
+-- filtered page is the same list with fewer kinds on it, not a different thing.
+local function format_search_results(results, query, page)
+    local want = {}
+    for _, k in ipairs(Util.search_page_keys(page or 1)) do want[k] = true end
     local items = {}
-    for _, rk in ipairs({"tracks","albums","artists","playlists"}) do
-        local ci = results[rk]
+    for _, e in ipairs(Util.SEARCH_TYPES) do
+        local ci = want[e.key] and results[e.key]
         if ci and type(ci) == "table" then
-            for i = 1, #ci do ci[i]._stype = rk; items[#items+1] = ci[i] end
+            for i = 1, #ci do ci[i]._stype = e.key; items[#items+1] = ci[i] end
         end
     end
     if #items == 0 then return nil end
@@ -5774,7 +6847,50 @@ local function format_search_results(results, query)
     for i = 1, #items do
         entries[i] = Util.format_mixed_item(items[i], i)
     end
-    return items, entries, #items .. " results for " .. query
+    local pg = Util.SEARCH_PAGES[page or 1]
+    local mesg = #items .. " results for " .. query
+    if pg and pg.key ~= "all" then mesg = pg.label .. SEP .. mesg end
+    return items, entries, mesg
+end
+
+-- How many rows a page would draw, for the picker's counts. Cheap -- the
+-- response is already in hand and this only sums lengths.
+function Util.search_page_count(results, page)
+    local n = 0
+    for _, k in ipairs(Util.search_page_keys(page)) do
+        local ci = results[k]
+        if type(ci) == "table" then n = n + #ci end
+    end
+    return n
+end
+
+-- Tab's menu. A picker rather than a blind cycle, so an empty page is something
+-- you can SEE and step over rather than land on -- which also means no
+-- skip-the-empties walk and no risk of one looping.
+function Util.search_page_pick(results, page)
+    local rows = {}
+    for i, pg in ipairs(Util.SEARCH_PAGES) do
+        local n = Util.search_page_count(results, i)
+        local row = (pg.icon ~= false and Util.type_icon(pg.icon or pg.key) or "")
+            .. pg.label .. SEP .. n
+        if n == 0 then
+            row = Util.markup('<span color="#6a707f">') .. row .. Util.markup('</span>')
+        elseif i == page then
+            row = Util.markup('<span foreground="#b6e0a4">') .. "\u{f00c} " .. row .. Util.markup('</span>')
+        end
+        rows[i] = row
+    end
+    -- Opens on the page you are already on, which is more useful here than a
+    -- remembered cursor: the menu exists to move you off it.
+    local idx = rofi_dmenu(rows, {prompt="Type", mesg="Filter results by type",
+        custom=false, by_index=true, theme=THEME_SUB, no_status=true, markup=true,
+        sel=(page or 1) - 1})
+    if not idx or idx < 1 or idx > #Util.SEARCH_PAGES then return nil end
+    if Util.search_page_count(results, idx) == 0 then
+        rofi_message("No " .. Util.SEARCH_PAGES[idx].label:lower() .. " results")
+        return nil
+    end
+    return idx
 end
 
 -- Opening a view is ONE function, shared by the live menu and replay_session.
@@ -5794,7 +6910,7 @@ function Util.open_playlist(pl)
     if #tracks == 0 then rofi_message("Playlist is empty"); return false end
     -- A playlist WITH a cover gets the album.rasi backdrop showing its own art;
     -- one without falls through to menu.rasi, which needs no code -- view_browse
-    -- leaves the theme nil and rofi_dmenu's use_menu fallback picks it.
+    -- leaves the theme nil and rofi_dmenu falls back to menu.rasi.
     --
     -- fetch=true because this is a single cover for the view we are opening, not
     -- a grid: there is no batch to defer to. Util.ART_DECOR bounds the wait.
@@ -5840,10 +6956,10 @@ function Util.open_playlist_actions(pl, on_change)
         end
         local is_empty = total == 0 and not (pl.owner and pl.owner.id == "spotify")
         local acts = {is_empty and Util.markup('<span color="#6a707f">Playlist is empty</span>')
-                      or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy URL"}
+                      or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy Web Link"}
         while true do
             local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), custom=false,
-                use_menu=true, theme=THEME_SUB, no_status=true, markup=true, pos_key="playlist-ac:" .. (pl.id or "")})
+                theme=THEME_SUB, no_status=true, markup=true, pos_key="playlist-ac:" .. (pl.id or "")})
             if not asel then return end
             local token = get_token()
             if asel == "Open Playlist" then
@@ -5868,7 +6984,7 @@ function Util.open_playlist_actions(pl, on_change)
             elseif asel == "Delete Playlist" then
                 if not token then rofi_message("No auth")
                 else
-                    local c = rofi_dmenu({"DELETE","Cancel"}, {prompt="Delete", mesg="Delete " .. (pl.name or "") .. "?", custom=false, by_index=true, use_menu=true, theme=THEME_SUB, no_status=true, markup=true})
+                    local c = rofi_dmenu({"DELETE","Cancel"}, {prompt="Delete", mesg="Delete " .. (pl.name or "") .. "?", custom=false, by_index=true, theme=THEME_SUB, no_status=true, markup=true})
                     if c == 1 then
                         local url = "https://api.spotify.com/v1/playlists/" .. pl.id .. "/followers"
                         local r = Util.api_write("DELETE", url, token)
@@ -5881,9 +6997,9 @@ function Util.open_playlist_actions(pl, on_change)
                         else rofi_message("Failed to delete") end
                     end
                 end
-            elseif asel == "Copy URL" then
+            elseif asel == "Copy Web Link" then
                 copy_spotify_url("playlist", pl.id)
-                rofi_message("Copied URL")
+                rofi_message("Copied web link")
             end
         end
     end)
@@ -5916,7 +7032,7 @@ function Util.view_discover_genre()
         local gk = "discover-genre||"
         while true do
             local idx = rofi_dmenu(genres, {prompt="Genre", mesg="Discover by Genre" .. SEP .. #genres .. " genres",
-                custom=false, by_index=true, use_menu=true, no_status=true, markup=true, pos_key=gk})
+                custom=false, by_index=true, no_status=true, markup=true, pos_key=gk})
             if not idx then return end
             if idx >= 1 and idx <= #genres then Util.open_genre_tracks(genres[idx]) end
             if jump_to_track_pending then return end
@@ -5935,13 +7051,40 @@ function Util.open_recommendations(track_id, track_name)
     return true
 end
 
+-- The page is remembered the way every cursor here is, so the type you last
+-- filtered to survives the next search and the next launch. Not carried in the
+-- session entry: a replayed search restores the QUERY, and which slice of it you
+-- were looking at is a preference, not a place.
+Util.SEARCH_PAGE_KEY = "search-page:"
+
 function Util.open_search_results(query)
     local results = api_search(query)
     if not results then rofi_message("No results"); return false end
     Util.scope({view="search-results", query=query}, function()
-        local items, entries, mesg = format_search_results(results, query)
-        if not items then return end
-        view_browse(entries, items, mesg, "search", nil, nil)
+        local page = 1
+        local saved = Util.pos_get(Util.SEARCH_PAGE_KEY)
+        for i, pg in ipairs(Util.SEARCH_PAGES) do if pg.key == saved then page = i end end
+        -- A remembered page can be empty for THIS query even though it had rows
+        -- for the last one, and an empty page draws nothing at all -- so fall
+        -- back to All rather than opening on a blank list.
+        if Util.search_page_count(results, page) == 0 then page = 1 end
+        while true do
+            local items, entries, mesg = format_search_results(results, query, page)
+            if not items then return end
+            -- ctx_id is the page key, which is what view_browse builds its v_key
+            -- from -- so each page remembers its own cursor instead of all six
+            -- sharing one. ctx_type stays nil, so no context_uri is ever built
+            -- from it.
+            view_browse(entries, items, mesg, "search", nil, Util.SEARCH_PAGES[page].key)
+            if not Util.search_tab then break end
+            Util.search_tab = false
+            local pick = Util.search_page_pick(results, page)
+            if pick then
+                page = pick
+                Util.pos_put(Util.SEARCH_PAGE_KEY, Util.SEARCH_PAGES[page].key)
+            end
+            if jump_to_track_pending then break end
+        end
     end)
     return true
 end
@@ -5990,7 +7133,7 @@ function Util.browse_artist_albums(artist_id, artist_name)
             ae = Util.album_entries(items, false)
             Util.album_thumbs(ae, items, nil, Util.pos_get(pk), pk)
             local aidx = rofi_dmenu(ae, {prompt=artist_name or "", mesg=mesg, custom=false, by_index=true,
-                                         use_menu=true, no_status=true, markup=true, thumbs=true, pos_key=pk,
+                                         no_status=true, markup=true, thumbs=true, pos_key=pk,
                                          alt_select=true,
                                          -- So F5 re-runs album_thumbs; view_browse gets this
                                          -- via its own `rebuild`.
@@ -6028,7 +7171,7 @@ function Util.browse_related_artists(artist_id, artist_name)
         local pk = "related:" .. (artist_id or "")
         while true do
             local ridx = rofi_dmenu(ae, {prompt="Related to " .. (artist_name or ""), mesg=mesg, custom=false,
-                                         by_index=true, use_menu=true, no_status=true, markup=true, pos_key=pk,
+                                         by_index=true, no_status=true, markup=true, pos_key=pk,
                                          alt_select=true})
             local alt = Util.alt_pressed
             Util.alt_pressed = false
@@ -6063,12 +7206,12 @@ view_artist = function(artist)
     local actions = {"View All Albums", "View Liked Tracks", "View Top Tracks",
                      "Related Artists",
                      is_followed and "Unfollow Artist" or "Follow Artist",
-                     "Copy URL"}
+                     "Copy Web Link"}
     local art_ac_key = "artist-ac:" .. (artist.id or "")
 
     while true do
         local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist",
-                                         custom=false, use_menu=true, theme=THEME_SUB, no_status=true,
+                                         custom=false, theme=THEME_SUB, no_status=true,
                                          markup=true, pos_key=art_ac_key})
         if not sel then
             Util.back_pressed = false
@@ -6095,9 +7238,9 @@ view_artist = function(artist)
             else
                 rofi_message("Failed to " .. (sel == "Follow Artist" and "follow" or "unfollow") .. " artist")
             end
-        elseif sel == "Copy URL" then
+        elseif sel == "Copy Web Link" then
             copy_spotify_url("artist", artist.id)
-            rofi_message("Copied URL")
+            rofi_message("Copied web link")
         end
     end
     end)
@@ -6161,7 +7304,7 @@ view_lyrics = function(item)
             ::lr_next::
             local sel_line = rofi_dmenu(display_lines,
                 {prompt="Lyrics", mesg=mesg_base .. "\n> Search or select a line to jump to <", custom=false,
-                 use_menu=true, theme=THEME_LYR, sel=pre_sel, markup=true})
+                 theme=THEME_LYR, sel=pre_sel, markup=true})
             if jump_to_track_pending then
                 jump_to_track_pending = false
                 if current_track and current_track.id == item.id then
@@ -6237,7 +7380,7 @@ view_lyrics = function(item)
         while true do
             ::lr_next_plain::
             local sel_line = rofi_dmenu(display_lines,
-                {prompt="Lyrics", mesg=mesg_base, custom=false, use_menu=true, theme=THEME_LYR, markup=true, pos_key="lyrics:" .. (item.id or "")})
+                {prompt="Lyrics", mesg=mesg_base, custom=false, theme=THEME_LYR, markup=true, pos_key="lyrics:" .. (item.id or "")})
             if jump_to_track_pending then
                 jump_to_track_pending = false
                 rofi_message("No synced lyrics — cannot jump to a line")
@@ -6277,7 +7420,7 @@ view_add_pl = function(track_id, track_name)
         end
     end
 
-    local idx = rofi_dmenu(names, {prompt="Add to Playlist", mesg="Select a playlist", custom=false, by_index=true, use_menu=true, markup=true, pos_key="add-to-playlist"})
+    local idx = rofi_dmenu(names, {prompt="Add to Playlist", mesg="Select a playlist", custom=false, by_index=true, markup=true, pos_key="add-to-playlist"})
     if not idx then return end
 
     local target_id, target_name
@@ -6338,7 +7481,7 @@ local function view_playlists()
 
     while true do
         Util.album_thumbs(entries, thumb_items, "playlist", Util.pos_get("playlists||"), "playlists||")
-        local idx = rofi_dmenu(entries, {prompt="Playlists", mesg="Playlists" .. SEP .. #pls, custom=false, by_index=true, use_menu=true, no_status=true, markup=true, pos_key="playlists||", alt_select=true,
+        local idx = rofi_dmenu(entries, {prompt="Playlists", mesg="Playlists" .. SEP .. #pls, custom=false, by_index=true, no_status=true, markup=true, pos_key="playlists||", alt_select=true,
             thumbs=true,
             refresh=function() Util.album_thumbs(entries, thumb_items, "playlist", Util.pos_get("playlists||"), "playlists||"); return entries end})
         local alt = Util.alt_pressed
@@ -6390,7 +7533,7 @@ local function view_search()
         -- a suggestion list, not a menu you are confined to.
         local hist = Util.hist_get(hkey)
         local query = rofi_dmenu(hist, {prompt="Search",
-            mesg="Search", use_menu=true, theme=P.THEME_SEARCH, no_status=true, markup=true,
+            mesg="Search", theme=P.THEME_SEARCH, no_status=true, markup=true,
             hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
         if not query then break end
         -- rofi echoes a SELECTED row back pango-escaped (markup is on), so a
@@ -6420,7 +7563,7 @@ local function view_categories()
         -- Icons are cached by category id, like playlist covers: Spotify replaces
         -- a category's icon in place rather than serving a new URL.
         Util.album_thumbs(ce, cats, "category", Util.pos_get("categories||"), "categories||")
-        local idx = rofi_dmenu(ce, {prompt="Categories", mesg="Categories" .. SEP .. #cats, custom=false, by_index=true, use_menu=true, no_status=true, markup=true, pos_key="categories||",
+        local idx = rofi_dmenu(ce, {prompt="Categories", mesg="Categories" .. SEP .. #cats, custom=false, by_index=true, no_status=true, markup=true, pos_key="categories||",
             thumbs=true,
             refresh=function() Util.album_thumbs(ce, cats, "category", Util.pos_get("categories||"), "categories||"); return ce end})
         if not idx then return end
@@ -6464,6 +7607,201 @@ local function view_saved_albums()
 end)
 end
 
+-- Rows built inline rather than through a Util.album_entries-shaped helper:
+-- that one exists because album rows carry live playback state and have to be
+-- REBUILDABLE, and a show row carries none -- the same reason
+-- view_followed_artists below builds its own.
+Util.view_saved_shows = function()
+    local sh = Util.load_saved_shows() or {}
+    if #sh == 0 then rofi_message("No followed podcasts"); return end
+    Util.scope({view="show-list"}, function()
+    local entries = {}
+    for i, s in ipairs(sh) do entries[i] = Util.display_show(s) end
+    view_browse(entries, sh, "Podcasts" .. SEP .. #sh .. " podcasts", "show-list", nil, nil, true)
+    if jump_to_track_pending then return end
+end)
+end
+
+-- Browsing podcasts by name. Reuses api_search rather than issuing a show-only
+-- request: that function's cache is keyed by query and already fetches every
+-- type in ONE round trip, so searching "darknet" here and searching it from
+-- Search share a cache entry instead of costing two. Only the shows bucket is
+-- shown, as a grid -- which is what makes this a browse rather than a lookup.
+--
+-- ctx_id carries the query for the same reason Util.open_show passes the show
+-- id: it is what view_browse's v_key is built from, so each query remembers its
+-- own cursor instead of every search sharing "show-list||".
+function Util.open_podcast_search(query)
+    local results = api_search(query)
+    local shows = results and results.shows
+    if not (shows and #shows > 0) then
+        rofi_message("No podcasts found for " .. query)
+        return false
+    end
+    Util.scope({view="podcast-search", query=query}, function()
+        local entries = {}
+        for i, s in ipairs(shows) do entries[i] = Util.display_show(s) end
+        view_browse(entries, shows, "Podcasts" .. SEP .. query .. SEP .. #shows .. " podcasts",
+                    "show-list", nil, query, true)
+    end)
+    return true
+end
+
+-- PODCASTS
+--
+-- A dedicated grid, not a menu of two rows. What it deliberately is NOT is a
+-- mirror of open.spotify.com/genre/podcasts-web: that page is served by
+-- Spotify's internal GraphQL backend, and the public Web API exposes none of
+-- it. Verified rather than assumed -- browse/categories answers with 56
+-- categories and not one podcast among them, and the "Podcasts" category that
+-- does exist (0JQ5DArNBzkmxXHCqFLx2J) answers with total: 0 playlists. There is
+-- no browse-shows endpoint and no podcast chart.
+--
+-- So the shelves are built from what the API does serve: your library, and
+-- search. A topic tile is a saved search -- which is what makes it browsable
+-- rather than something you have to already know the name of.
+--
+-- These are Spotify's OWN podcast category names, not invented ones, so the
+-- grid reads like the genre page even though it cannot be fed by it. Each was
+-- checked against search?type=show in this account's market and every one
+-- returns shows. Bare names, deliberately: appending "podcast" to the query was
+-- measured and made results LESS topical, not more (Comedy got worse; Arts got
+-- more rows but fewer of them about the arts).
+Util.PODCAST_TOPICS = {
+    "True Crime", "Comedy", "News", "Politics", "Society & Culture",
+    "Technology", "Science", "Education", "History", "Documentary",
+    "Business", "Health & Fitness", "Lifestyle", "Leisure", "Sports",
+    "Music", "TV & Film", "Arts", "Fiction", "Kids & Family",
+    "Religion & Spirituality",
+}
+
+-- Library shelves first, then the topics. Each `art` returns the object whose
+-- cover stands for the tile, reusing the very fetcher the tile opens with, so a
+-- warm shelf costs nothing extra -- and every one of them runs under
+-- Util.cache_only, so none may assume it will reach the network.
+Util.PODCAST_TILES = (function()
+    local t = {
+        {key = "followed", label = "Followed", open = function() Util.view_saved_shows() end,
+         art = function() return (Util.load_saved_shows() or {})[1] end},
+        {key = "latest",   label = "Latest Episodes", open = function() Util.view_latest_episodes() end,
+         art = function() return Util.latest_episodes()[1] end},
+        {key = "saved",    label = "Saved Episodes", open = function() Util.view_saved_episodes() end,
+         art = function() return (Util.load_saved_episodes() or {})[1] end},
+        {key = "search",   label = "Search", fallback = Util.ART_GENRE,
+         open = function() Util.podcast_search_prompt() end},
+    }
+    for _, topic in ipairs(Util.PODCAST_TOPICS) do
+        t[#t+1] = {
+            -- Sanitised to word characters: this key becomes a FILENAME
+            -- under P.art/podcasts, and category names carry "&" and spaces.
+            key = "topic:" .. topic:lower():gsub("[^%w]+", "-"):gsub("%-+$", ""),
+            label = topic,
+            open = function() Util.open_podcast_search(topic) end,
+            art = function()
+                local r = api_search(topic)
+                return r and r.shows and r.shows[1]
+            end,
+        }
+    end
+    return t
+end)()
+
+-- One show's newest episode, and ONLY that. Deliberately not Util.api_get_show,
+-- which pages a podcast's entire back catalogue -- 227 episodes over five
+-- requests for Darknet Diaries alone. Building a feed from twenty followed shows
+-- that way is a hundred requests to render twenty rows; limit=1 makes it twenty
+-- small ones, cached for an hour.
+--
+-- shows/{id}/episodes answers newest-first, which is the whole reason limit=1 is
+-- enough.
+function Util.show_latest_episode(show_id)
+    return cached_fetch("show_latest_" .. show_id, P.mass .. "/show_latest_" .. show_id .. ".json", CACHE_TTL_MED, function()
+        local d = api_get("shows/" .. show_id .. "/episodes", Util.with_market("limit=1"))
+        return d and d.items and d.items[1] or nil
+    end, {revalidate = "show_latest", revalidate_arg = show_id})
+end
+Util.REVALIDATORS.show_latest = function(show_id)
+    if show_id and #show_id > 0 then return Util.show_latest_episode(show_id) end
+end
+
+-- The newest episode of every podcast you follow, newest first. The closest the
+-- public API gets to a podcast home feed, and it is derived rather than fetched:
+-- there is no endpoint for it.
+--
+-- The parent show is patched on from the list we are already walking, so this
+-- gets it for free where Util.api_get_show has to synthesise one -- and every
+-- caller downstream (Go to Podcast, Copy URL, the art fallback, Util.subtitle)
+-- depends on it being there. Under Util.cache_only nothing is fetched at all,
+-- which is what keeps the tile grid from firing one request per followed
+-- podcast just to draw a thumbnail.
+function Util.latest_episodes()
+    local out = {}
+    for _, sh in ipairs(Util.load_saved_shows() or {}) do
+        local ok, ep = pcall(Util.show_latest_episode, sh.id)
+        if ok and ep then
+            if not ep.show then
+                ep.show = {id = sh.id, name = sh.name,
+                           publisher = sh.publisher, images = sh.images}
+            end
+            out[#out+1] = ep
+        end
+    end
+    -- release_date is ISO, so lexicographic IS chronological.
+    table.sort(out, function(a, b)
+        return (a.release_date or "") > (b.release_date or "")
+    end)
+    return out
+end
+
+function Util.view_latest_episodes()
+    local eps = Util.latest_episodes()
+    if #eps == 0 then rofi_message("No episodes -- follow a podcast first"); return end
+    Util.scope({view="latest-episodes"}, function()
+    -- Show names are NOT hidden here: every row is a different podcast, which is
+    -- the opposite of a single show's episode list.
+    local entries = format_entries(eps)
+    view_browse(entries, eps, "Latest Episodes" .. SEP .. #eps .. " episodes", "episode-list", nil, nil)
+    if jump_to_track_pending then return end
+end)
+end
+
+function Util.view_saved_episodes()
+    local eps = Util.load_saved_episodes() or {}
+    if #eps == 0 then rofi_message("No saved episodes"); return end
+    Util.scope({view="saved-episodes"}, function()
+    local entries = format_entries(eps)
+    view_browse(entries, eps, "Saved Episodes" .. SEP .. #eps .. " episodes", "episode-list", nil, nil)
+    if jump_to_track_pending then return end
+end)
+end
+
+-- Split out so the Search tile and a warm start replaying into a query both
+-- reach the same prompt.
+function Util.podcast_search_prompt()
+    -- The same history the general Search uses, deliberately: a podcast name
+    -- typed in one place is worth offering in the other, and a second history
+    -- key would split the list for no gain.
+    local hkey = P.hist_key
+    Util.hist_migrate()
+    local hist = Util.hist_get(hkey)
+    local query = rofi_dmenu(hist, {prompt="Podcasts", mesg="Search Podcasts",
+        theme=P.THEME_SEARCH, no_status=true, markup=true,
+        hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
+    if not query then return false end
+    -- rofi echoes a selected row back pango-escaped, so a remembered query
+    -- containing & or < has to be mapped back to its raw form.
+    for _, h in ipairs(hist) do
+        if Util.pango_escape(h) == query then query = h; break end
+    end
+    Util.hist_add(hkey, query)
+    return Util.open_podcast_search(query)
+end
+
+Util.view_podcasts = function()
+    Util.view_tile_grid({tiles = Util.PODCAST_TILES, view = "podcasts",
+                         kind = "podcast", prompt = "Podcasts"})
+end
+
 local function view_followed_artists()
     local ar = load_followed_artists()
     if #ar == 0 then rofi_message("No followed artists"); return end
@@ -6473,6 +7811,40 @@ local function view_followed_artists()
     view_browse(entries, ar, "Followed Artists" .. SEP .. #ar .. " artists", "artist-list", nil, nil, true)
     if jump_to_track_pending then return end
 end)
+end
+
+-- YOUR LIBRARY -- the four lists that are yours rather than Spotify's, gathered
+-- under one row named after the account instead of taking four top-level slots.
+--
+-- The view id is "library", not the account name: it is a PERSISTED identifier
+-- naming this view in session.json and its cursor in view_pos.json, and a
+-- display name can change (or be missing entirely) without it becoming a
+-- different menu. Same separation reg("spotify-picks", "Collections") relies on.
+-- `art` returns the object whose cover stands for the row -- the first thing on
+-- it -- reusing the very loader the row opens with, so a warm library costs
+-- nothing extra. All five run under Util.cache_only inside Util.shelf_tiles, so
+-- none may assume it will reach the network; every one of them reads a library
+-- cache that is already on disk, which is why this grid draws with art on the
+-- first open where the shelf-backed ones cannot.
+Util.LIBRARY_ROWS = {
+    {key = "liked",     label = "Liked Tracks",     open = function() view_liked_tracks() end,
+     art = function() return (load_liked_tracks())[1] end},
+    {key = "top",       label = "Top Tracks",       open = function() view_top_tracks() end,
+     art = function() return (api_get_top_tracks() or {})[1] end},
+    {key = "albums",    label = "Saved Albums",     open = function() view_saved_albums() end,
+     art = function() return (load_saved_albums())[1] end},
+    {key = "artists",   label = "Followed Artists", open = function() view_followed_artists() end,
+     art = function() return (load_followed_artists())[1] end},
+    {key = "playlists", label = "Playlists",        open = function() view_playlists() end,
+     art = function() return (api_get_my_playlists() or {})[1] end},
+}
+
+-- The account name is resolved per call rather than baked into the spec: it
+-- comes from a profile cache that can refresh under us, and this menu is the one
+-- place it is displayed.
+Util.view_library = function()
+    Util.view_tile_grid({tiles = Util.LIBRARY_ROWS, view = "library",
+                         kind = "library", prompt = Util.account_name()})
 end
 
 -- Spotify's own shelves plus the personalised ones, gathered under a single Main
@@ -6506,101 +7878,224 @@ end
 --
 -- Every `art` call happens under Util.cache_only (see below), so none of these
 -- may assume its fetcher will actually go out to the network.
-Util.CURATION_TILES = {
+-- `open` is what the row DOES, carried beside its label rather than matched
+-- against it. The label chain this replaces compared the visible string, which
+-- made every display name load-bearing -- rename a row and its action silently
+-- stopped firing. Same reason the cursor is remembered by `key`.
+Util.COLLECTION_TILES = {
+    -- Its own tile grid, opened from this one. First because it is the only row
+    -- here backed by your library rather than by Spotify's editorial shelves,
+    -- and the art follows suit: the podcasts you follow, or the placeholder
+    -- until you follow one.
+    {key = "podcasts",       label = "Podcasts",
+     open = function() Util.view_podcasts() end,
+     art = function() return Util.load_saved_shows()[1] end},
     {key = "madeforyou",     label = "Made For You",
+     open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.made_for_you, "Made For You") end,
      art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.made_for_you) or {})[1] end},
     {key = "discoverweekly", label = "Discover Weekly",
+     open = function() Util.open_discover_weekly() end,
      art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.discover) or {})[1] end},
     {key = "topartists",     label = "Top Artists",
+     open = function() Util.view_top_artists() end,
      art = function() return (Util.api_get_top_artists() or {})[1] end},
     {key = "featured",       label = "Featured Playlists",
+     open = function() Util.open_featured_playlists() end,
      art = function() local d = api_get_featured_playlists(); return d and d.items and d.items[1] end},
     {key = "newreleases",    label = "New Releases",
+     open = function() view_new_releases() end,
      art = function() return (api_get_new_releases() or {})[1] end},
     {key = "charts",         label = "Charts",
+     open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.charts, "Charts") end,
      art = function() return (api_get_category_playlists(Util.PICK_CATEGORIES.charts) or {})[1] end},
-    -- Discover by Genre is a picker over 126 genre names, not a shelf of
-    -- objects, so there is nothing whose cover could stand for it -- the one
-    -- permanently artless row, and the only user of Util.ART_GENERIC.
-    {key = "genre",          label = "Discover by Genre", fallback = Util.ART_GENERIC},
+    -- The two picker rows. Discover by Genre is a picker over 126 genre names
+    -- and Categories one over Spotify's browse categories, not shelves of
+    -- objects, so there is nothing whose cover could stand for either -- the
+    -- permanently artless rows, and the only users of the ART_ assets above.
+    {key = "genre",          label = "Discover by Genre", fallback = Util.ART_GENRE,
+     open = function() Util.view_discover_genre() end},
+    {key = "categories",     label = "Categories",        fallback = Util.ART_CATEGORIES,
+     open = function() view_categories() end},
 }
 
--- Resolves the seven tiles to pseudo-items Util.keyed_art can file by ROW key.
+-- Resolves a tile list to pseudo-items Util.keyed_art can file by ROW key.
+-- One builder for every tile grid: Collections and Podcasts differed only in an
+-- episode's images living on its parent show, which is a no-op for a shelf whose
+-- sources are playlists and albums.
 --
--- Runs entirely under Util.cache_only: reading seven shelves for real would cost
--- half a dozen requests before the menu could draw, which is the exact cost this
--- whole change exists to remove. A shelf we have never opened simply yields no
--- object, its tile gets the placeholder, and the second return value tells the
--- caller to warm it in the background.
-function Util.curation_tiles()
+-- Runs entirely under Util.cache_only: reading every shelf for real would cost a
+-- dozen requests before the grid could draw, which is the exact cost this shape
+-- exists to remove. A shelf never opened simply yields no object -- and that is
+-- reported as `art_unknown` rather than as "no artwork", because Util.keyed_art
+-- treats the second as proof the cover was withdrawn and deletes it. The second
+-- return value tells the caller to warm the cold shelves in the background. The
+-- exception is a row declaring `art_definite`, whose nil means "there is nothing
+-- here" rather than "not read yet" -- see the loop below.
+-- Where a tile's source actually keeps its cover, by kind: an album, artist,
+-- playlist or show carries its own, an episode's is on its parent show, and a
+-- TRACK's is on its album. Same fall-through thumb_resolve makes for ordinary
+-- rows.
+--
+-- Shared by the two halves that must agree about it -- Util.shelf_tiles, which
+-- decides what the grid DRAWS, and Util.run_shelf_warm, which decides what gets
+-- FETCHED. They had a copy each, and the copies drifted the moment a tile backed
+-- by a track appeared: the grid knew to look at the album and the warmer did
+-- not, so those covers were never downloaded.
+-- How wide a tile's caption may be. The grid is five columns of a 1000px window,
+-- so a row is ~190px of text -- a long track title would otherwise wrap into the
+-- tile below it or be cut mid-word by the theme.
+Util.TILE_LABEL_MAX = 22
+
+-- What a tile is CALLED. `label` is the static name; `name` is an optional
+-- function for a row whose caption comes from live state -- the account tile is
+-- named after the Spotify profile, and the Playback tile after whatever is
+-- playing right now. `label` is what it falls back to, so a row is never
+-- nameless: the Playback tile reads "Playback" until something starts.
+--
+-- `name` may return a SECOND value meaning "this row is the thing playing", and
+-- the caption then wears exactly what a playing row wears in any other list --
+-- same glyph, same green, from Util.transport_glyph and Util.now_playing. A tile
+-- and a track row cannot disagree about what playing looks like.
+--
+-- Truncation happens BEFORE the markup and never after: cutting a string that
+-- already carries pango tags would eventually cut one in half and take the whole
+-- row's rendering with it.
+--
+-- Guarded, like the art resolvers: these run against caches that may be
+-- half-populated, and one row's bad day must not take the grid down.
+function Util.tile_label(t)
+    if type(t) ~= "table" then return "?" end
+    if t.name then
+        local ok, n, live = pcall(t.name)
+        if ok and type(n) == "string" and trim(n) ~= "" then
+            n = truncate_text(trim(n), Util.TILE_LABEL_MAX)
+            if live then n = Util.now_playing(Util.transport_glyph() .. n) end
+            return n
+        end
+    end
+    return t.label or "?"
+end
+
+function Util.src_images(src)
+    if type(src) ~= "table" then return nil end
+    local imgs = src.images
+    if (not imgs or #imgs == 0) and src.show  then imgs = src.show.images end
+    if (not imgs or #imgs == 0) and src.album then imgs = src.album.images end
+    if imgs and #imgs > 0 then return imgs end
+    return nil
+end
+
+function Util.shelf_tiles(list)
     local was = Util.cache_only
     Util.cache_only = true
     local tiles, cold = {}, false
-    for i, t in ipairs(Util.CURATION_TILES) do
-        local src = nil
+    for i, t in ipairs(list or {}) do
+        local src, unknown = nil, false
         if t.art then
-            -- Guarded: these run against half-populated caches by design, and one
-            -- shelf's bad day must not take the whole menu down.
+            -- Guarded: these run against half-populated caches by design, and
+            -- one shelf's bad day must not take the whole grid down.
             local ok, v = pcall(t.art)
             src = ok and v or nil
-            if not src then cold = true end
+            -- For most rows a nil is a GAP -- the shelf behind them has not been
+            -- read yet -- so it is reported as unknown and the grid is warmed.
+            -- A row declaring `art_definite` means the opposite: its nil is an
+            -- ANSWER. Playback returns nil when nothing is playing, and warming
+            -- cannot conjure a current track, so calling that a gap made
+            -- Util.keyed_art go on serving art/main/playback.jpg -- the cover of
+            -- whatever played LAST -- on every cold start, and spawned a warmer
+            -- per draw that could never fill it. A thrown error is still a gap
+            -- either way, which is what `ok` separates from a clean nil.
+            if not src then
+                unknown = not (ok and t.art_definite)
+                cold = cold or unknown
+            end
         end
-        tiles[i] = {id = t.key, images = src and src.images or nil,
-                    art_fallback = t.fallback}
+        -- An episode's cover lives on the show patched onto it by
+        -- Util.api_get_show, so fall through to that when it has none of its own.
+        -- A tile with no cover of its own can be given one by DROPPING A FILE:
+        -- style/assets/<key>.png, named after the row. It wins over the
+        -- fallback the row declares, so the artless rows -- Search, System --
+        -- can be themed without touching this file, and a row that grows a real
+        -- cover later simply stops consulting either.
+        local asset = P.assets .. "/" .. t.key .. ".png"
+        if not cache_exists(asset) then asset = nil end
+        tiles[i] = {id = t.key, images = Util.src_images(src),
+                    art_fallback = asset or t.fallback,
+                    art_unknown = unknown or nil}
     end
     Util.cache_only = was
     return tiles, cold
 end
 
-Util.view_curations = function()
-    -- keys, not row indexes, are what the cursor is remembered by -- so this
-    -- list can be reordered without moving anyone's cursor.
+-- One grid for every tile list. `spec` carries what actually differs: the tiles,
+-- the Util.scope view name (a persisted identifier, NOT a label -- it names the
+-- view in session.json and its cursor in view_pos.json, and stays put while the
+-- display name changes), the art kind, and the prompt.
+function Util.view_tile_grid(spec)
+    local list = spec.tiles
+    -- keys, not row indexes, are what the cursor is remembered by -- so a list
+    -- can be reordered without moving anyone\'s cursor.
     local items, keys = {}, {}
-    for i, t in ipairs(Util.CURATION_TILES) do items[i] = t.label; keys[i] = t.key end
-    -- "spotify-picks" is a persisted identifier, not a label: it names this view
-    -- in session.json and its cursor in view_pos.json. It stays put while the
-    -- display name changes, the same separation the `keys` array above gives the
-    -- rows themselves.
-    Util.scope({view="spotify-picks"}, function()
-    local pk = "spotify-picks:"
+    for i, t in ipairs(list) do items[i] = Util.tile_label(t); keys[i] = t.key end
+    Util.scope({view = spec.view}, function()
+    local pk = spec.view .. ":"
     local pre_sel = Util.pos_row(pk, keys)
-    local tiles, cold = Util.curation_tiles()
+    local tiles, cold = Util.shelf_tiles(list)
     -- One warmer per open, and only when something was actually missing. It
     -- fetches the cold shelves and their covers, so the NEXT open is complete --
     -- this one stays as fast as it was when the menu was plain text.
-    if cold then Util.spawn_curation_warm() end
-    -- by_index, like every other thumbnail grid here: album_thumbs appends a
-    -- \0icon field to each row, so matching rofi's echo back against the row TEXT
-    -- is exactly the comparison that suffix would break.
+    if cold then Util.spawn_shelf_warm(spec.kind) end
     local entries = {}
+    -- Re-resolves the tiles rather than re-decorating the ones this draw started
+    -- with. Those carry no images for a shelf that was cold, so redecorating them
+    -- could only ever reproduce the same placeholders -- which made F5 a no-op
+    -- and left backing out and reopening as the only way to see art the warmer
+    -- had already written.
+    local function redraw()
+        tiles = Util.shelf_tiles(list)
+        Util.album_thumbs(entries, tiles, spec.kind, pre_sel, spec.view .. "||")
+        return entries
+    end
     while true do
-        for i, label in ipairs(items) do entries[i] = label end
-        Util.album_thumbs(entries, tiles, "curation", pre_sel, "curations||")
-        local idx = rofi_dmenu(entries, {prompt="Curations", mesg="Curations",
+        -- Re-resolved per draw, not per open: a tile named from live state (the
+        -- account, the playing track) has to follow it.
+        for i, t in ipairs(list) do entries[i] = Util.tile_label(t) end
+        Util.album_thumbs(entries, tiles, spec.kind, pre_sel, spec.view .. "||")
+        -- by_index, like every other thumbnail grid here: album_thumbs appends a
+        -- \0icon field to each row, so matching rofi\'s echo back against the row
+        -- TEXT is exactly the comparison that suffix would break.
+        local idx = rofi_dmenu(entries, {prompt=spec.prompt, mesg=spec.prompt,
             custom=false, by_index=true, no_status=true, markup=true, sel=pre_sel,
-            thumbs=true, thumbs_cols=4,
-            refresh=function() Util.album_thumbs(entries, tiles, "curation", pre_sel, "curations||"); return entries end})
+            -- No thumbs_cols. These two were the only callers that passed it,
+            -- which made them the only grids sending rofi a
+            -- `-theme-str "listview { columns: N; }"` on top of the theme -- and
+            -- the only two whose tiles rendered blank despite Util.thumb_log
+            -- reporting every row resolved to a real cached file
+            -- (cached=25, missing=0, placeholders=0). Drawing at the theme's own
+            -- 5 columns, like every grid that works, is the bisect.
+            thumbs=true, refresh=redraw})
         if not idx then return end
-        if idx < 1 or idx > #items then goto cur_next end
-        pre_sel = idx - 1
-        Util.pos_put(pk, keys[idx])
-        local sel = items[idx]
-        if sel == "Featured Playlists" then Util.open_featured_playlists()
-        elseif sel == "New Releases" then view_new_releases()
-        elseif sel == "Made For You" then
-            Util.open_category_playlists(Util.PICK_CATEGORIES.made_for_you, "Made For You")
-        elseif sel == "Discover Weekly" then Util.open_discover_weekly()
-        elseif sel == "Charts" then
-            Util.open_category_playlists(Util.PICK_CATEGORIES.charts, "Charts")
-        elseif sel == "Top Artists" then Util.view_top_artists()
-        elseif sel == "Discover by Genre" then Util.view_discover_genre() end
-        if jump_to_track_pending then return end
-        -- Whatever we just visited may have filled a shelf that was cold when
-        -- this menu opened, so re-resolve before drawing again.
-        tiles = Util.curation_tiles()
-        ::cur_next::
+        if idx >= 1 and idx <= #items then
+            pre_sel = idx - 1
+            Util.pos_put(pk, keys[idx])
+            if list[idx].open then list[idx].open() end
+            if jump_to_track_pending then return end
+            -- Whatever was just visited may have filled a shelf that was cold
+            -- when this grid opened, so re-resolve before drawing again.
+            tiles = Util.shelf_tiles(list)
+        end
     end
     end)
+end
+
+-- "spotify-picks" is a PERSISTED identifier, not a label: it names this view in
+-- session.json and its cursor in view_pos.json, and it stays put while the
+-- display name changes -- which is exactly what happened when Curations became
+-- Collections. Renaming it would invalidate every saved session, cursor and
+-- trail that points at it.
+Util.view_collections = function()
+    Util.view_tile_grid({tiles = Util.COLLECTION_TILES, view = "spotify-picks",
+                         kind = "collection", prompt = "Collections"})
 end
 
 view_new_releases = function()
@@ -6616,7 +8111,7 @@ view_new_releases = function()
         -- its \0icon suffixes from the memo, so the tiles cost nothing.
         entries = Util.album_entries(albums)
         Util.album_thumbs(entries, albums, nil, pre_sel or Util.pos_get(v_key), v_key)
-        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, use_menu=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true, alt_select=true,
+        local idx = rofi_dmenu(entries, {prompt="New Releases", mesg="New Releases" .. SEP .. #albums .. " albums", custom=false, by_index=true, no_status=true, sel=pre_sel, pos_key=v_key, markup=true, thumbs=true, alt_select=true,
             refresh=function() Util.album_thumbs(entries, albums, nil, pre_sel or Util.pos_get(v_key), v_key); return entries end})
         local alt = Util.alt_pressed
         Util.alt_pressed = false
@@ -6641,7 +8136,7 @@ local function view_your_queue()
         -- is_playable on currently_playing and on every queue entry -- which
         -- matters here because Spotify will happily queue a track it then skips.
         -- api_get collapses that into `unavail` before we ever see it.
-        d = api_get("me/player/queue", Util.with_market())
+        d = api_get("me/player/queue", Util.with_market("additional_types=episode"))
         if d then mem_set("queue", d, 10) end
     end
     if not d then rofi_message("Queue is empty"); return end
@@ -6771,6 +8266,130 @@ Util.wait_playback_change = function(prev_id)
     return current_id ~= prev_id
 end
 
+-- VIEW: LISTEN
+--
+-- Identify whatever the SPEAKERS are playing and hand the match to the ordinary
+-- track action menu. The point is the audio spoot has nothing to do with -- a
+-- video, a browser tab, someone else's playlist -- so it captures the default
+-- sink's monitor rather than a microphone.
+--
+-- All three pieces live on Util rather than as file locals: the chunk is at
+-- Lua's 200-local ceiling (see the note above Util's declaration), and splitting
+-- the parse and the lookup out is also what makes them testable without audio.
+
+-- songrec --json is Shazam's own response. Confirmed against a real one: the
+-- artist is `subtitle`, not any field named artist (`artists` holds opaque
+-- adamids), and `isrc` names the exact recording.
+function Util.listen_parse(raw)
+    local d = safe_decode(raw)
+    local tr = d and d.track
+    if type(tr) ~= "table" then return nil end
+    local function field(k)
+        local v = tr[k]
+        if type(v) ~= "string" then return nil end
+        v = trim(v)
+        if v == "" then return nil end
+        return v
+    end
+    local title = field("title")
+    if not title then return nil end
+    return {title = title, artist = field("subtitle"), isrc = field("isrc")}
+end
+
+-- Shazam's own SPOTIFY hub provider is no help here: it hands back
+-- `spotify:search:<title>%20<artist>`, a search URI rather than a track id, so
+-- the search is ours to do either way.
+function Util.listen_lookup(m)
+    if not m then return nil end
+    -- ISRC names the exact RECORDING, so it lands on the master Shazam actually
+    -- heard rather than a remaster, live cut or karaoke version sharing the
+    -- title. Its own request because the filter is meaningless for the other
+    -- five types api_search asks for, and this response keeps the .items
+    -- envelope that Util.search_unwrap would have flattened.
+    if m.isrc then
+        local d = api_get("search",
+            Util.with_market("q=isrc:" .. url_encode(m.isrc) .. "&type=track&limit=1"))
+        local it = d and d.tracks and d.tracks.items and d.tracks.items[1]
+        if it then return it end
+    end
+    -- Cached and shared with the search menu, so recognising the same song twice
+    -- costs no request. Already unwrapped, hence .tracks[1] and not .items[1].
+    local d = api_search(m.artist and (m.title .. " " .. m.artist) or m.title)
+    return d and d.tracks and d.tracks[1] or nil
+end
+
+function Util.view_listen()
+    if trim(shell("command -v songrec 2>/dev/null") or "") == "" then
+        rofi_message("songrec is not installed"); return
+    end
+    -- The first sink, so this follows whatever the machine's default output is
+    -- rather than naming a card. `.monitor` is the loopback of that sink: what
+    -- is being PLAYED, not what a microphone hears.
+    local sink = trim(shell("pactl list short sinks 2>/dev/null | awk 'NR==1{print $2}'") or "")
+    if sink == "" then rofi_message("No audio output device found"); return end
+    local device = sink .. ".monitor"
+
+    local row_tf, out_tf = Util.tmpfile("listen.in"), Util.tmpfile("listen.out")
+    local sr_pidf, ro_pidf = Util.tmpfile("listen.sr.pid"), Util.tmpfile("listen.ro.pid")
+    local rf = io.open(row_tf, "w")
+    if rf then rf:write("\0icon\x1f" .. P.assets .. "/listen.png\n"); rf:close() end
+
+    -- songrec first, so recognition is already running while rofi maps its
+    -- window. Backgrounded bare rather than inside a { } group: `$!` has to be
+    -- songrec's own pid, because killing a wrapping subshell would leave the
+    -- recorder holding the monitor. Its exit is also what marks the output file
+    -- complete, so the loop below never reads a half-written response.
+    os.execute("songrec recognize -d " .. shell_quote(device) .. " -j > " .. shell_quote(out_tf)
+        .. " 2>/dev/null & echo $! > " .. shell_quote(sr_pidf))
+    -- Same reason as view_art: bind the back combo so a Backspace here is
+    -- consumed by this window instead of reaching the menu underneath.
+    Util.bs_launch(Util.THEME_LISTEN)
+    os.execute("rofi -dmenu -config " .. shell_quote(P.dir .. "/style/config.rasi")
+        .. " -theme " .. shell_quote(Util.THEME_LISTEN)
+        .. " -mesg " .. shell_quote("spoot is listening\u{2026}")
+        .. " -no-custom -kb-custom-1 'Control+Shift+Delete'"
+        .. " < " .. shell_quote(row_tf) .. " > /dev/null 2>&1 & echo $! > " .. shell_quote(ro_pidf))
+
+    local function pid_of(f)
+        local p = trim(read_file(f) or "")
+        return p:match("^%d+$")
+    end
+    local raw, cancelled = nil, false
+    local deadline = os.time() + P.listen_timeout
+    while true do
+        -- songrec gone means it answered: `recognize` exits on its first match.
+        local sp = pid_of(sr_pidf)
+        if sp and not Util.proc_alive(sp) then raw = read_file(out_tf); break end
+        -- Window gone means the user gave up. Checking it is the whole reason
+        -- this polls instead of blocking on songrec: with the recogniser in the
+        -- foreground nothing could notice, and Escape would appear dead until
+        -- the timeout ran out.
+        local rp = pid_of(ro_pidf)
+        if rp and not Util.proc_alive(rp) then cancelled = true; break end
+        if os.time() >= deadline then break end
+        os.execute("sleep " .. tostring(P.listen_poll))
+    end
+
+    for _, f in ipairs({ro_pidf, sr_pidf}) do
+        local p = pid_of(f)
+        if p then os.execute("kill " .. p .. " 2>/dev/null") end
+    end
+    -- Scoped to our own invocation, device and all: a bare `pkill songrec` would
+    -- take down an unrelated one the user started themselves.
+    os.execute("pkill -f " .. shell_quote("songrec recognize -d " .. device) .. " 2>/dev/null")
+    for _, f in ipairs({row_tf, out_tf, sr_pidf, ro_pidf}) do os.remove(f) end
+    if cancelled then return end
+
+    local m = Util.listen_parse(raw)
+    if not m then rofi_message("No match"); return end
+    local track = Util.listen_lookup(m)
+    if not track then
+        rofi_message("Not on Spotify" .. SEP .. (m.artist and (m.artist .. SEP) or "") .. m.title)
+        return
+    end
+    view_actions(track)
+end
+
 local function view_playback()
     -- Resync queue_idx to wherever playback actually is. A blind +1/-1 assumes
     -- queue_tracks is played in linear order, which breaks as soon as shuffle
@@ -6778,8 +8397,13 @@ local function view_playback()
     -- index). Looking up current_id in queue_tracks keeps us correct in both.
     local function sync_queue_idx()
         if not queue_tracks or not current_id then return end
-        for i, tid in ipairs(queue_tracks) do
-            if tid == current_id then queue_idx = i; flush_queue(); return end
+        -- The queue holds URIs and current_id is a bare id, so this compares
+        -- through the same extractor the daemon uses rather than re-deriving
+        -- the URI shape a second time.
+        for i, uri in ipairs(queue_tracks) do
+            if Util.extract_track_id(uri) == current_id then
+                queue_idx = i; flush_queue(); return
+            end
         end
     end
     Util.scope({view="playback"}, function()
@@ -6805,7 +8429,10 @@ local function view_playback()
         add("Previous Track", "prev")
         add("Shuffle " .. (is_shuffle and Util.markup("<b>ON</b>") or Util.markup("<b>OFF</b>")), "shuffle")
         add("Repeat " .. (repeat_state=="off" and Util.markup("<b>OFF</b>") or (repeat_state=="track" and Util.markup("<b>TRACK</b>") or Util.markup("<b>CONTEXT</b>"))), "repeat")
-        add("Open URL", "openurl")
+        add("Your Queue", "queue")
+        add("Recently Played", "recent")
+        add("Listen\u{2026}", "listen")
+        add("Open Web Link", "openurl")
         return items
     end
     -- Hoisted out of the loop: re-deriving it each pass read the stored value
@@ -6817,7 +8444,7 @@ local function view_playback()
         build_items()
         local si = rofi_dmenu(items, {prompt="Playback",
             mesg=function() return current_track and track_mesg(current_track) or nil end,
-            custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=not current_track,
+            custom=false, theme=THEME_SUB, markup=true, no_status=not current_track,
             sel=pre_sel, current=current_track, refresh=build_items})
         if not si then break end
         -- Resolved against `items` AS DRAWN -- the next pass's build_items has not
@@ -6857,7 +8484,15 @@ local function view_playback()
         elseif si:find("^Repeat") then toggle_repeat()
         elseif si == "Seek" then
             if current_track then view_seek(current_track) end
-        elseif si == "Open URL" then
+        elseif si == "Your Queue" then
+            view_your_queue()
+            if jump_to_track_pending then break end
+        elseif si == "Recently Played" then
+            view_recently_played()
+            if jump_to_track_pending then break end
+        elseif si == "Listen\u{2026}" then
+            Util.view_listen()
+        elseif si == "Open Web Link" then
             local url = Util.get_clipboard()
             if url and url ~= "" then open_url(url)
             else rofi_message("Clipboard is empty") end
@@ -6931,7 +8566,7 @@ Util.view_bitrate = function()
             -- the Delete-playlist confirm in Util.open_playlist_actions.
             local c = rofi_dmenu({"Restart Daemons", "Abort"},
                 {prompt="Bitrate", mesg=n .. " kbps" .. SEP .. "restart daemons to apply?",
-                 custom=false, by_index=true, use_menu=true, theme=THEME_SUB,
+                 custom=false, by_index=true, theme=THEME_SUB,
                  no_status=true, markup=true})
             if c == 1 then
                 -- Before the restart: ensure_spotifyd reads the saved value.
@@ -6955,18 +8590,19 @@ local function view_system()
                    "Jump to Trail Step",
                    "Clear Session",
                    "Refresh Library",
+                   "Re-authenticate",
                    "Restart Daemons",
                    "Kill Daemons"}
     -- Rows 2 and 3 are patched in place below as the volume and bitrate change,
     -- so the cursor is remembered by these stable keys rather than by the label
     -- (which no longer matched once it had been rewritten). See Util.pos_row.
     local keys = {"keybinds", "volume", "bitrate", "trailjump",
-                  "clearsession", "refresh", "restart", "kill"}
+                  "clearsession", "refresh", "reauth", "restart", "kill"}
     Util.scope({view="system"}, function()
     local sys_key = "system:"
     local pre_sel = Util.pos_row(sys_key, keys)
     while true do
-        local sel = rofi_dmenu(items, {prompt="System", custom=false, use_menu=true, theme=THEME_SUB, markup=true, no_status=true, sel=pre_sel})
+        local sel = rofi_dmenu(items, {prompt="System", custom=false, theme=THEME_SUB, markup=true, no_status=true, sel=pre_sel})
         if not sel then break end
         local clean = Util.strip_markup(sel)
         for i, it in ipairs(items) do
@@ -6982,27 +8618,27 @@ local function view_system()
                     .. "  " .. desc
             end
             rofi_message(table.concat({
-                row("redraw / load missing thumbnails", "f5"),
-                row("trail steps / trail history", "tab"),
-                row("select", "return"),
-                row("close", "escape"),
-                row("dlete search history entry", "delete"),
+                row("grid redraw failsafe", "f5"),
+                row("trail menu / history \u{2014} search type filter", "tab"),
+                row("select -- play/pause/resume selected item", "return"),
+                row("delete entry in search or trail history", "delete"),
+                row("collapse current menu", "escape"),
                 row("clear input / back one level", "backspace"),
-                row("seek + / - 10s", "alt = / -"),
-                row("jump to main menu", "alt space"),
-                row("action menu (track / album / artist / playlist)", "shift return"),
+                row("quick seek + / - 10s", "alt = / -"),
+                row("hovered item's action menu", "shift return"),
                 row("jump to current track's action menu", "alt return"),
                 row("clear session", "alt delete"),
-                row("seek menu", "alt e"),
-                row("liked tracks", "alt l"),
-                row("recently played", "alt p"),
-                row("album art of current track", "alt a"),
-                row("lyrics of current track", "alt y"),
+                row("jump to main menu", "alt space"),
+                row("jump to seek menu", "alt e"),
+                row("jump to liked tracks", "alt l"),
+                row("jump to recently played", "alt p"),
+                row("jump to lyrics of current track", "alt y"),
+                row("jump to albumart of current track", "alt a"),
                 row("cycle repeat modes", "alt r"),
                 row("toggle shuffle", "alt s"),
-                row("open Spotify URL from clipboard", "alt g"),
-                row("jump to playing track (list)", "alt c"),
-                row("jump to current lyric line (lyrics)"),
+                row("open spotify web link", "alt g"),
+                row("jump to playing track in list", "alt c"),
+                row("jump to current lyric line in lyrics view"),
             }, "\n"), THEME_BINDS)
         elseif clean:match("^Volume") then
             view_volume()
@@ -7016,16 +8652,21 @@ local function view_system()
             cur_br = get_saved_bitrate()
             items[3] = "Bitrate " .. Util.markup("<b>") .. cur_br .. " kbps" .. Util.markup("</b>")
         elseif clean == "Refresh Library" then
-            os.execute("notify-send -t 5000 --app-name=spoot 'spoot' 'Building Cache' &")
-            local tracks, albums, artists = fetch_library_with_fallback()
-            if tracks then
-                save_library_cache(tracks, albums, artists)
-                Util.lib_fp_write()
-                populate_liked_ids()
-                os.execute("notify-send -t 3000 --app-name=spoot 'spoot' 'Caching Complete' &")
-            else
-                os.execute("notify-send -t 5000 --app-name=spoot 'Spoot' 'Library refresh failed' &")
-            end
+            -- Synchronous, unlike the background revalidator: this row exists to
+            -- be waited on. rofi_message rather than a desktop notification,
+            -- matching every other System row -- caching has no business
+            -- interrupting the desktop, but a row that blocks for half a minute
+            -- and then says nothing reads as broken.
+            local ok = Util.rebuild_library()
+            if ok then populate_liked_ids() end
+            rofi_message(ok and "Library refreshed" or "Library refresh failed")
+        elseif clean == "Re-authenticate" then
+            -- The only way to widen the granted scope set, and the only way to
+            -- recover a revoked one without deleting token.json by hand. A
+            -- refresh grant returns whatever was authorised the FIRST time,
+            -- however much OAUTH_SCOPES has grown since.
+            rofi_message(Util.reauth() and "Re-authenticated"
+                or "Re-authentication failed")
         elseif clean == "Jump to Trail Step" then
             Util.view_trail_jump(_session_stack)
             main_pending = true
@@ -7104,6 +8745,20 @@ end, true)
 reg("album", "Album", function(s)
     if s.album_id then browse_album(s.album_id) end
 end)
+reg("show", "Podcast", function(s)
+    if s.show_id then Util.open_show(s.show_id, s.show_name) end
+end)
+-- NOT label_only, matching reg("action", "Track"): the step above this one is a
+-- LIST, so it shows the list's name, not the episode's -- and label_only would
+-- make crumb_name's episode_name branch unreachable and the crumb read a bare
+-- "Episode". The rebuilt stub carries type="episode" so view_actions' dispatch
+-- sends it straight back here.
+reg("episode-action", "Episode", function(s)
+    if not s.episode_id then return end
+    view_actions({id=s.episode_id, name=s.episode_name or "", type="episode",
+        duration_ms=s.track_duration_ms or 0, unavail=s.episode_unavail,
+        show=(s.show_id and {id=s.show_id, name=s.show_name}) or nil})
+end)
 reg("playlist", "Playlist", function(s)
     if not s.playlist_id then return end
     -- Util.playlist_meta answers from disk, so the whole replay is a disk read --
@@ -7156,9 +8811,19 @@ reg("top-tracks",       "Top Tracks",       function() view_top_tracks() end)
 reg("your-queue",       "Your Queue",       function() view_your_queue() end)
 reg("recently-played",  "Recently Played",  function() view_recently_played() end)
 reg("saved-albums",     "Saved Albums",     function() view_saved_albums() end)
+-- Label as a FUNCTION: this view is named after the Spotify account, which is
+-- not known at load time and can change. See view_label.
+reg("library",          Util.account_name,  function() Util.view_library() end)
+reg("podcasts",         "Podcasts",         function() Util.view_podcasts() end)
+reg("show-list",        "Followed",         function() Util.view_saved_shows() end)
+reg("saved-episodes",   "Saved Episodes",   function() Util.view_saved_episodes() end)
+reg("latest-episodes",  "Latest Episodes",  function() Util.view_latest_episodes() end)
+reg("podcast-search", "Podcasts", function(s)
+    if s.query then Util.open_podcast_search(s.query) end
+end)
 reg("followed-artists", "Followed Artists", function() view_followed_artists() end)
 reg("new-releases",     "New Releases",     function() view_new_releases() end)
-reg("spotify-picks",    "Curations",        function() Util.view_curations() end)
+reg("spotify-picks",    "Collections",      function() Util.view_collections() end)
 reg("top-artists",      "Top Artists",      function() Util.view_top_artists() end)
 reg("discover-genre",   "Genre",            function() Util.view_discover_genre() end)
 reg("genre-tracks", "Genre", function(s)
@@ -7352,9 +9017,13 @@ function Util.view_trail_jump(stack)
             local title = mode == "trail" and "Trail Steps" or "Trail History"
             local idx = rofi_dmenu(labels, {prompt = title,
                 mesg = title .. "\n" .. hint,
-                custom=false, by_index=true, use_menu=true, markup=true, no_status=true,
+                custom=false, by_index=true, markup=true, no_status=true,
                 theme=Util.THEME_TRAIL,
                 no_alt_space=true, tab_select=true, no_crumb=true,
+                -- Only Trail History. A trail STEP is a place you can still go
+                -- back to, not a record you would want to erase, and the rows in
+                -- that mode are shared with the live stack.
+                del_select = (mode == "history") or nil,
                 sel = mode == "trail" and (#labels - 1) or 0})
             if Util.tab_pressed then
                 Util.tab_pressed = false
@@ -7362,6 +9031,20 @@ function Util.view_trail_jump(stack)
                 goto tj_next
             end
             if not idx then break end
+            if Util.del_pressed then
+                Util.del_pressed = false
+                -- Redraw either way: the loop rebuilds `labels` from storage, so
+                -- a removed row is gone and a failed removal simply reappears.
+                if mode == "history" then Util.menu_hist_remove(chosen[idx]) end
+                -- Deleting the last row would otherwise redraw an empty menu.
+                -- Fall back to the trail if there is one, and give up only when
+                -- both sides are empty -- the same rule the opening guard uses.
+                if #(Util.menu_hist_rows(stack)) == 0 then
+                    if not have_trail then break end
+                    mode = "trail"
+                end
+                goto tj_next
+            end
             if mode == "history" then
                 local e = chosen[idx]
                 if e then Util.session_set(json.decode(json.encode(e.stack))) end
@@ -7472,7 +9155,7 @@ end
 function Util.clear_last_playback()
     Util.transport(false)
     os.remove(P.now); os.remove(P.now_track)
-    current_track = nil; current_id = nil; previous_id = nil
+    current_track = nil; current_id = nil
     is_playing = false; last_playback = 0
     -- The saved queue is what resurrected the previous session: get_playback
     -- reads "me/player empty" + "queue held" as a spotifyd dropout and forces a
@@ -7500,42 +9183,85 @@ local function init_library(cold_start)
             end
         end
     end)()
-    -- Two cases that used to share one blocking body, and should not have.
+    -- Absent and expired are the same question, and cache_stale already answers
+    -- both: a file with no fetched_at to read is stale by definition. The cold
+    -- case used to be a second branch that built the library INLINE -- ~35
+    -- requests before the menu could draw, on the one launch with nothing
+    -- cached to draw anyway. Util.REVALIDATORS.library performs exactly that
+    -- build in a detached process, and correctly: with no fingerprint on disk
+    -- every probe differs from nil, so it re-pages the lot.
     --
-    -- MISSING is a genuine cold build: there is nothing to show, so there is
-    -- nothing to do but wait, and the notification is telling you why you are
-    -- waiting.
-    --
-    -- STALE means we have the whole library, merely at some age. Paying ~35
-    -- requests before the menu could open was the entire complaint against the
-    -- twelve-hour TTL -- and the twelve hours only existed to make this rare.
-    -- Hand it to the revalidator, which finds out for three small requests
-    -- whether any of it was worth re-fetching, and open the menu now.
-    if not (cache_exists(P.liked) and cache_exists(P.albums) and cache_exists(P.artists)) then
-        os.execute("notify-send -t 5000 --app-name=spoot 'spoot' 'Building Cache' &")
-        local tracks, albums, artists = fetch_library_with_fallback()
-        -- Same success test as System > Refresh Library. Reporting "Caching
-        -- Complete" unconditionally announced success even when every one of the
-        -- three fetches had failed and save_library_cache had written nothing.
-        if tracks then
-            save_library_cache(tracks, albums, artists)
-            Util.lib_fp_write()
-            os.execute("notify-send -t 3000 --app-name=spoot 'spoot' 'Caching Complete' &")
-        else
-            os.execute("notify-send -t 5000 --app-name=spoot 'Spoot' 'Library refresh failed' &")
-        end
-    elseif cache_stale(P.liked) or cache_stale(P.albums) or cache_stale(P.artists) then
+    -- The trade is deliberate -- a first launch opens instantly onto a library
+    -- that is still filling in, rather than waiting for one that is complete --
+    -- and the main loop picks the liked set up as soon as it lands.
+    if cache_stale(P.liked) or cache_stale(P.albums) or cache_stale(P.artists) then
         Util.spawn_revalidate("library")
     end
     populate_liked_ids()
     -- Warm the playlist membership index out of band. Nothing waits on it: the
     -- action menu serves the last known index and picks up the new one next run.
     if not disk_get(P.pl_index, CACHE_TTL_SHORT) then Util.spawn_plindex() end
+    -- The tile grids' artwork, warmed at LAUNCH rather than on first open.
+    -- Their tiles are the only ones whose art sits behind a shelf fetch, so
+    -- unlike every other grid there is nothing for Util.album_thumbs to fetch
+    -- synchronously before the first draw -- it can only show placeholders and
+    -- wait. Starting here buys the warm the seconds it takes to walk from the
+    -- main menu to Collections, which is usually all it needs. Both are
+    -- rate-limited and no-ops once warm, so a normal launch spawns nothing.
+    for kind in pairs(Util.SHELF_KINDS) do Util.spawn_shelf_warm(kind) end
     Util.trail_load()
     session_load()
     replay_session(true)
     last_playback = os.time()
 end
+
+-- THE ROOT GRID
+--
+-- Five tiles, drawn by main() rather than by Util.view_tile_grid: the root is
+-- not a stack entry, and it owns the pending-flag handling (Alt+L, Alt+P, the
+-- trail jump, back) that every other menu unwinds THROUGH. So it borrows the
+-- pieces -- Util.shelf_tiles for resolution, Util.album_thumbs for decoration --
+-- rather than the whole view.
+--
+-- Where a row declares `art` it follows the same rule as every other tile list:
+-- the cover of the thing behind the row, read under Util.cache_only. The rows
+-- that declare none wear their drop-in asset instead, which is the whole reason
+-- style/assets/<key>.png is consulted by name.
+Util.MAIN_TILES = {
+    -- Whatever is playing, so the root screen shows it without being opened.
+    -- Util.src_images resolves a track through its album.
+    {key = "playback",    label = "Playback",    open = function() view_playback() end,
+     -- Whatever is playing, falling back to the menu's own name when nothing is.
+     -- The second value marks it as the playing row, so the caption gets the
+     -- same glyph and green a track row gets in every other list.
+     name = function()
+        if not current_track then return nil end
+        return current_track.name, true
+     end,
+     -- Nothing playing is an answer, not an unread shelf: fall through to
+     -- style/assets/playback.png instead of the last track's cover.
+     art_definite = true,
+     art  = function() return current_track end},
+    -- No `art`: this one wears style/assets/collections.png rather than borrowing
+    -- the cover of whatever happens to sit first on a Collections shelf. A row
+    -- with no art source at all resolves straight to its drop-in asset, and
+    -- because that is a definite "no artwork" it also clears any cover an earlier
+    -- build left in art/main/collections.jpg.
+    {key = "collections", label = "Collections", open = function() Util.view_collections() end},
+    -- Your own profile picture. The one tile whose art is genuinely yours, and
+    -- the row a fresh launch opens on -- see main().
+    {key = "library",     label = "Library",     open = function() Util.view_library() end,
+     name = function() return Util.account_name() end,
+     art  = function() return api_get_me() end},
+    -- Both are pickers over names rather than shelves of objects, so neither has
+    -- an object whose cover could stand for it. Each now has a drop-in asset of
+    -- its own, which Util.shelf_tiles prefers; the declared fallbacks stay as
+    -- what they resolve to if that file is ever removed.
+    {key = "search",      label = "Search",      open = function() view_search() end,
+     fallback = Util.ART_GENRE},
+    {key = "system",      label = "System",      open = function() view_system() end,
+     fallback = Util.ART_NONE},
+}
 
 local function main()
     init_instance_lock()
@@ -7546,18 +9272,15 @@ local function main()
 
     local first_loop = true
     local main_key = "main||"
-    -- Constant, so it is built once rather than rebuilt on every draw. The
-    -- `add(v) if v then ... end` wrapper this replaces guarded twelve string
-    -- literals against being nil.
-    local MAIN_ENTRIES = {
-        "Playback",
-        "Your Queue", "Liked Tracks", "Top Tracks", "Saved Albums",
-        "Followed Artists", "Playlists", "Recently Played",
-        "Categories", "Curations", "Search",
-        "System",
-    }
+
     while true do
         flush_liked_cache()
+        -- The cold library build runs detached now, so on the launch that
+        -- triggers it populate_liked_ids() ran against a file that did not exist
+        -- yet and left the ♥ set empty for the whole session. Pick it up the
+        -- moment it lands instead. Guarded on the set being empty AND the file
+        -- having appeared, so it can fire at most once, and only on that launch.
+        if not next(liked) and cache_exists(P.liked_ids) then populate_liked_ids() end
         -- Refresh on the first loop too. Skipping it meant a fresh launch drew
         -- the main menu with current_track still nil, so the mesg had no track
         -- and `no_status = not current_track` suppressed the shuffle/repeat
@@ -7576,10 +9299,65 @@ local function main()
         end
         -- A function so a hotkey that plays/likes from here redraws with the
         -- new state instead of the header this iteration built.
-        local mesg = function() return current_track and track_mesg(current_track) or nil end
+        --
+        -- status_mesg is folded in BY HAND because rofi_dmenu only prepends it
+        -- for non-thumbnail menus -- the grid themes have no status line. Losing
+        -- the shuffle and repeat markers off the root screen was not worth the
+        -- grid, so they are carried here instead.
+        -- Dropped entirely when nothing is loaded. With no track the row carried
+        -- only the shuffle/repeat pair, which says nothing on its own and left a
+        -- band of empty header above the grid. Returning nil omits -mesg, and
+        -- rofi draws no message widget at all rather than reserving space for an
+        -- empty one.
+        local mesg = function()
+            if not current_track then return nil end
+            local status = status_mesg()
+            local track  = track_mesg(current_track)
+            return status and (status .. "  " .. track) or track
+        end
 
-        local sel = rofi_dmenu(MAIN_ENTRIES, {prompt="Spotify", mesg=mesg, pos_key=main_key, custom=false, markup=true, no_status=not current_track})
-        if sel then sel = Util.strip_markup(sel) end
+        -- A fresh launch opens on the account tile instead of wherever the last
+        -- session happened to leave the cursor. Located BY KEY so reordering
+        -- MAIN_TILES cannot silently move it, and only on the first draw --
+        -- every reentry after that (backing out of a submenu, a pending jump)
+        -- restores the remembered row exactly as before.
+        local first_sel
+        if is_first then
+            for i, t in ipairs(Util.MAIN_TILES) do
+                if t.key == "library" then first_sel = i - 1 end
+            end
+        end
+        local focus = first_sel or Util.pos_get(main_key)
+
+        -- Rebuilt per draw: the Playback tile wears the current track's cover,
+        -- so this list is only correct for as long as that has not changed.
+        -- Captions resolved per draw: two of these rows name themselves from
+        -- live state -- the account, and the track currently playing.
+        local entries = {}
+        for i, t in ipairs(Util.MAIN_TILES) do entries[i] = Util.tile_label(t) end
+        local tiles, cold = Util.shelf_tiles(Util.MAIN_TILES)
+        if cold then Util.spawn_shelf_warm("main") end
+        Util.album_thumbs(entries, tiles, "main", focus, main_key)
+        -- by_index, like every other thumbnail grid: album_thumbs appends a
+        -- \0icon field to each row, so matching rofi's echo back against the row
+        -- TEXT is exactly the comparison that suffix would break. It also
+        -- retires comparing the account tile against its own escaped label.
+        --
+        -- `sel` is set only on the first draw; passing nil leaves rofi_dmenu's
+        -- own pos_key restore in charge, which is what every later draw wants.
+        local sel = rofi_dmenu(entries, {prompt="Spotify", mesg=mesg, pos_key=main_key,
+            custom=false, by_index=true, markup=true, thumbs=true,
+            no_status=not current_track, sel=first_sel, alt_select=true,
+            refresh=function()
+                tiles = Util.shelf_tiles(Util.MAIN_TILES)
+                Util.album_thumbs(entries, tiles, "main", Util.pos_get(main_key), main_key)
+                return entries
+            end})
+        -- Read immediately, per the contract on Util.alt_pressed: the next
+        -- rofi_dmenu, nested or not, clears it -- and the pending-flag branches
+        -- below open views that call one.
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
 
         if main_pending   then main_pending   = false; goto m1 end
         if liked_pending then
@@ -7620,18 +9398,18 @@ local function main()
         end
         if not sel then goto m1 end
 
-        if      sel == "Search" then view_search()
-        elseif  sel == "Liked Tracks"     then view_liked_tracks()
-        elseif  sel == "Saved Albums"     then view_saved_albums()
-        elseif  sel == "Followed Artists" then view_followed_artists()
-        elseif  sel == "Playlists"        then view_playlists()
-        elseif  sel == "Categories"       then view_categories()
-        elseif  sel == "Your Queue"       then view_your_queue()
-        elseif  sel == "Top Tracks"       then view_top_tracks()
-        elseif  sel == "Curations"        then Util.view_curations()
-        elseif  sel == "Recently Played"  then view_recently_played()
-        elseif  sel == "Playback"          then view_playback()
-        elseif  sel == "System"        then view_system()
+        if sel >= 1 and sel <= #Util.MAIN_TILES then
+            local tile = Util.MAIN_TILES[sel]
+            -- Shift+Return on Playback goes straight to the playing track's own
+            -- action menu -- the same destination the key reaches from any track
+            -- row, so the tile behaves like the row it is standing in for. With
+            -- nothing playing there is no track to act on, so it opens the
+            -- Playback menu as an ordinary accept would.
+            if alt and tile.key == "playback" and current_track then
+                view_actions(current_track)
+            else
+                tile.open()
+            end
         end
         ::m1::
     end
@@ -7696,13 +9474,19 @@ local function daemon_mode()
         snap = trim(snap)
         local title, artist, art_url, track_id, album, duration_raw =
             snap:match("^([^\x1f]*)\x1f([^\x1f]*)\x1f([^\x1f]*)\x1f([^\x1f]*)\x1f([^\x1f]*)\x1f([^\x1f]*)$")
-        track_id = Util.extract_track_id(track_id)
+        local track_kind
+        track_id, track_kind = Util.extract_track_id(track_id)
         local duration = tonumber(duration_raw) and tonumber(duration_raw) / 1000000 or nil
         local track_changed = track_id and #track_id > 0 and track_id ~= last_track_id
         local title_changed = title and title ~= "" and title ~= last_title
         if not track_changed and not title_changed then return end
         if track_id and #track_id > 0 then
-            write_file(P.now, json.encode({ id=track_id, name=title,
+            -- `type` is carried through because this object reaches
+            -- view_actions via Util.fast_now_track, and that is what routes an
+            -- episode to its own action menu rather than the track one. For an
+            -- episode MPRIS reports the show in {{artist}}, so it lands in
+            -- `artists` here and Util.subtitle reads it back out unchanged.
+            write_file(P.now, json.encode({ id=track_id, name=title, type=track_kind,
                 artists={{name=artist or ""}}, album={name=album or ""},
                 duration_ms=math.floor((duration or 0) * 1000),
                 playing=trim(shell("playerctl status 2>/dev/null")) == "Playing" }))
@@ -7717,8 +9501,14 @@ local function daemon_mode()
         -- were never filled in later. The helper fetches first, notifies last,
         -- off this loop so nothing blocks the playerctl --follow stream.
         if title and #trim(title) > 0 and not notify_seen(track_id) then
+            -- The KIND rides along too. Without it the helper resolved every id
+            -- as a track, so an episode 404'd, now_track.json kept the previous
+            -- TRACK, and Util.fast_now_track then answered false on every menu
+            -- entry for as long as the podcast played -- a me/player round trip
+            -- per menu, which is the exact cost carrying the kind removes.
             Util.spawn_self({"--notify", track_id or "", title, artist or "", album or "",
-                duration and tostring(math.floor(duration)) or "", art_url or ""})
+                duration and tostring(math.floor(duration)) or "", art_url or "",
+                track_kind or ""})
         end
     end
 
@@ -7754,13 +9544,25 @@ function Util.recent_watch_mode()
     local last_id = nil
     local nil_strikes = 0
     local function poll()
-        local d = api_get("me/player", Util.with_market())
+        -- additional_types for the same reason get_playback carries it: without
+        -- it me/player answers item: null while an episode plays, so a podcast
+        -- would record nothing and count as a dropout strike. With it, episodes
+        -- land in Recently Played too -- which is more than Spotify's own
+        -- recently-played endpoint offers, since that one is tracks-only.
+        local d = api_get("me/player", Util.with_market("additional_types=episode"))
         if not d or type(d) ~= "table" or not d.item or not d.item.id then
             nil_strikes = nil_strikes + 1
             return
         end
         nil_strikes = 0
         local id = d.item.id
+        -- Free: progress_ms rides on the response this poll already makes, so
+        -- recording where you are in an episode costs no request and no second
+        -- process. 25s granularity is the poll interval, which is the most this
+        -- can lose -- and it is 25s against "always from the beginning".
+        if d.item.type == "episode" then
+            Util.eresume_put(id, d.progress_ms, d.item.duration_ms)
+        end
         if id ~= last_id then
             record_recent_play(d.item)
             last_id = id
@@ -7820,6 +9622,7 @@ function Util.run_notify()
     local album    = arg[5] ~= "" and arg[5] or nil
     local duration = arg[6] and tonumber(arg[6]) or nil
     local art_url  = arg[7] ~= "" and arg[7] or nil
+    local kind     = arg[8] ~= "" and arg[8] or nil
     if not title or #trim(title) == 0 then os.exit(0) end
 
     -- Off the follow loop now, so the full retry budget is affordable.
@@ -7831,7 +9634,13 @@ function Util.run_notify()
         -- Market + collapse, like every other track source: without it this
         -- writer left 183 available_markets entries in now_track.json -- ~a third
         -- of a file fast_now_track reads and decodes on nearly every menu entry.
-        track = api_get("tracks/" .. id, Util.with_market())
+        --
+        -- An episode is fetched from its OWN endpoint. tracks/<episode id> is a
+        -- 404, and the object that comes back here is what now_track.json holds
+        -- and what view_actions is later handed -- so it has to carry `type`, or
+        -- the episode arrives at the track action menu.
+        local is_ep = kind == "episode"
+        track = api_get((is_ep and "episodes/" or "tracks/") .. id, Util.with_market())
         if track then
             -- `playing` is written here as well; run_prefetch_track omitted it
             -- while get_playback includes it, which left fast_now_track reading
@@ -7841,7 +9650,11 @@ function Util.run_notify()
                 playing = trim(shell("playerctl status 2>/dev/null")) == "Playing",
             }))
         end
-        Util.fetch_and_cache_lyrics(id, title, artist or "", album, duration)
+        -- Episodes have no lyrics to look up, and asking spends a request plus a
+        -- negative-cache entry on every one that plays.
+        if not is_ep then
+            Util.fetch_and_cache_lyrics(id, title, artist or "", album, duration)
+        end
     end
 
     local icons = Util.status_icons({id = id, explicit = track and track.explicit})
@@ -8034,30 +9847,67 @@ function Util.thumb_report()
     os.exit(0)
 end
 
--- Fills in whatever Curations could not draw. Util.curation_tiles reads the
--- shelves cache-only so the menu never waits on them; this is the other half --
+-- Fills in whatever a tile grid could not draw. Util.shelf_tiles reads the
+-- shelves cache-only so a grid never waits on them; this is the other half --
 -- it reads them FOR real, which populates each shelf's ordinary cache, and then
--- fetches the covers those shelves point at. Nothing here is Curations-specific
--- beyond the tile list: the shelf caches it warms are the same ones the rows
--- open with, so the first visit to any of them is faster too.
-function Util.spawn_curation_warm()
-    local pidf = P.tmp .. "/spoot_curation_warm.pid"
-    if Util.pidfile_owner_alive(pidf, "--warm-curations") then return end
-    Util.spawn_self({"--warm-curations"}, nil, pidf)
+-- fetches the covers those shelves point at. Nothing here is specific to either
+-- grid beyond the tile list: the shelf caches it warms are the same ones the
+-- rows open with, so the first visit to any of them is faster too.
+--
+-- Keyed by ART KIND, which is also the P.art_kinds key the covers are filed
+-- under and the argument the CLI arm carries -- one name for one thing.
+Util.SHELF_KINDS = {
+    main       = function() return Util.MAIN_TILES end,
+    library    = function() return Util.LIBRARY_ROWS end,
+    collection = function() return Util.COLLECTION_TILES end,
+    podcast  = function() return Util.PODCAST_TILES end,
+}
+
+-- The pid file below stops two warmers running AT ONCE; this stops one running
+-- on every single open. Util.shelf_tiles reports `cold` whenever a tile's art
+-- fetcher came back empty, and it cannot tell "shelf not cached yet" from
+-- "shelf is genuinely empty" -- so a Podcasts grid with nothing followed, or
+-- Collections' featured row whose endpoint is documented as one every caller must
+-- tolerate answering nil, is cold forever and spawned a process each time the
+-- grid was drawn. A warm that just ran cannot have anything new to fetch.
+function Util.spawn_shelf_warm(kind)
+    if not Util.SHELF_KINDS[kind] then return end
+    local stamps = disk_get(P.warm) or {}
+    if type(stamps) ~= "table" then stamps = {} end
+    local last = tonumber(stamps[kind]) or 0
+    if os.time() - last < CACHE_TTL_SHORT then return end
+    -- Sanitised into the pid file name the same way Util.spawn_revalidate does
+    -- with a revalidator name, and matched against the same way on the way back.
+    local pidf = P.tmp .. "/spoot_warm_" .. kind:gsub("[^%w_]", "") .. ".pid"
+    if Util.pidfile_owner_alive(pidf, "--warm-shelf") then return end
+    -- Stamped at SPAWN, not on completion: the point is to bound how often this
+    -- is attempted, and a warm that fails is exactly one that must not be
+    -- retried on the very next draw.
+    stamps[kind] = os.time()
+    disk_set(P.warm, stamps)
+    Util.spawn_self({"--warm-shelf", kind}, nil, pidf)
 end
 
-function Util.run_curation_warm()
+function Util.run_shelf_warm()
     Util.detached = true
+    local kind = arg[2] or ""
+    local get = Util.SHELF_KINDS[kind]
+    if not get then os.exit(0) end
     ensure_cache()
+    -- Every shelf this grid needs, fetched at once rather than one per tile as
+    -- the walk below reaches it. Only the topic tiles are searches; the rest are
+    -- single endpoints the walk still fetches individually, which is fine
+    -- because there are few of them.
+    if kind == "podcast" then Util.search_prefetch(Util.PODCAST_TOPICS) end
     local list = {}
-    for _, t in ipairs(Util.CURATION_TILES) do
+    for _, t in ipairs(get() or {}) do
         if t.art then
             local ok, src = pcall(t.art)
-            local imgs = ok and src and src.images
+            local imgs = ok and Util.src_images(src) or nil
             if imgs and imgs[1] and imgs[1].url then
                 -- fetch=false so this goes through _art_batch with everything
                 -- else, rather than one blocking download per shelf.
-                local path, url, hash, key = Util.keyed_art("curation",
+                local path, url, hash, key = Util.keyed_art(kind,
                     {id = t.key, images = imgs}, false, false, nil)
                 if url then
                     list[#list+1] = {url = url, path = path, art_key = key, hash = hash}
@@ -8067,7 +9917,7 @@ function Util.run_curation_warm()
     end
     if #list > 0 then
         Util._art_batch(list)
-        Util.art_commit("curation", list)
+        Util.art_commit(kind, list)
     end
     os.exit(0)
 end
@@ -8577,14 +10427,28 @@ elseif arg and arg[1] == "--thumb-report" then
     Util.thumb_report()
 elseif arg and arg[1] == "--prefetch-plindex" then
     Util.run_prefetch_plindex()
-elseif arg and arg[1] == "--warm-curations" then
-    Util.run_curation_warm()
+elseif arg and arg[1] == "--warm-shelf" then
+    Util.run_shelf_warm()
 elseif arg and arg[1] == "--revalidate" then
     Util.run_revalidate()
 elseif arg and arg[1] == "--notify" then
     Util.run_notify()
 elseif arg and arg[1] == "--bsmon" then
     Util.bsmon_mode()
+elseif arg and arg[1] == "--listen" then
+    -- The one flag that opens rofi, so it gets the same wrapper main() does: a
+    -- keybind launch has no terminal, and without run_interactive a crash here
+    -- would vanish without reaching Util.clean_exit. Only the preamble the flow
+    -- actually needs -- the instance lock (so pressing the key while spoot is
+    -- open does nothing rather than racing a second window), the daemon for the
+    -- Play row the action menu offers, and one sync so that menu opens on live
+    -- transport state. No init_library: nothing here reads the library.
+    Util.run_interactive(function()
+        init_instance_lock()
+        ensure_daemon()
+        Util.sync_now()
+        Util.view_listen()
+    end)
 elseif arg and arg[1] then
     os.exit(2)
 else

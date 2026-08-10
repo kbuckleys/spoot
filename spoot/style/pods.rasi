@@ -2,12 +2,17 @@
  * ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
  * ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
  * └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
- * https://github.com/kbuckleys/ */
+ * https://github.com/kbuckleys/
+ *
+ * Podcast and episode details. A copy of meta.rasi at a wider window: a show's
+ * description and an episode's run to several sentences, where an album's
+ * fields are all short values. Having its own file means podcast details can be
+ * styled apart from Album and Track Details without touching those. */
 
 @import "ZENON"
 
 window {
-    width: 800px;
+    width: 1000px;
 }
 
 mainbox {
