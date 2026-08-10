@@ -36,11 +36,6 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     - It adds complexity and relative bloat for what it's supposed to do
     - Local implementation also means zero sync with other Spotify clients/connect devices
 
-- **Podcast management**
-  - Not that spoot can't do it, I simply didn't implement support for it, for two primary reasons;
-    - Spotify's API doesn't expose some of the key features that help make listening to podcasts accessible, like chapter management
-    - This may sound subjective, but it's a relatively niche medium to cover
-
 - **Recently Played is purely local**
   - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely
  
