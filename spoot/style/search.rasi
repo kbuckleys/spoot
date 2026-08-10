@@ -15,9 +15,7 @@ mainbox {
 }
 
 inputbar {
-    enabled: true;
     children: [textbox-prompt-colon, entry];
-    padding: 4px 8px;
     spacing: 4px;
 }
 
@@ -51,10 +49,13 @@ textbox {
     font: "JetBrainsMono Nerd Font Propo Bold 12";
 }
 textbox-prompt-colon {
-    padding: 0px 8px 0px 8px;
+    font: "JetBrainsMono Nerd Font Propo SemiBold 14";
+    padding: 2px 2px 2px 10px;
     color: #b6e0a4;
     str: "";
 }
 entry {
+    font: "JetBrainsMono Nerd Font Propo SemiBold 14";
+    padding: 2px 2px 2px 2px;
     text-color: #b6e0a4;
 }

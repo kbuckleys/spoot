@@ -7943,6 +7943,11 @@ Util.COLLECTION_TILES = {
     -- until you follow one.
     {key = "podcasts",       label = "Podcasts",
      open = function() Util.view_podcasts() end,
+     -- Cover only. This opens Util.PODCAST_TILES -- four library rows plus the
+     -- 21 topics -- which is 25 rows whether or not a single show is followed,
+     -- so it falls back to podcasts.png with nothing followed but is never
+     -- dimmed. The rows INSIDE it dim for themselves.
+     art_only = true,
      art = function() return Util.shelf_head(Util.load_saved_shows) end},
     {key = "madeforyou",     label = "Made For You",
      open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.made_for_you, "Made For You") end,
@@ -8022,9 +8027,17 @@ Util.TILE_LABEL_MAX = 22
 -- nothing, so the caption is dimmed the same way Seek dims with nothing playing.
 -- A row that is merely UNREAD is never dimmed -- claiming a list is empty
 -- because we have not looked yet would be a guess.
+--
+-- `art_only` is the other half of that. Dim has to mean "what this row OPENS is
+-- empty", and for most rows the shelf supplying the cover IS what they open --
+-- Liked Tracks shows liked tracks. For a row that opens a MENU of its own, it is
+-- not: Podcasts wears the cover of a followed show but opens a 25-tile grid that
+-- exists whether or not you follow anything. Those rows still fall back to their
+-- asset when the shelf empties, which is what the asset is for, but they are
+-- never dimmed -- there is always something behind them.
 function Util.tile_label(t, res)
     if type(t) ~= "table" then return "?" end
-    local empty = res and res.art_empty
+    local empty = res and res.art_empty and not t.art_only
     if t.name then
         local ok, n, live = pcall(t.name)
         if ok and type(n) == "string" and trim(n) ~= "" then
@@ -9199,6 +9212,12 @@ end
 local function init_instance_lock()
     local lock = P.tmp .. "/spoot_instance.lock"
     local existing = trim(read_file(lock) or "")
+    -- Our OWN pid is not another instance. --listen takes the lock, then hands
+    -- over to main() when a jump key was pressed, and main() locks again on the
+    -- way in; without this the second call would find a live spoot named in the
+    -- file, conclude one was already running, and exit(0) -- so the handover
+    -- would look exactly like the key having closed spoot.
+    if existing == tostring(Util.get_own_pid() or "") then existing = "" end
     if existing ~= "" and existing:match("^%d+$") then
         local alive = Util.proc_alive(existing)
         local cmdline = alive and Util.proc_cmdline(existing) or ""
@@ -9360,6 +9379,9 @@ Util.MAIN_TILES = {
      -- style/assets/playback.png instead of the last track's cover. It is not
      -- dimmed for it -- Playback is always openable -- which is why the state is
      -- "noart" and not "empty".
+     -- Cover only: this opens the transport menu, which has its own fixed rows
+     -- whether or not anything is playing.
+     art_only = true,
      art  = function()
         if current_track then return current_track, "ok" end
         return nil, "noart"
@@ -9374,6 +9396,9 @@ Util.MAIN_TILES = {
     -- the row a fresh launch opens on -- see main().
     {key = "library",     label = "Library",     open = function() Util.view_library() end,
      name = function() return Util.account_name() end,
+     -- Cover only, like Podcasts: your profile picture stands for a menu of five
+     -- fixed rows, so an unreadable profile must not read as an empty library.
+     art_only = true,
      art  = function() return api_get_me() end},
     -- Both are pickers over names rather than shelves of objects, so neither has
     -- an object whose cover could stand for it. Each now has a drop-in asset of
@@ -10583,6 +10608,14 @@ elseif arg and arg[1] == "--listen" then
         ensure_daemon()
         Util.sync_now()
         Util.view_listen()
+        -- Alt+Space, Alt+L, Alt+P and the trail jump do not navigate themselves:
+        -- they raise a flag and unwind, and main()'s loop is what acts on it.
+        -- Reached from the keybind there is no main loop above this, so the flag
+        -- was simply dropped and the process ended -- which read as the key
+        -- closing spoot rather than going to the root menu. Hand over instead.
+        if main_pending or liked_pending or recent_pending or Util.trail_jump_pending then
+            main()
+        end
     end)
 elseif arg and arg[1] then
     os.exit(2)
