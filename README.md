@@ -31,13 +31,14 @@ But most importantly, a music player should pretty much know its place. It's not
 
 # Limitations:
 Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception
+
 - **Remove from queue (Spotify Web API limitation)**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
     - It adds complexity and relative bloat for what it's supposed to do
     - Local implementation also means zero sync with other Spotify clients/connect devices
 
-- **Recently Played is purely local**
-  - The live counterpart seems to suffer from issues through Spotify's Web API, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely
+- **Recently Played is purely local -- ```spotifyd``` quirk**
+  - The live counterpart seems to suffer from issues through the daemon itself, even with the Activity Sharing privacy setting enabled. May be revisited in future iterations but it's highly unlikely
  
 - **Crossfade**
   - `spotifyd` and `librespot` can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat
