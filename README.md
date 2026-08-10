@@ -61,6 +61,10 @@ First things first; spoot is designed to be as intuitive as possible, which mean
 - Set a keybind for it in your compositor's config
 - Have fun
 
+OPTIONAL: Set a second keybind if you want on-the-fly track detection
+- Set a keybind pointing to ```<YOUR PATH>/spoot/spoot.lua --listen```
+  > You can still access this panel from ```main > playback```
+
 That's it! No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files. Well except for that part where you have to add your username to the input group.
 
 # Controls
