@@ -61,7 +61,7 @@ First things first; spoot is designed to be as intuitive as possible, which mean
 - Set a keybind for it in your compositor's config
 - Have fun
 
-OPTIONAL: Set a second keybind if you want on-the-fly track detection
+**OPTIONAL:** Set a second keybind if you want on-the-fly track detection
 - Set a keybind pointing to ```spoot.lua --listen```
   > You can still access this panel from ```main > playback```
 
