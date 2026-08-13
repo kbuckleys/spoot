@@ -19,8 +19,7 @@ But as spoot's development pressed on, it became mature enough to be its own pla
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
 # Functionality
-- First run will automatically take you to Spotify's authentication page (two separate pages in fact, that's just a ```spotifyd``` quirk). At launch, spoot will notify you that it's building cache and will automatically run the daemons and display the main menu once it's done, at which point you can start using the rofi interface right away
-- Cache gets updated every 12 hours, a safeguard in case you made external changes to your library from, say; your phone or another Spotify client. There's also a manual option to refresh the cache, <b>but only use it when you absolutely have to.</b> Your activity on the player is dynamically and locally refreshed anyway, so you'll probably never have to use this option
+- First run will automatically take you to Spotify's authentication page. Authenticate, and at which point you can start using spoot right away
 - Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels
 
 # Limitations:
@@ -39,6 +38,9 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
  
 - **Crossfade**
   - `librespot` -which is what ```spotifyd``` wraps- can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat
+ 
+- **yrics use LRCLIB**
+  - While I'd love to use Spotify's own library, it's currently reserved to internal use. Possible to timplement, but breaks the ToS
     
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
