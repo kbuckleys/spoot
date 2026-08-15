@@ -2,17 +2,7 @@
  * ┌─┐┌─┐┌┐┌┬ ┬┌─┐┬─┐┬┌─┌─┐
  * ┌─┘├┤ │││││││ │├┬┘├┴┐└─┐
  * └─┘└─┘┘└┘└┴┘└─┘┴└─┴ ┴└─┘
- * https://github.com/kbuckleys/
- *
- * The Listen window: style/assets/listen.png over a green caption, shown while
- * songrec identifies whatever the speakers are playing. A copy of art.rasi at
- * asset size -- art.rasi exists to fill the screen with a 1000px cover, and the
- * assets are 300x300, so reusing it would upscale a small icon by 3.3x. Same
- * one-row listview, same disabled element-text, same green textbox.
- *
- * No keybinds are unbound here on purpose: the window is dismissable and the
- * poll loop in Util.view_listen notices it going away and stops the recognition
- * with it. */
+ * https://github.com/kbuckleys/ */
 
 @import "ZENON"
 
@@ -25,8 +15,6 @@ configuration {
 }
 
 window {
-    location: south;
-    anchor: south;
     width: 304px;
 }
 
@@ -34,14 +22,9 @@ mainbox {
     children: [ listview, message ];
 }
 
-inputbar {
-    enabled: false;
-}
-
 listview {
     lines: 1;
     columns: 1;
-    scrollbar: false;
     padding: -40px 0px -40px 0px;
 }
 
@@ -54,11 +37,10 @@ element-text {
 }
 
 message {
-    background-color: none;
-    padding: 0px 30px 30px 30px;
+    background-color: transparent;
 }
 textbox {
     text-color: #b6e0a4;
-    horizontal-align: 0.5;
-    font: "JetBrainsMono Nerd Font Propo Bold 14";
+    padding: 0px 0px 20px 0px;
+    font: "JetBrainsMono Nerd Font Propo Bold 13";
 }

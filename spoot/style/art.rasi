@@ -11,26 +11,25 @@ configuration {
 }
 
 window {
+    border-radius: 5px 5px 5px 5px;
     location: center;
     anchor: center;
-    width: 1004px;
+    width: 1000px;
 }
 
 mainbox {
     children: [ message, listview ];
 }
 
-inputbar {
-    enabled: false;
-}
-
 listview {
-    columns: 1;
     lines: 1;
-    scrollbar: false;
-    padding: 0px 0px 0px 0px;
+    columns: 1;
+    padding: 0;
 }
 
+element {
+    padding: 0;
+}
 element-icon {
     size: 1000px;
     expand: false;
@@ -40,12 +39,9 @@ element-text {
 }
 
 message {
-    background-color: #16191d;
     margin: 0px 0px -2px 0px;
-    padding: 5px 30px 5px 30px;
 }
 textbox {
     text-color: #b6e0a4;
-    horizontal-align: 0.5;
     font: "JetBrainsMono Nerd Font Propo Bold 12";
 }

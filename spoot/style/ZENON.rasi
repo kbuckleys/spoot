@@ -20,12 +20,12 @@
     selected-normal-foreground: #DFDFDD;
     selected-active-foreground: #0B0E0E;
     selected-urgent-foreground: #0B0E0E;
-    selected-normal-background: #16191d;
+    selected-normal-background: rgb(69, 80, 92, 0.3);
     active-background: @background;
     normal-foreground: @foreground;
     normal-background: #00000000;
     lightfg: @normal-background;
-    background: rgba(0, 0, 0, 1);
+    background: rgba(0, 0, 0, 0.8);
     separatorcolor: @foreground;
     urgent-background: #e78284;
     urgent-foreground: #e78284;
@@ -33,47 +33,45 @@
     lightbg: #DFDFDD;
     blue: #9BBFBF;
     red: #e78284;
-    spacing: 2;
 }
 
 window {
     location: south;
     anchor: south;
     background-color: @background;
-    padding: 0;
+    border-radius: 10px 10px 0px 0px;
     border: 1px;
 }
 
 mainbox {
-    border: 0px solid;
-    padding: 0;
+    border: 0px;
+    padding: 0px 0px 0px 0px;
 }
 
 message {
-    border-color: @separatorcolor;
-    border: 0px;
-    padding: 0px;
+    background-color: rgb(40, 47, 54, 0.4);
+    border-color: rgb(69, 80, 92, 0.3);
+    padding: 5px 30px 5px 30px;
+    margin: 0px 0px 0px 0px;
+    border: 0px 0px 1px 0px;
 }
 
 textbox {
-    text-color: @foreground;
+    horizontal-align: 0.5;
 }
 
 listview {
-    border-color: @separatorcolor;
-    scrollbar: true;
-    fixed-height: 0;
-    spacing: 2px;
-    padding: 0px;
-    border: 0px;
+    padding: 0px 3px 2px 3px;
+    fixed-columns: false;
+    fixed-height: false;
+    scrollbar: false;
 }
 
 element {
-    padding: 1px;
-    border: 0;
+    padding: 2px 20px 2px 20px;
 }
 element-text {
-    background-color: inherit;
+    background-color: transparent;
     text-color: inherit;
 }
 element.normal.normal {
@@ -145,14 +143,14 @@ prompt {
 }
 textbox-prompt-colon {
     text-color: @normal-foreground;
-    margin: 0px 0.3em 0em 0em;
+    padding: 6px 10px 6px 20px;
     expand: false;
-    str: ":";
+    str: "";
 }
 inputbar {
     children: [ prompt,textbox-prompt-colon,entry,case-indicator ];
     text-color: @normal-foreground;
-    padding: 1px;
+    padding: 0px 0px 0px 0px;
     spacing: 0;
 }
 
@@ -163,5 +161,5 @@ case-indicator {
 
 entry {
     text-color: @normal-foreground;
-    spacing: 0;
+    padding: 6px 6px 6px 6px;
 }

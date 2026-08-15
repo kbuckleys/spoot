@@ -24,10 +24,6 @@ inputbar {
 }
 
 listview {
-    padding: 0px 3px 2px 3px;
-    fixed-columns: false;
-    fixed-height: false;
-    scrollbar: false;
     columns: 1;
     lines: 14;
 }
@@ -39,16 +35,8 @@ element-text {
     horizontal-align: 0.5;
     highlight: bold #b6e0a4;
 }
-element-text selected {
-    background-color: transparent;
-}
 
-message {
-    background-color: #16191d;
-    padding: 5px 30px 5px 30px;
-}
 textbox {
-    text-color: #dfdfdd;
-    horizontal-align: 0.5;
+    text-color: #a2a8bc;
     font: "JetBrainsMono Nerd Font Propo Bold 12";
 }
