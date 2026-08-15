@@ -73,7 +73,6 @@ Given the scope, you can be easily multiple levels deep as you navigate through 
       <tr><th>Key</th><th>Action</th><th>Context</th></tr>
     </thead>
     <tbody>
-      <tr><td><kbd>f5</kbd></td><td>grid redraw failsafe (you'll probably never use this)</td><td>universal</td></tr>
       <tr><td><kbd>tab</kbd></td><td>trail menu / history -- search type filter</td><td>contextual</td></tr>
       <tr><td><kbd>return</kbd></td><td>select -- play/pause/resume selected item</td><td>contextual</td></tr>
       <tr><td><kbd>delete</kbd></td><td>delete entry in search or trail history</td><td>contextual</td></tr>
