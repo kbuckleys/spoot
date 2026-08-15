@@ -65,7 +65,12 @@ local P = {
     ttl_lyrics = 7 * 24 * 3600,  -- 1 week
     spotify   = "d420a117a32841c2b3474932e49fb54b",
 }
-P.cache      = (os.getenv("XDG_CACHE_HOME") or P.home .. "/.cache") .. "/spoot"
+-- Named rather than folded into P.cache below because spotifyd's own default
+-- cache path is a sibling of ours under the same base, and ensure_cache migrates
+-- it from there exactly once -- deriving both from this is what keeps that move
+-- from being a spelled-out path.
+P.xdg_cache  = os.getenv("XDG_CACHE_HOME") or P.home .. "/.cache"
+P.cache      = P.xdg_cache .. "/spoot"
 P.mass       = P.cache .. "/mass"
 P.lyrics     = P.cache .. "/lyrics"
 P.token      = P.cache .. "/token.json"
@@ -128,6 +133,19 @@ P.liked_ids  = P.cache .. "/liked_ids.json"
 P.volume     = P.cache .. "/volume.json"
 P.recent     = P.cache .. "/recently_played.json"
 P.bitrate    = P.cache .. "/bitrate"
+-- spotifyd's cache, holding BOTH its credentials (oauth/, zeroconf/) and the
+-- cached audio -- 256 two-hex-char directories of whole tracks, 15 GB of them on
+-- this account. It used to sit at librespot's default, P.spotifyd_old, which is
+-- why ensure_cache moves it here once: one cache tree, so `du -sh` on P.cache
+-- answers for all of spoot's disk rather than most of it.
+-- NOTE: deliberately absent from the mkdir in ensure_cache -- creating it would
+-- make the migration guard read "already moved". spotifyd creates it itself.
+P.spotifyd     = P.cache .. "/spotifyd"
+P.spotifyd_old = P.xdg_cache .. "/spotifyd"
+-- Whether spotifyd caches audio at all. One line, same shape as P.bitrate, and
+-- read at spawn time for the same reason: it is a launch flag, not something
+-- that can be changed under a running daemon.
+P.trackcache = P.cache .. "/track_cache"
 P.state      = P.cache .. "/playback_state.json"
 P.now        = P.cache .. "/now.json"
 P.now_track  = P.cache .. "/now_track.json"
@@ -293,6 +311,12 @@ local ICON_PREFIX = {
     playlists = "\u{F0411} ",
     shows     = "\u{F2CE} ",
     episodes  = "\u{F07C5} ",
+    -- The one entry that is not an _stype: no row is ever stamped "video", and
+    -- this is here for the search PAGE of that name, which Util.search_page_icon
+    -- resolves through the same table by key. Same glyph the badge in
+    -- Util.display_show wears, so the filter and the rows it selects are marked
+    -- with the same mark.
+    video     = "\u{F447} ",
 }
 local liked = {}  -- set of liked track IDs
 
@@ -366,8 +390,6 @@ local function copy_to_clipboard(text)
     os.execute("printf '%s' " .. shell_quote(text) .. " | wl-copy 2>/dev/null")
 end
 
-local function copy_spotify_url(kind, id) copy_to_clipboard("https://open.spotify.com/" .. kind .. "/" .. (id or "")) end
-
 local function parse_spotify_url(url)
     if not url or url == "" then return nil, nil end
     url = url:match("^(.-)\n") or url
@@ -405,6 +427,44 @@ end
 -- Grouped into one table (rather than separate top-level locals) since the
 -- whole script body is a single function and Lua caps it at 200 locals.
 local Util = {}
+
+-- An item's page on the web. One spelling of that URL, shared by the row that
+-- COPIES it and the row that OPENS it -- they were one function until the second
+-- reader existed, and they must not become two strings now.
+--
+-- Down here rather than beside copy_to_clipboard, where copy_spotify_url used to
+-- live: `Util` is not declared until this line, so naming it any earlier
+-- compiles as a global read and answers nil at call time. The 200-local ceiling
+-- is why the helper cannot simply be a file local instead.
+function Util.web_url(kind, id)
+    return "https://open.spotify.com/" .. kind .. "/" .. (id or "")
+end
+
+-- Backgrounded, like the OAuth open it mirrors: a cold browser start takes
+-- seconds and the menu must not sit there waiting for it.
+function Util.open_in_spotify(kind, id)
+    os.execute("xdg-open " .. shell_quote(Util.web_url(kind, id)) .. " 2>/dev/null &")
+end
+
+-- "Spotify says this show carries video", asked in one place. media_type is
+-- "audio" or "mixed" and there is no per-EPISODE flag anywhere in the API, so
+-- every video decision in the app is this one comparison: the badge on a row,
+-- the wording of the Watch action, and the search page that selects for it.
+--
+-- Nil-tolerant because two of those callers ask about an episode's `show`, which
+-- an episode from search results does not carry.
+function Util.is_video_show(show)
+    return show ~= nil and show.media_type == "mixed"
+end
+
+-- What that row can honestly promise. Only a show's media_type says anything
+-- about video, so anything not KNOWN to be "mixed" -- including every episode
+-- that reached its menu without its show attached -- gets the neutral word.
+function Util.watch_label(is_video)
+    return is_video and "Watch in Spotify" or "Open in Spotify"
+end
+
+local function copy_spotify_url(kind, id) copy_to_clipboard(Util.web_url(kind, id)) end
 
 -- The one reader of ICON_PREFIX. Answers "" rather than nil so every caller can
 -- concatenate unguarded.
@@ -760,9 +820,26 @@ local function ensure_cache()
     -- would never be collected -- 17 of them on this account at the time of the
     -- move. Shares this shell rather than forking a second one, and the glob
     -- stays OUTSIDE the quotes so the shell still expands it.
+    -- And spotifyd's cache, moved under ours ONCE. Both paths are under the same
+    -- base (P.xdg_cache), so this is a rename and not a copy however many
+    -- gigabytes of cached audio are in there -- 15 GB at the time of the move.
+    -- Moved rather than started fresh so oauth/ and zeroconf/ come with it and
+    -- the device needs no re-pairing.
+    --
+    -- Two tests and no fork of its own, riding the shell above. The guard is the
+    -- whole migration: once the destination exists this is a no-op forever, and
+    -- it must stay that way -- see the NOTE on P.spotifyd about why that path is
+    -- absent from the mkdir.
+    --
+    -- A spotifyd that was already running when this fires still holds the old
+    -- path as a string and will recreate a stub there for whatever it writes
+    -- next; the first restart after this launches with -c and nothing writes to
+    -- it again.
     os.execute("{ rm -rf " .. shell_quote(P.art .. "/curations") .. " "
         .. shell_quote(P.cache .. "/curation_art.json") .. ";"
-        .. " rm -f " .. shell_quote(P.cache) .. "/.api_hdr.*; } 2>/dev/null")
+        .. " rm -f " .. shell_quote(P.cache) .. "/.api_hdr.*;"
+        .. " [ -d " .. shell_quote(P.spotifyd_old) .. " ] && [ ! -d " .. shell_quote(P.spotifyd) .. " ]"
+        .. " && mv " .. shell_quote(P.spotifyd_old) .. " " .. shell_quote(P.spotifyd) .. "; } 2>/dev/null")
 
     -- The housekeeping sweeps below are throttled to once an hour by the mtime of
     -- a stamp file. They used to run in EVERY process -- including the --notify
@@ -963,6 +1040,26 @@ local function get_saved_bitrate()
 end
 local function save_bitrate(n)
     write_file(P.bitrate, tostring(n))
+end
+
+-- Whether spotifyd caches the audio it streams. Defaults to ON when the file is
+-- absent, which is librespot's own default -- so a spoot that has never been
+-- told otherwise behaves exactly as it did before this setting existed.
+--
+-- On Util rather than beside save_bitrate as a file local: the chunk body is at
+-- Lua's 200-local ceiling (see the note above Util's declaration).
+function Util.track_cache_on()
+    local raw = read_file(P.trackcache)
+    return trim(raw or "") ~= "0"
+end
+function Util.save_track_cache(on)
+    write_file(P.trackcache, on and "1" or "0")
+end
+-- The state's NAME, in one place. Five things say it -- the System row, the two
+-- picker rows, that picker's mesg and the restart confirm -- and they have to
+-- agree, or the row you flipped and the row reporting it read as two settings.
+function Util.track_cache_label(on)
+    return on and "Enabled" or "Disabled"
 end
 
 local _mem = {}
@@ -1795,6 +1892,24 @@ end
 -- it was really there for is about view identity, not string equality: "Lyrics"
 -- reads better than a repeated track name because Lyrics is a DETAIL of the step
 -- above it, which is now stated directly by label_only (see reg).
+--
+-- THE naming rule, and the only copy of it: the breadcrumb, the Trail Steps menu
+-- and the closed-menus list all name a step through here, so none of them can
+-- drift into showing a step the others do not. It returns the qualifier rather
+-- than joining it because each of those draws its arrow differently -- parts
+-- become separate crumb steps, a Trail Steps row is one string.
+--
+-- A `qualify` view's own name is the PARENT it belongs to, not itself: all four
+-- artist sub-views carry the same artist_name, so "Bad Bunny" named the albums,
+-- the top tracks, the liked tracks and the related artists alike. Those render
+-- "<name> > <label>" and are told apart again.
+function Util.step_name(entry)
+    local v = VIEWS[entry.view]
+    local name = not (v and v.label_only) and crumb_name(entry) or nil
+    if name and v and v.qualify then return name, view_label(entry.view) end
+    return name or view_label(entry.view), nil
+end
+
 function Util.parts_from_stack(stack)
     local parts = {"Main"}
     if stack then
@@ -1806,9 +1921,13 @@ function Util.parts_from_stack(stack)
             -- not launch until the cache file was deleted by hand. A junk entry is
             -- worth skipping, never worth refusing to start over.
             if type(e) == "table" then
-                local v = VIEWS[e.view]
-                local name = not (v and v.label_only) and crumb_name(e) or nil
-                parts[#parts+1] = name or view_label(e.view)
+                local name, qual = Util.step_name(e)
+                parts[#parts+1] = name
+                -- A separate part, not "name > qual": the breadcrumb then styles
+                -- the arrow between them like every other one, and session_clear
+                -- still joins with a plain " > " -- so no markup sentinel is ever
+                -- written into trails.json.
+                if qual then parts[#parts+1] = qual end
             end
         end
     end
@@ -1853,7 +1972,17 @@ local function breadcrumb()
             parts[#parts+1] = type(t) == "table" and t.label or t
         end
     end
-    parts[#parts+1] = table.concat(Util.breadcrumb_parts(), Util.crumb_arrow(" > "))
+    local live = Util.breadcrumb_parts()
+    -- Util.parts_from_stack always seeds "Main", so #live == 1 IS the empty
+    -- stack: you are at the root with nothing pushed. With nothing archived
+    -- beside it the whole line would be that one word, naming the menu already
+    -- filling the screen -- the app's own name says more. One live step or one
+    -- archived trail and "Main" is the head of a path again, which is why this
+    -- lives here and not in parts_from_stack: the Trail Steps rows, the
+    -- closed-menus list and session_clear's saved label all still want the root
+    -- called Main.
+    if #parts == 0 and #live == 1 then return "spoot" end
+    parts[#parts+1] = table.concat(live, Util.crumb_arrow(" > "))
     return table.concat(parts, "  " .. Util.markup('<span foreground="#a3a9bd">\u{F17B7}</span>') .. "  ")
 end
 
@@ -2375,7 +2504,7 @@ get_token = function()
     if data.expires_at and type(data.expires_at) == "number" then
         if os.time() > data.expires_at - 120 then
             if data.refresh_token and type(data.refresh_token) == "string" then
-                local r = shell("curl -s --max-time 10 -X POST https://accounts.spotify.com/api/token "
+                local r = shell("curl -s --compressed --max-time 10 -X POST https://accounts.spotify.com/api/token "
                     .. "-d grant_type=refresh_token -d refresh_token=" .. shell_quote(data.refresh_token)
                     .. " -d client_id=" .. P.spotify)
                 local rd = safe_decode(r)
@@ -2442,7 +2571,7 @@ local function oauth_get_token()
         if #code > 0 then
             os.remove(P.tmp .. "/spoot_code")
             kill_oauth_server()
-            local r = shell("curl -s --max-time 10 -X POST https://accounts.spotify.com/api/token "
+            local r = shell("curl -s --compressed --max-time 10 -X POST https://accounts.spotify.com/api/token "
                 .. "-d grant_type=authorization_code -d code=" .. shell_quote(code)
                 .. " -d redirect_uri=http://127.0.0.1:8989/login"
                 .. " -d client_id=" .. P.spotify
@@ -2732,36 +2861,74 @@ Util._curl_cfg_quote = function(s)
     return (tostring(s):gsub("[\\\"]", "\\%0"))
 end
 
--- One curl process per pass, not one per image. -Z multiplexes over a few HTTP/2
--- connections: 40 covers in 0.54s / 0.08s CPU versus 1.45s / 1.14s for the
--- 8-at-a-time fork loop. The old cost was process spawn and cold TCP+TLS, not
--- concurrency -- hence --parallel-max 16 matching 32 or 64.
+-- MANY URLS, ONE CURL. -Z multiplexes over a few HTTP/2 connections: 40 covers
+-- in 0.54s / 0.08s CPU versus 1.45s / 1.14s for the 8-at-a-time fork loop. The
+-- old cost was process spawn and cold TCP+TLS, not concurrency -- hence
+-- --parallel-max 16 matching 32 or 64. The same measurement holds for the API:
+-- five requests take 2.50s as five curls and 0.66s through this.
 --
--- Validation uses --write-out, not headers: `dump-header` in a -K config is
--- global and last-one-wins, so all responses concatenate into one file with
--- nothing tying them to a transfer. --write-out is per transfer and carries the
--- status plus the bytes written, keyed by output path. No .hdr files now.
+-- Answers {[output path] = {code = "200", size = 12345}}. Reporting through
+-- --write-out and not headers is the load-bearing part: `dump-header` in a -K
+-- config is global and last-one-wins, so all responses concatenate into one file
+-- with nothing tying them to a transfer, while --write-out is per transfer and
+-- carries the status plus the bytes written, keyed by output path.
+--
+-- opts.fail passes -sf, which makes curl treat an HTTP error as a failed
+-- transfer. Art wants that (a 404 cover is just a miss); the API pager does NOT,
+-- because it has to tell a 429 from a 500 to know whether to back off.
+-- Answers nil, not an empty table, when the config could not be written: that is
+-- "nothing was attempted", which a caller must be able to tell from "everything
+-- was attempted and every one failed" -- otherwise a broken scratch directory
+-- reads as a batch of dead URLs and gets retried on a sleep.
+function Util.curl_batch(jobs, opts)
+    opts = opts or {}
+    local got = {}
+    if #jobs == 0 then return got end
+    local cfg = Util.tmpfile("curlcfg")
+    local f = io.open(cfg, "w")
+    if not f then os.remove(cfg); return nil end
+    -- Header first: curl carries options forward across the urls that follow in
+    -- the same config, so one written at the end would apply to nothing.
+    if opts.header then
+        f:write('header = "', Util._curl_cfg_quote(opts.header), '"\n')
+    end
+    for _, j in ipairs(jobs) do
+        f:write('url = "', Util._curl_cfg_quote(j.url), '"\n',
+                'output = "', Util._curl_cfg_quote(j.out), '"\n')
+    end
+    f:close()
+    -- filename_effective goes LAST so a path containing spaces still parses.
+    local report = shell("curl -s" .. (opts.fail and "f" or "")
+        .. (opts.compressed and " --compressed" or "")
+        .. " -Z --parallel-max " .. tostring(opts.parallel or 8)
+        .. " --connect-timeout " .. tostring(opts.connect_timeout or 5)
+        .. " --max-time " .. tostring(opts.timeout or 10)
+        .. " -K " .. shell_quote(cfg)
+        .. " -w '%{http_code} %{size_download} %{filename_effective}\\n' 2>/dev/null") or ""
+    os.remove(cfg)
+    for code, size, path in report:gmatch("(%d+) (%d+) ([^\n]+)") do
+        got[path] = {code = code, size = tonumber(size)}
+    end
+    return got
+end
+
+-- The art pass on top of that transport: name a temp file per cover, fetch the
+-- batch, then validate and rename. Three passes, because a cover that came down
+-- truncated is worth one more try and a 404 is not.
 Util._art_batch = function(items)
     local todo = items
     for pass = 1, 3 do
         if #todo == 0 then break end
-        local cfg = Util.tmpfile("curlcfg")
-        local f = io.open(cfg, "w")
-        if not f then os.remove(cfg); return end
+        local jobs = {}
         for j, pd in ipairs(todo) do
             pd.tmp = pd.path .. ".tmp" .. Util._rand_suffix() .. "." .. j
-            f:write('url = "', Util._curl_cfg_quote(pd.url), '"\n',
-                    'output = "', Util._curl_cfg_quote(pd.tmp), '"\n')
+            jobs[#jobs+1] = {url = pd.url, out = pd.tmp}
         end
-        f:close()
-        -- filename_effective goes LAST so a path containing spaces still parses.
-        local report = shell("curl -sf -Z --parallel-max 16 --connect-timeout 5 --max-time 10 -K "
-            .. shell_quote(cfg) .. " -w '%{http_code} %{size_download} %{filename_effective}\\n' 2>/dev/null") or ""
-        os.remove(cfg)
-        local got = {}
-        for code, size, path in report:gmatch("(%d+) (%d+) ([^\n]+)") do
-            got[path] = {code = code, size = tonumber(size)}
-        end
+        -- nil means the batch never ran, which is not the same as every cover
+        -- failing: give up rather than sleep between three passes that cannot
+        -- work either.
+        local got = Util.curl_batch(jobs, {fail = true, parallel = 16})
+        if not got then return end
         -- Split, rather than retrying everything that did not land: a cover
         -- that came down whole but is not a drawable image is hopeless, and
         -- carrying it into the next pass bought nothing but the sleep below.
@@ -3431,7 +3598,7 @@ local function get_spotifyd_device()
     end
     local token = get_token()
     if not token then return nil end
-    local d = safe_decode(shell("curl -s --max-time 3 -H " .. shell_quote("Authorization: Bearer " .. token) .. " 'https://api.spotify.com/v1/me/player/devices'"))
+    local d = safe_decode(shell("curl -s --compressed --max-time 3 -H " .. shell_quote("Authorization: Bearer " .. token) .. " 'https://api.spotify.com/v1/me/player/devices'"))
     if not d or not d.devices then return nil end
     local dev_id = nil
     for _, dev in ipairs(d.devices) do
@@ -3453,20 +3620,39 @@ end
 -- Starts spotifyd if needed and returns immediately. It used to poll for up to
 -- 4.5s here, which froze the menu before it could even draw; the device is
 -- resolved lazily at play time anyway, so waiting bought nothing.
+--
+-- Every setting here is read AT SPAWN. spotifyd takes them as argv and nothing
+-- can change them under a running daemon, which is why both the bitrate and the
+-- track-cache views end in a restart rather than pretending to apply.
+--
+-- --no-audio-cache takes an explicit value (spotifyd 0.4.2: `[=<BOOL>]`), so the
+-- flag is always present and only the value moves -- no conditional string
+-- building, and the running process names the setting either way, which is what
+-- makes `pgrep -a spotifyd` a straight answer to "is caching on?".
 local function ensure_spotifyd()
     local pid = trim(shell("pgrep -x spotifyd 2>/dev/null") or "")
     if pid == "" then
-        os.execute("spotifyd --no-daemon --device-name spoot --backend pulseaudio --use-mpris --volume-normalisation --initial-volume " .. get_saved_volume() .. " --bitrate " .. get_saved_bitrate() .. " > /dev/null 2>&1 &")
+        os.execute("spotifyd --no-daemon --device-name spoot --backend pulseaudio --use-mpris --volume-normalisation --initial-volume " .. get_saved_volume() .. " --bitrate " .. get_saved_bitrate()
+            .. " --no-audio-cache=" .. (Util.track_cache_on() and "false" or "true")
+            .. " -c " .. shell_quote(P.spotifyd) .. " > /dev/null 2>&1 &")
     end
 end
 
 -- DATA CACHE
 
+-- The one place a v1 endpoint becomes a URL. Util.paged_fetch's batch builds the
+-- same string for the pages it fetches without api_get, and a second copy of
+-- this is exactly how the two would drift.
+function Util.api_url(path, params)
+    local url = "https://api.spotify.com/v1/" .. path
+    if params then url = url .. "?" .. params end
+    return url
+end
+
 local function api_get(path, params, _retry)
     local token = get_token()
     if not token then return nil end
-    local url = "https://api.spotify.com/v1/" .. path
-    if params then url = url .. "?" .. params end
+    local url = Util.api_url(path, params)
     -- One header file per PROCESS, not per request: the contents are read only on
     -- a 429, so a paginated browse (a 1500-album discography is ~30 pages) used to
     -- mint 30 scratch files to throw away. curl truncates the file on each write,
@@ -3474,7 +3660,13 @@ local function api_get(path, params, _retry)
     -- because the detached helpers (--notify, --recent-watch) run api_get
     -- concurrently with this process.
     local hdr = Util.api_hdr_path()
-    local r = shell("curl -s --max-time 10 -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}' -H " .. shell_quote("Authorization: Bearer " .. token) .. " " .. shell_quote(url))
+    -- --compressed on every JSON fetch in the file. Spotify gzips only when
+    -- asked, and it is asked nowhere before this: a 50-album page is 451,481
+    -- bytes uncompressed and 28,566 compressed, measured. curl decompresses
+    -- transparently, so nothing downstream can tell the difference except by
+    -- how long it waited. Not on the art fetches -- a JPEG is already
+    -- compressed and the header would buy nothing.
+    local r = shell("curl -s --compressed --max-time 10 -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}' -H " .. shell_quote("Authorization: Bearer " .. token) .. " " .. shell_quote(url))
     local status = tonumber(string.match(r or "", "\n(%d+)\n?$")) or 0
     local body = string.match(r or "", "^(.-)\n%d+\n?$") or r or ""
     if status == 429 then
@@ -3513,19 +3705,118 @@ end
 
 -- Offset-paginated fetch helper; any failed page returns nil so it is never
 -- cached as a partial/empty list from a transient error.
-Util.paged_fetch = function(path, mk_params, done, each)
-    local all, offset = {}, 0
-    while true do
-        local d = api_get(path, mk_params(offset))
-        if not d then return nil end
-        local items = d.items or {}
-        for _, it in ipairs(items) do
+--
+-- Page 1 is fetched alone, and its `total` is what makes the rest cheap: every
+-- remaining offset is known from it, so they go out as ONE curl instead of a
+-- sequential walk. Measured on a 6-page browse: 3.57s sequential, 1.04s this
+-- way. That is the whole point -- the old loop paid a fresh TCP+TLS handshake
+-- and a cold-connection first byte per page (~0.63s each, versus ~0.11s on a
+-- warm one), which is why reopening a 739-track playlist took eight round trips
+-- to draw.
+--
+-- Page 1 still goes through api_get, and so does any page the batch failed to
+-- bring back: that function owns the 429 cooldown, the 401 notice, the 5xx
+-- retry and Util.mark_availability, and none of that is worth reimplementing on
+-- the fast path.
+--
+-- opts.max caps the items wanted, for the callers that want a head of the list
+-- rather than all of it. Without it, a total of 4,000 would mean 80 pages in
+-- flight for a caller that only ever reads 100.
+--
+-- THE TRADE: paging by `total` cannot see an item added DURING the fetch, where
+-- following `next` one page at a time can. Util.parallel_fetch_library already
+-- accepts exactly this for the library shelves; the exposure is one refresh.
+Util.paged_fetch = function(path, mk_params, done, each, opts)
+    opts = opts or {}
+    local all = {}
+    local function take(items)
+        for _, it in ipairs(items or {}) do
             local v = it
             if each then v = each(it) end
             if v ~= nil then all[#all+1] = v end
         end
-        if done(d, items) then break end
-        offset = offset + #items
+    end
+
+    local d = api_get(path, mk_params(0))
+    if not d then return nil end
+    local items = d.items or {}
+    take(items)
+    if done(d, items) then return all end
+
+    local per, total, token = #items, tonumber(d.total), get_token()
+    if per > 0 and total and token then
+        local want = opts.max and math.min(total, opts.max) or total
+        local pages = math.ceil(want / per)
+        if pages <= 1 then return all end
+        -- One temp file per page, named through Util.tmpfile so they land in
+        -- this process's 0700 scratch directory and the orphan sweep can reclaim
+        -- them if we die mid-flight.
+        local jobs = {}
+        for i = 1, pages - 1 do
+            jobs[i] = {url = Util.api_url(path, mk_params(i * per)), out = Util.tmpfile("page")}
+        end
+        -- The token goes in the -K config rather than on argv, which is where
+        -- every other request in the file puts it: the config is written 0700
+        -- and deleted immediately, so this is the one fetch whose credentials
+        -- never appear in the process list.
+        local got = Util.curl_batch(jobs, {compressed = true, parallel = 6, timeout = 15,
+                                           header = "Authorization: Bearer " .. token})
+        -- 429 IS REACHABLE HERE in a way it was not when pages went one at a
+        -- time, and it arrives for the whole burst at once: measured against a
+        -- 54-page podcast, an over-eager batch came back 54/54 rate limited in
+        -- 0.66s. Back off once and re-ask for just the pages that missed, at a
+        -- crawl -- without this the retry below hands each of them to api_get,
+        -- which answers nil on a 429, and one burst would fail the whole fetch
+        -- and cache nothing.
+        if got then
+            local again, limited = {}, false
+            for i = 1, pages - 1 do
+                local r = got[jobs[i].out]
+                if not (r and Util.is2xx(r.code)) then
+                    again[#again+1] = jobs[i]
+                    if r and r.code == "429" then limited = true end
+                end
+            end
+            if limited and #again > 0 then
+                os.execute("sleep 2")
+                for out, r in pairs(Util.curl_batch(again, {compressed = true, parallel = 2,
+                        timeout = 15, header = "Authorization: Bearer " .. token}) or {}) do
+                    got[out] = r
+                end
+            end
+        end
+        for i = 1, pages - 1 do
+            local r = got and got[jobs[i].out]
+            local dn = (r and Util.is2xx(r.code)) and safe_decode(read_file(jobs[i].out)) or nil
+            os.remove(jobs[i].out)
+            if dn then
+                -- api_get does this for every response it returns; a page that
+                -- came in through the batch has to be collapsed the same way or
+                -- its ~185-entry available_markets arrays reach the disk cache.
+                Util.mark_availability(dn)
+            else
+                -- Anything the batch could not bring back gets one honest retry
+                -- through api_get -- which is also what turns a 429 into a real
+                -- cooldown rather than a silently short list.
+                dn = api_get(path, mk_params(i * per))
+                if not dn then return nil end
+            end
+            take(dn.items)
+        end
+        return all
+    end
+
+    -- No `total` to page by: cursor-paginated endpoints (me/following walks an
+    -- `after` token) and anything that answered an empty first page. Same loop
+    -- as before, picking up where page 1 left off.
+    local offset = per
+    while true do
+        local dn = api_get(path, mk_params(offset))
+        if not dn then return nil end
+        local it2 = dn.items or {}
+        take(it2)
+        if done(dn, it2) then break end
+        offset = offset + #it2
     end
     return all
 end
@@ -3569,7 +3860,6 @@ local function parallel_fetch_library()
     os.execute("rm -rf " .. shell_quote(tmpdir) .. " && mkdir -p " .. shell_quote(tmpdir))
 
     local ok, r1, r2, r3 = pcall(function()
-    local BATCH = 5
     -- These URLs are assembled by hand rather than going through api_get, so the
     -- market has to be appended here too -- this is the path that actually
     -- rebuilds the liked cache, and without it every track comes back with no
@@ -3577,14 +3867,14 @@ local function parallel_fetch_library()
     local mkt = Util.market()
     mkt = mkt and ("&market=" .. mkt) or ""
 
-    local function fire_batch(cmds)
-        if #cmds == 0 then return end
-        os.execute(table.concat(cmds, " & ") .. " & wait")
-    end
-
-        local function curl_cmd(url, out)
-        return string.format("curl -s --max-time 10 -H %s %s -o %s 2>/dev/null",
-            shell_quote(auth), shell_quote(url), shell_quote(out))
+    -- One curl for the whole batch, the same transport the covers and
+    -- Util.paged_fetch use. This was `cmd1 & cmd2 & … & wait` -- N processes,
+    -- each paying its own TCP+TLS -- which measured 0.81s against 0.63s for six
+    -- pages, and the concurrency bound is now --parallel-max rather than a hand
+    -- rolled BATCH loop.
+    local function fire_batch(jobs)
+        if #jobs == 0 then return end
+        Util.curl_batch(jobs, {compressed = true, parallel = 6, timeout = 10, header = auth})
     end
 
     local function page_valid(file)
@@ -3594,9 +3884,9 @@ local function parallel_fetch_library()
 
     -- PHASE 1: PROBE — fetch page 0 for all three endpoints simultaneously
     fire_batch({
-        curl_cmd(base .. "me/tracks?limit=50&offset=0" .. mkt, tmpdir .. "/lk_0.json"),
-        curl_cmd(base .. "me/albums?limit=50&offset=0" .. mkt, tmpdir .. "/al_0.json"),
-        curl_cmd(base .. "me/following?type=artist&limit=50", tmpdir .. "/ar_0.json"),
+        {url = base .. "me/tracks?limit=50&offset=0" .. mkt, out = tmpdir .. "/lk_0.json"},
+        {url = base .. "me/albums?limit=50&offset=0" .. mkt, out = tmpdir .. "/al_0.json"},
+        {url = base .. "me/following?type=artist&limit=50", out = tmpdir .. "/ar_0.json"},
     })
     -- PHASE 2: PARSE PROBES — extract totals and page 0 data
     local lk0 = safe_decode(read_file(tmpdir .. "/lk_0.json"))
@@ -3608,40 +3898,36 @@ local function parallel_fetch_library()
     local tracks_pages = math.ceil(tracks_total / 50)
     local albums_pages = math.ceil(albums_total / 50)
 
-    -- PHASE 3: BUILD COMMANDS — page 0 already fetched, queue pages 1..N-1
-    local lk_cmds = {}
-    local al_cmds = {}
+    -- PHASE 3: BUILD JOBS — page 0 already fetched, queue pages 1..N-1
+    local jobs = {}
     for i = 1, tracks_pages - 1 do
-        lk_cmds[#lk_cmds+1] = curl_cmd(base .. "me/tracks?limit=50&offset=" .. (i * 50) .. mkt, tmpdir .. "/lk_" .. i .. ".json")
+        jobs[#jobs+1] = {url = base .. "me/tracks?limit=50&offset=" .. (i * 50) .. mkt,
+                         out = tmpdir .. "/lk_" .. i .. ".json"}
     end
     for i = 1, albums_pages - 1 do
-        al_cmds[#al_cmds+1] = curl_cmd(base .. "me/albums?limit=50&offset=" .. (i * 50) .. mkt, tmpdir .. "/al_" .. i .. ".json")
+        jobs[#jobs+1] = {url = base .. "me/albums?limit=50&offset=" .. (i * 50) .. mkt,
+                         out = tmpdir .. "/al_" .. i .. ".json"}
     end
 
-    local cmds = {}
-    for _, c in ipairs(lk_cmds) do cmds[#cmds+1] = c end
-    for _, c in ipairs(al_cmds) do cmds[#cmds+1] = c end
+    -- PHASE 4: FIRE, then retry failures sequentially. No chunking loop: one
+    -- curl takes the lot and --parallel-max decides how many are in flight.
+    fire_batch(jobs)
 
-    -- PHASE 4: FIRE in batches, then retry failures sequentially
-    for b = 1, #cmds, BATCH do
-        local batch = {}
-        for j = b, math.min(b + BATCH - 1, #cmds) do batch[#batch+1] = cmds[j] end
-        fire_batch(batch)
-    end
-
-    -- RETRY: check each page file, retry failures one at a time with delay
+    -- RETRY: check each page file, retry failures one at a time with delay.
+    -- Through fire_batch with a single job rather than a second command builder
+    -- -- one URL is just the smallest batch.
     for i = 1, tracks_pages - 1 do
         local f = tmpdir .. "/lk_" .. i .. ".json"
         if not page_valid(f) then
             os.execute("sleep 1")
-            os.execute(curl_cmd(base .. "me/tracks?limit=50&offset=" .. (i * 50) .. mkt, f))
+            fire_batch({{url = base .. "me/tracks?limit=50&offset=" .. (i * 50) .. mkt, out = f}})
         end
     end
     for i = 1, albums_pages - 1 do
         local f = tmpdir .. "/al_" .. i .. ".json"
         if not page_valid(f) then
             os.execute("sleep 1")
-            os.execute(curl_cmd(base .. "me/albums?limit=50&offset=" .. (i * 50) .. mkt, f))
+            fire_batch({{url = base .. "me/albums?limit=50&offset=" .. (i * 50) .. mkt, out = f}})
         end
     end
 
@@ -3654,7 +3940,7 @@ local function parallel_fetch_library()
     end
     while artist_after and artist_after ~= "" do
         local ar_file = tmpdir .. "/ar_" .. #artists .. ".json"
-        os.execute("curl -s --max-time 10 -H " .. shell_quote(auth) .. " " ..
+        os.execute("curl -s --compressed --max-time 10 -H " .. shell_quote(auth) .. " " ..
             shell_quote(base .. "me/following?type=artist&limit=50&after=" .. artist_after) .. " -o " ..
             shell_quote(ar_file) .. " 2>/dev/null")
         local ar_page = safe_decode(read_file(ar_file))
@@ -4327,8 +4613,19 @@ end
 -- The icon is carried HERE rather than by the caller, so it appears in every
 -- list a show can reach: Followed Podcasts, each topic grid, a search result and
 -- the show action menu's own header.
+-- The video badge sits between the two, the way display_playlist prefixes a
+-- Spotify-owned playlist: type glyph first (it is what tells a show row from an
+-- episode row on the All search page), then what is true ABOUT this show, then
+-- the name.
+--
+-- media_type is "audio" or "mixed" and nothing else, and "mixed" means the show
+-- publishes SOME video episodes -- Spotify will not say which. So the badge
+-- belongs to the show and never to a row under it, and its absence has to mean
+-- "not known to have video", never "no data": an object cached before this
+-- carries no media_type at all and must render exactly as it did.
 function Util.display_show(item)
-    return Util.type_icon("shows") .. (item.name or "Unknown") .. album_suffix(item)
+    local vid = Util.is_video_show(item) and Util.type_icon("video") or ""
+    return Util.type_icon("shows") .. vid .. (item.name or "Unknown") .. album_suffix(item)
 end
 
 -- Every _stype needs an arm of its own: the fallback is display_playlist, so a
@@ -5164,9 +5461,14 @@ end
 -- contract album_action_menu and playlist_action_menu already answer with.
 function Util.show_action_menu(show)
     local followed = Util.lib_has("show", show.id)
+    -- Held in a local because the LABEL is state: it says Watch only for a show
+    -- Spotify marks as carrying video. The dispatch below compares against this
+    -- same value rather than a literal, the way row 2 cannot be a literal
+    -- either.
+    local watch = Util.watch_label(Util.is_video_show(show))
     local acts  = {"Open Podcast", followed and "Unfollow Podcast" or "Follow Podcast",
-                   "Podcast Art", "Copy Web Link", "Podcast Details"}
-    local akeys = {"open", "follow", "art", "url", "details"}
+                   "Podcast Art", "Copy Web Link", watch, "Podcast Details"}
+    local akeys = {"open", "follow", "art", "url", "watch", "details"}
     local sh_ac_key = "show-ac:" .. (show.id or "")
     local pre_sel = Util.pos_row(sh_ac_key, akeys)
     local action = rofi_dmenu(acts,
@@ -5186,6 +5488,11 @@ function Util.show_action_menu(show)
     elseif action == "Copy Web Link" then
         copy_spotify_url("show", show.id)
         rofi_message("Copied web link")
+    elseif action == watch then
+        -- The only route to a video episode there is: Spotify's own player.
+        -- spoot cannot play one -- the video stream is DRM'd and separate from
+        -- the audio librespot implements.
+        Util.open_in_spotify("show", show.id)
     elseif action == "Podcast Art" then
         view_art(show)
     elseif action == "Podcast Details" then
@@ -5568,7 +5875,11 @@ Util.view_show_details = function(show)
     s.add("Name", d.name)
     s.add("Publisher", d.publisher)
     s.add("Episodes", d.total_episodes or (d.episodes and #d.episodes))
-    s.add("Type", d.media_type)
+    -- Was `s.add("Type", d.media_type)`, which spent a line printing the raw
+    -- field name -- "Type audio" says nothing, and "Type mixed" only says
+    -- something if you already know Spotify's word for it. Named for what it
+    -- tells you, and absent entirely on an audio-only show (s.add drops a nil).
+    s.add("Video", d.media_type == "mixed" and "some episodes" or nil)
     s.add("Languages", d.languages and #d.languages > 0 and table.concat(d.languages, ", ") or nil)
     if d.explicit then s.add("Explicit", "yes") end
     s.add("Description", d.description)
@@ -5600,6 +5911,11 @@ Util.view_episode_details = function(item)
     local s = Util.detail_sheet(Util.THEME_PODS)
     s.add("Name", d.name)
     s.add("Podcast", d.show and d.show.name)
+    -- Free: the full episode fetch already carries its show, and that object
+    -- carries media_type. Worded about the PODCAST on purpose -- no field
+    -- anywhere says whether THIS episode is one of the video ones.
+    s.add("Video", d.show and d.show.media_type == "mixed"
+                   and "podcast has video episodes" or nil)
     s.add("Release date", d.release_date)
     s.add("Duration", Util.dur_short(d.duration_ms))
     -- Reads the same resolver the list rows do, so the sheet and the row can
@@ -5785,6 +6101,16 @@ Util.SEARCH_PAGES = {
      thumb_kind = "playlist"},
     {key = "podcasts",  label = "Podcasts",  keys = {"shows", "episodes"}, icon = "shows",
      thumbs = true, thumb_kind = "show"},
+    -- `filter` is the only thing here that selects by something other than TYPE:
+    -- a predicate every row of the page has to pass. Sits after Podcasts because
+    -- it is a slice of it -- the same shows, minus the ones Spotify does not mark
+    -- as carrying video.
+    --
+    -- SHOWS ONLY, and it cannot be otherwise: an episode in a search response
+    -- carries no `show`, and the API has no per-episode video field to consult,
+    -- so no episode row can ever be known to belong here.
+    {key = "video",     label = "Video",     keys = {"shows"},
+     thumbs = true, thumb_kind = "show", filter = Util.is_video_show},
 }
 
 -- The glyph standing for a page, or "" for one that has none (All spans every
@@ -5868,27 +6194,23 @@ function Util.search_prefetch(queries)
     end
     if #want == 0 then return end
     ensure_cache()
-    local BATCH = 8
-    for i = 1, #want, BATCH do
-        local cmds = {}
-        for j = i, math.min(i + BATCH - 1, #want) do
-            local w = want[j]
-            cmds[#cmds+1] = string.format("curl -s --max-time 15 -H %s %s -o %s 2>/dev/null",
-                shell_quote(auth),
-                shell_quote("https://api.spotify.com/v1/search?" .. w.params),
-                shell_quote(w.tmp))
-        end
-        os.execute(table.concat(cmds, " & ") .. " & wait")
-        for j = i, math.min(i + BATCH - 1, #want) do
-            local w = want[j]
-            local d = safe_decode(read_file(w.tmp) or "")
-            os.remove(w.tmp)
-            -- Through the same collapse and the same availability pass api_get
-            -- would have applied, so a prefetched entry is byte-comparable with
-            -- one api_search wrote.
-            if d and not d.error then
-                disk_set(w.path, Util.search_unwrap(Util.mark_availability(d)))
-            end
+    -- One curl for all of them, the same transport the covers, the library sync
+    -- and Util.paged_fetch use. The chunking loop this replaces existed to bound
+    -- how many curl PROCESSES ran at once; --parallel-max bounds requests
+    -- instead, without the fork-per-query.
+    local jobs = {}
+    for _, w in ipairs(want) do
+        jobs[#jobs+1] = {url = Util.api_url("search", w.params), out = w.tmp}
+    end
+    Util.curl_batch(jobs, {compressed = true, parallel = 8, timeout = 15, header = auth})
+    for _, w in ipairs(want) do
+        local d = safe_decode(read_file(w.tmp) or "")
+        os.remove(w.tmp)
+        -- Through the same collapse and the same availability pass api_get
+        -- would have applied, so a prefetched entry is byte-comparable with
+        -- one api_search wrote.
+        if d and not d.error then
+            disk_set(w.path, Util.search_unwrap(Util.mark_availability(d)))
         end
     end
 end
@@ -6114,13 +6436,14 @@ end
 function Util.api_get_top_artists()
     for _, rng in ipairs({"medium_term","long_term","short_term"}) do
         local artists = cached_fetch("top_artists_" .. rng, P.cache .. "/top_artists_" .. rng .. ".json", CACHE_TTL_MED, function()
-            local got = 0
+            -- The cap is opts.max rather than a counter inside `done`, so the
+            -- pager knows it BEFORE it decides how many pages to ask for -- an
+            -- account with thousands of top artists would otherwise put every
+            -- page in flight to read the first hundred.
             local all = Util.paged_fetch("me/top/artists",
                 function(o) return "limit=50&offset=" .. o .. "&time_range=" .. rng end,
-                function(d, items)
-                    got = got + #items
-                    return #items == 0 or not d.next or got >= P.top_max
-                end)
+                function(d, items) return #items == 0 or not d.next end,
+                nil, {max = P.top_max})
             if not all or #all == 0 then return nil end
             return all
         end, {revalidate = "top_artists"})
@@ -6266,15 +6589,15 @@ local function api_get_top_tracks()
     for _, rng in ipairs({"medium_term","long_term","short_term"}) do
         local tracks = cached_fetch("top_tracks_" .. rng, P.cache .. "/top_tracks_" .. rng .. ".json", CACHE_TTL_MED, function()
             -- 50 is the per-request ceiling, so more means paging. Reuses
-            -- Util.paged_fetch rather than hand-rolling another offset loop;
-            -- `got` is what stops it, since the account reports 1578 available.
-            local got = 0
+            -- Util.paged_fetch rather than hand-rolling another offset loop.
+            -- opts.max is what stops it, since the account reports 1578
+            -- available and only P.top_max of them are ever read -- see the note
+            -- at the top-artists caller for why that is a cap the pager is told
+            -- rather than one hidden in `done`.
             local all = Util.paged_fetch("me/top/tracks",
                 function(o) return Util.with_market("limit=50&offset=" .. o .. "&time_range=" .. rng) end,
-                function(d, items)
-                    got = got + #items
-                    return #items == 0 or not d.next or got >= P.top_max
-                end)
+                function(d, items) return #items == 0 or not d.next end,
+                nil, {max = P.top_max})
             -- MUST return nil, not an empty table: this function walks
             -- medium_term -> long_term -> short_term and uses nil to fall
             -- through to the next range. Util.paged_fetch answers {} for an
@@ -6381,7 +6704,7 @@ local function normalize_str(s)
 end
 
 Util.http_get = function(url)
-    local r = shell("curl -s --max-time 5 -w '\n%{http_code}' " .. shell_quote(url))
+    local r = shell("curl -s --compressed --max-time 5 -w '\n%{http_code}' " .. shell_quote(url))
     local status = tonumber(string.match(r or "", "\n(%d+)\n?$")) or 0
     local body = string.match(r or "", "^(.-)\n%d+\n?$") or r or ""
     return body, status
@@ -6999,6 +7322,11 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
     actions[#actions+1] = "Add to Queue"; akeys[#akeys+1] = "queue"
     actions[#actions+1] = "Go to Podcast"; akeys[#akeys+1] = "show"
     actions[#actions+1] = "Copy Web Link"; akeys[#akeys+1] = "url"
+    -- Reads Watch only when the episode arrived carrying its show -- a search
+    -- result does not, and Spotify has no per-episode video field to consult
+    -- either way, so the neutral label is the honest default.
+    local watch = Util.watch_label(Util.is_video_show(item.show))
+    actions[#actions+1] = watch; akeys[#akeys+1] = "watch"
     actions[#actions+1] = "Podcast Art"; akeys[#akeys+1] = "art"
     actions[#actions+1] = "Episode Details"; akeys[#akeys+1] = "details"
 
@@ -7051,6 +7379,10 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
         elseif key == "url" then
             copy_spotify_url("episode", item.id)
             rofi_message("Copied web link")
+        elseif key == "watch" then
+            -- Spotify's own player is the only thing that can show the video:
+            -- the stream is DRM'd and separate from the audio librespot speaks.
+            Util.open_in_spotify("episode", item.id)
         elseif key == "art" then
             -- view_art resolves item.images, and the synthetic show patched on by
             -- Util.api_get_show is what gives an episode without its own artwork
@@ -7433,15 +7765,7 @@ end
 -- page, so view_browse's per-type dispatch is untouched by the split -- a
 -- filtered page is the same list with fewer kinds on it, not a different thing.
 local function format_search_results(results, query, page)
-    local want = {}
-    for _, k in ipairs(Util.search_page_keys(page or 1)) do want[k] = true end
-    local items = {}
-    for _, e in ipairs(Util.SEARCH_TYPES) do
-        local ci = want[e.key] and results[e.key]
-        if ci and type(ci) == "table" then
-            for i = 1, #ci do ci[i]._stype = e.key; items[#items+1] = ci[i] end
-        end
-    end
+    local items = Util.search_page_items(results, page or 1)
     if #items == 0 then return nil end
     local entries = {}
     for i = 1, #items do
@@ -7461,15 +7785,37 @@ local function format_search_results(results, query, page)
     return items, entries, mesg
 end
 
--- How many rows a page would draw, for the picker's counts. Cheap -- the
--- response is already in hand and this only sums lengths.
-function Util.search_page_count(results, page)
-    local n = 0
-    for _, k in ipairs(Util.search_page_keys(page)) do
+-- The rows a page draws, filter and all, stamped with the `_stype` view_browse
+-- dispatches on. Both the formatter and the counter below go through this, so
+-- the number Tab puts on a page is BY CONSTRUCTION the number of rows you get
+-- when you land on it -- they used to be two walks of the same data, which a
+-- page with a `filter` would have made disagree.
+--
+-- Util.search_page_keys answers in SEARCH_TYPES order for every page, All
+-- included, so display order comes for free rather than from a second loop.
+function Util.search_page_items(results, page)
+    local pg   = Util.SEARCH_PAGES[page or 1]
+    local keep = pg and pg.filter
+    local out = {}
+    for _, k in ipairs(Util.search_page_keys(page or 1)) do
         local ci = results[k]
-        if type(ci) == "table" then n = n + #ci end
+        if type(ci) == "table" then
+            for i = 1, #ci do
+                if not keep or keep(ci[i]) then
+                    ci[i]._stype = k
+                    out[#out+1] = ci[i]
+                end
+            end
+        end
     end
-    return n
+    return out
+end
+
+-- How many rows a page would draw, for the picker's counts. Builds the list
+-- rather than summing lengths -- a filtered page has no length to sum -- which
+-- at a hundred-odd items is nothing, and is what keeps the count honest.
+function Util.search_page_count(results, page)
+    return #Util.search_page_items(results, page)
 end
 
 -- Tab's menu. A picker rather than a blind cycle, so an empty page is something
@@ -7540,76 +7886,79 @@ end
 
 -- on_change("rename"|"delete", pl) lets the playlist LIST that opened this menu
 -- resync its rows. Replay passes nil: there is no list behind it to update.
+--
+-- A CONTEXT MENU, so no Util.scope and no trail step -- same as view_artist and
+-- the unscoped playlist_action_menu the grids use. It was scoped, and since the
+-- playlist it opens is named after the playlist too, every trail through here
+-- read "Playlists > Chill Mix > Chill Mix".
 function Util.open_playlist_actions(pl, on_change)
     if not pl or not pl.id then return end
     Util.playlist_meta_seed(pl)
-    Util.scope({view="playlist-actions", playlist_id=pl.id, playlist_name=pl.name or "Playlist"}, function()
-        -- Opening an empty playlist only ever yields "Playlist is empty", so say
-        -- it on the row instead. Dimmed in place, not dropped: a vanishing row
-        -- shifts every index below it, and pos_key remembers the cursor by index.
-        -- Only user playlists can be empty; editorial ones always carry tracks.
-        -- A replay that could not restore the count falls back to the cached
-        -- playlist list for it.
-        local total = pl.tracks and tonumber(pl.tracks.total)
-        if not total then
-            for _, p in ipairs(api_get_my_playlists() or {}) do
-                if p.id == pl.id then
-                    total = p.tracks and tonumber(p.tracks.total)
-                    pl.owner  = pl.owner  or p.owner
-                    pl.images = pl.images or p.images   -- Playlist Art needs these on replay
-                    break
-                end
+    -- Opening an empty playlist only ever yields "Playlist is empty", so say
+    -- it on the row instead. Dimmed in place, not dropped: a vanishing row
+    -- shifts every index below it, and pos_key remembers the cursor by index.
+    -- Only user playlists can be empty; editorial ones always carry tracks.
+    -- A replay that could not restore the count falls back to the cached
+    -- playlist list for it.
+    local total = pl.tracks and tonumber(pl.tracks.total)
+    if not total then
+        for _, p in ipairs(api_get_my_playlists() or {}) do
+            if p.id == pl.id then
+                total = p.tracks and tonumber(p.tracks.total)
+                pl.owner  = pl.owner  or p.owner
+                pl.images = pl.images or p.images   -- Playlist Art needs these on replay
+                break
             end
         end
-        local is_empty = total == 0 and not (pl.owner and pl.owner.id == "spotify")
-        local acts = {is_empty and Util.dim("Playlist is empty")
-                      or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy Web Link"}
-        while true do
-            local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), custom=false,
-                theme=THEME_SUB, no_status=true, markup=true, pos_key="playlist-ac:" .. (pl.id or "")})
-            if not asel then return end
-            local token = get_token()
-            if asel == "Open Playlist" then
-                Util.open_playlist(pl)
-                if jump_to_track_pending then return end
-            elseif asel == "Playlist Art" then
-                view_art(pl)
-            elseif asel == "Rename Playlist" then
-                if not token then rofi_message("No auth")
-                else
-                    local nn = rofi_input("New Name", pl.name or "", P.THEME_SEARCH)
-                    if nn ~= "" and nn ~= (pl.name or "") then
-                        local url = "https://api.spotify.com/v1/playlists/" .. pl.id
-                        local r = Util.api_write("PUT", url, token, {body={name=nn}})
-                        if Util.is2xx(r) then
-                            pl.name = nn; bust_my_playlists(pl, true)
-                            if on_change then on_change("rename", pl) end
-                            rofi_message("Renamed")
-                        else rofi_message("Failed") end
-                    end
+    end
+    local is_empty = total == 0 and not (pl.owner and pl.owner.id == "spotify")
+    local acts = {is_empty and Util.dim("Playlist is empty")
+                  or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy Web Link"}
+    while true do
+        local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl), custom=false,
+            theme=THEME_SUB, no_status=true, markup=true, pos_key="playlist-ac:" .. (pl.id or "")})
+        if not asel then return end
+        local token = get_token()
+        if asel == "Open Playlist" then
+            Util.open_playlist(pl)
+            if jump_to_track_pending then return end
+        elseif asel == "Playlist Art" then
+            view_art(pl)
+        elseif asel == "Rename Playlist" then
+            if not token then rofi_message("No auth")
+            else
+                local nn = rofi_input("New Name", pl.name or "", P.THEME_SEARCH)
+                if nn ~= "" and nn ~= (pl.name or "") then
+                    local url = "https://api.spotify.com/v1/playlists/" .. pl.id
+                    local r = Util.api_write("PUT", url, token, {body={name=nn}})
+                    if Util.is2xx(r) then
+                        pl.name = nn; bust_my_playlists(pl, true)
+                        if on_change then on_change("rename", pl) end
+                        rofi_message("Renamed")
+                    else rofi_message("Failed") end
                 end
-            elseif asel == "Delete Playlist" then
-                if not token then rofi_message("No auth")
-                else
-                    local c = rofi_dmenu({"DELETE","Cancel"}, {prompt="Delete", mesg="Delete " .. (pl.name or "") .. "?", custom=false, by_index=true, theme=THEME_SUB, no_status=true, markup=true})
-                    if c == 1 then
-                        local url = "https://api.spotify.com/v1/playlists/" .. pl.id .. "/followers"
-                        local r = Util.api_write("DELETE", url, token)
-                        if Util.is2xx(r) then
-                            bust_my_playlists(pl, false)
-                            Util.bust_playlist_tracks(pl.id)
-                            rofi_message("Deleted Playlist: " .. (pl.name or ""))
-                            if on_change then on_change("delete", pl) end
-                            return
-                        else rofi_message("Failed to delete") end
-                    end
-                end
-            elseif asel == "Copy Web Link" then
-                copy_spotify_url("playlist", pl.id)
-                rofi_message("Copied web link")
             end
+        elseif asel == "Delete Playlist" then
+            if not token then rofi_message("No auth")
+            else
+                local c = rofi_dmenu({"DELETE","Cancel"}, {prompt="Delete", mesg="Delete " .. (pl.name or "") .. "?", custom=false, by_index=true, theme=THEME_SUB, no_status=true, markup=true})
+                if c == 1 then
+                    local url = "https://api.spotify.com/v1/playlists/" .. pl.id .. "/followers"
+                    local r = Util.api_write("DELETE", url, token)
+                    if Util.is2xx(r) then
+                        bust_my_playlists(pl, false)
+                        Util.bust_playlist_tracks(pl.id)
+                        rofi_message("Deleted Playlist: " .. (pl.name or ""))
+                        if on_change then on_change("delete", pl) end
+                        return
+                    else rofi_message("Failed to delete") end
+                end
+            end
+        elseif asel == "Copy Web Link" then
+            copy_spotify_url("playlist", pl.id)
+            rofi_message("Copied web link")
         end
-    end)
+    end
 end
 
 function Util.api_get_genre_seeds()
@@ -7781,9 +8130,11 @@ end
 
 -- One artist destination for every call site: Return lands on the discography,
 -- Shift+Return on the hub. Split out because eight call sites need the same
--- choice, and the artist "action menu" (view_artist) is itself a scoped view --
--- so the Return path has to bypass it rather than pass through it, which is why
--- backing out of an artist's albums lands on the artist list, not the hub.
+-- choice, and the Return path reaches the albums DIRECTLY rather than through
+-- view_artist -- routing it through the hub would leave a menu you never asked
+-- for between the list and the albums, one you would have to dismiss on the way
+-- back out. Backing out of an artist's albums therefore lands on the artist
+-- list, which is also where it lands coming back out of the hub.
 function Util.open_artist(artist, want_hub)
     if not artist or not artist.id then return end
     if want_hub then view_artist(artist)
@@ -7832,8 +8183,12 @@ function Util.browse_top_by_artist(artist_id, artist_name)
     end)
 end
 
+-- The artist hub is a CONTEXT MENU, not a place: like album_action_menu and
+-- Util.show_action_menu it takes no Util.scope entry, so it costs no trail step
+-- and a warm start restores the list it was opened from. It used to be scoped,
+-- which cost a step named after the artist directly in front of four sub-views
+-- that were also named after the artist -- "Bad Bunny > Bad Bunny".
 view_artist = function(artist)
-    Util.scope({view="artist-actions", artist_id=artist.id, artist_name=artist.name or ""}, function()
     local is_followed = api_check_following(artist.id)
     -- Artist Impression goes LAST, where the track menu keeps Albumart, and
     -- appending is also what keeps the literal actions[5] below -- the
@@ -7882,7 +8237,6 @@ view_artist = function(artist)
             view_art(artist)
         end
     end
-    end)
 end
 
 -- VIEW: LYRICS (via lrclib.net)
@@ -9322,21 +9676,113 @@ Util.view_bitrate = function()
     end)
 end
 
+-- Whether spotifyd caches the TRACKS it streams -- spoot's own artwork and data
+-- caches are not this setting and are not touched by anything here.
+--
+-- Same shape as Util.view_bitrate above, for the same reason: the flag is read
+-- when spotifyd is spawned, so a change means a restart, and nothing is written
+-- until that restart is confirmed.
+--
+-- The one thing this owns that bitrate does not is the purge. librespot keeps
+-- whole tracks in 256 two-hex-char directories next to its credentials (oauth/,
+-- zeroconf/) and its saved volume; matching that glob is what lets the row empty
+-- the audio without costing a re-auth. The glob stays OUTSIDE shell_quote so the
+-- shell still expands it -- the same shape as the .api_hdr.* sweep in
+-- ensure_cache -- and the SAME glob measures and removes, so the number on the
+-- row cannot describe a different set of files than the one that goes.
+Util.view_track_cache = function()
+    Util.scope({view="track-cache"}, function()
+    local audio = shell_quote(P.spotifyd) .. "/[0-9a-f][0-9a-f]"
+    -- -c for the total line, since the glob expands to up to 256 arguments.
+    -- Measured at 3ms warm on a 15 GB / 1,685-file cache: one fork on a menu
+    -- that was opened deliberately, not on any draw path.
+    local function cached_size()
+        local out = shell("du -shc " .. audio .. " 2>/dev/null | tail -1")
+        local sz = out and out:match("^(%S+)")
+        -- A glob that matches nothing is passed through LITERALLY by the shell,
+        -- so du errors into /dev/null and -c still prints a "0 total" line. That
+        -- is the empty cache, and it has to read as nothing here or the row would
+        -- offer to delete "0" of tracks.
+        if not sz or sz == "0" then return nil end
+        return sz
+    end
+    while true do
+        local on = Util.track_cache_on()
+        local function row(label, checked)
+            if not checked then return label end
+            return Util.markup('<span foreground="#b6e0a4">') .. "\u{f00c} " .. label
+                .. Util.markup("</span>")
+        end
+        local sz = cached_size()
+        -- "(default)" marks the shipped state the way the bitrate picker marks
+        -- 160 kbps; the name beside it comes from Util.track_cache_label so it
+        -- cannot drift from the System row that opened this.
+        local opts = {row(Util.track_cache_label(true) .. " (default)", on),
+                      row(Util.track_cache_label(false), not on),
+                      "Clear Cached Tracks" .. (sz and (SEP .. sz) or "")}
+        local sel = rofi_dmenu(opts,
+            {prompt="Track Cache", mesg="Current: " .. Util.track_cache_label(on),
+             custom=false, by_index=true, markup=true,
+             theme=THEME_SUB, no_status=true, pos_key="track-cache"})
+        if not sel then return end
+        if sel == 3 then
+            if not sz then
+                rofi_message("No cached tracks")
+            else
+                local c = rofi_dmenu({"Clear Cache", "Abort"},
+                    {prompt="Track Cache", mesg="delete " .. sz .. " of cached tracks?",
+                     custom=false, by_index=true, theme=THEME_SUB,
+                     no_status=true, markup=true})
+                if c == 1 then
+                    -- No restart: a file the daemon has open stays readable until
+                    -- it closes it, and anything else simply streams again on the
+                    -- next play. Credentials are untouched, so playback continues
+                    -- without re-pairing the device.
+                    os.execute("rm -rf " .. audio .. " 2>/dev/null")
+                    rofi_message("Cleared " .. sz .. " of cached tracks")
+                end
+            end
+        else
+            local want = (sel == 1)
+            if want ~= on then
+                local c = rofi_dmenu({"Restart Daemons", "Abort"},
+                    {prompt="Track Cache",
+                     mesg=Util.track_cache_label(want) .. SEP .. "restart daemons to apply?",
+                     custom=false, by_index=true, theme=THEME_SUB,
+                     no_status=true, markup=true})
+                if c == 1 then
+                    -- Before the restart: ensure_spotifyd reads the saved value.
+                    Util.save_track_cache(want)
+                    Util.restart_daemons()
+                end
+                -- Abort wrote nothing, so the loop redraws with the original
+                -- state still checked. See the note in Util.view_bitrate.
+            end
+        end
+    end
+    end)
+end
+
 local function view_system()
     local cur_br = get_saved_bitrate()
+    local cur_tc = Util.track_cache_on()
     local cur_vol = get_playerctl_volume()
     local vol_label = cur_vol == 0 and "Muted" or (cur_vol .. "%")
+    local function tc_row(on) return "Track Cache " .. Util.markup("<b>") .. Util.track_cache_label(on) .. Util.markup("</b>") end
     local items = {"Keybinds", "Volume " .. Util.markup("<b>") .. vol_label .. Util.markup("</b>"), "Bitrate " .. Util.markup("<b>") .. cur_br .. " kbps" .. Util.markup("</b>"),
+                   tc_row(cur_tc),
                    "Jump to Trail Step",
                    "Clear Session",
                    "Refresh Library",
                    "Re-authenticate",
                    "Restart Daemons",
                    "Kill Daemons"}
-    -- Rows 2 and 3 are patched in place below as the volume and bitrate change,
-    -- so the cursor is remembered by these stable keys rather than by the label
-    -- (which no longer matched once it had been rewritten). See Util.pos_row.
-    local keys = {"keybinds", "volume", "bitrate", "trailjump",
+    -- Rows 2 to 4 are patched in place below as the volume, bitrate and track
+    -- cache change, so the cursor is remembered by these stable keys rather than
+    -- by the label (which no longer matched once it had been rewritten). See
+    -- Util.pos_row. Index-parallel with `items`: a row added to one is a row
+    -- added to the other, at the same position.
+    local keys = {"keybinds", "volume", "bitrate", "trackcache", "trailjump",
                   "clearsession", "refresh", "reauth", "restart", "kill"}
     Util.scope({view="system"}, function()
     local sys_key = "system:"
@@ -9391,6 +9837,10 @@ local function view_system()
             Util.view_bitrate()
             cur_br = get_saved_bitrate()
             items[3] = "Bitrate " .. Util.markup("<b>") .. cur_br .. " kbps" .. Util.markup("</b>")
+        elseif clean:match("^Track Cache") then
+            Util.view_track_cache()
+            cur_tc = Util.track_cache_on()
+            items[4] = tc_row(cur_tc)
         elseif clean == "Refresh Library" then
             -- Synchronous, unlike the background revalidator: this row exists to
             -- be waited on. rofi_message rather than a desktop notification,
@@ -9447,8 +9897,11 @@ end
 -- repeating the name. Every other view shows its own name when it has one; see
 -- Util.parts_from_stack for why this is declared per view rather than inferred
 -- from two steps happening to share a string.
-local function reg(view, label, open, label_only)
-    VIEWS[view] = {label = label, open = open, label_only = label_only}
+-- qualify is the opposite case: the view's name is not its own but its PARENT's,
+-- shared with sibling views, so the label is appended rather than replaced --
+-- "Bad Bunny > Top Tracks". See Util.step_name.
+local function reg(view, label, open, label_only, qualify)
+    VIEWS[view] = {label = label, open = open, label_only = label_only, qualify = qualify}
 end
 
 -- prefer_current (warm start only) follows the music across a restart, but only
@@ -9508,6 +9961,10 @@ reg("playlist", "Playlist", function(s)
     Util.open_playlist(Util.playlist_meta(s.playlist_id)
         or {id=s.playlist_id, name=s.playlist_name or "Playlist"})
 end)
+-- LEGACY, like artist-actions below: nothing pushes this any more, because a
+-- context menu is not a place you went. It stays registered so a session.json /
+-- trails.json / menu history written before that change still names its step and
+-- still replays.
 reg("playlist-actions", "Playlist", function(s)
     if not s.playlist_id then return end
     -- Same cache: the {id, name} stub is what makes open_playlist_actions walk
@@ -9530,21 +9987,26 @@ end)
 reg("add-to-playlist", "Add to Playlist", function(s)
     if s.track_id then view_add_pl(s.track_id, s.track_name) end
 end, true)
+-- LEGACY, for the reason given at playlist-actions above: view_artist is a
+-- context menu and no longer takes a stack entry, the way album_action_menu
+-- never had one.
 reg("artist-actions", "Artist", function(s)
     if s.artist_id then view_artist({id=s.artist_id, name=s.artist_name or ""}) end
 end)
+-- All four carry the SAME artist_name, so each is qualified by its label (see
+-- reg): without that the trail read "Bad Bunny" whichever of them you opened.
 reg("artist-albums", "Albums", function(s)
     if s.artist_id then Util.browse_artist_albums(s.artist_id, s.artist_name) end
-end)
+end, nil, true)
 reg("liked-by-artist", "Liked Tracks", function(s)
     if s.artist_id then Util.browse_liked_by_artist(s.artist_id, s.artist_name) end
-end)
+end, nil, true)
 reg("top-by-artist", "Top Tracks", function(s)
     if s.artist_id then Util.browse_top_by_artist(s.artist_id, s.artist_name) end
-end)
+end, nil, true)
 reg("related", "Related", function(s)
     if s.artist_id then Util.browse_related_artists(s.artist_id, s.artist_name) end
-end)
+end, nil, true)
 reg("search", "Search", function() view_search() end)
 reg("liked",            "Liked Tracks",     function() view_liked_tracks() end)
 reg("top-tracks",       "Top Tracks",       function() view_top_tracks() end)
@@ -9574,6 +10036,7 @@ reg("categories",       "Categories",       function() view_categories() end)
 reg("playlists",        "Playlists",        function() view_playlists() end)
 reg("volume",           "Volume",           function() view_volume() end)
 reg("bitrate",          "Bitrate",          function() Util.view_bitrate() end)
+reg("track-cache",      "Track Cache",      function() Util.view_track_cache() end)
 reg("playback",         "Playback",         function() view_playback() end)
 reg("system",           "System",           function() view_system() end)
 
@@ -9660,14 +10123,16 @@ function Util.view_trail_jump(stack)
     local first = true
     -- Same guard as Util.parts_from_stack: a junk stack entry must not be able
     -- to take the whole menu down.
-    -- Same rule as Util.parts_from_stack, and it has to stay that way: this menu
-    -- lists the very steps that function renders, so the two disagreeing would
-    -- mean jumping to a step whose label you never saw.
-    local function step_name(e)
+    -- Naming goes through Util.step_name, the same function the breadcrumb uses,
+    -- because this menu lists the very steps that one renders -- the two
+    -- disagreeing would mean jumping to a step whose label you never saw. Only
+    -- the join differs: a row is ONE entry, so a qualified step wears its label
+    -- inline ("Bad Bunny > Top Tracks") where the crumb spends two steps on it.
+    local function step_label(e)
         if type(e) ~= "table" then return view_label(nil) end
-        local v = VIEWS[e.view]
-        local name = not (v and v.label_only) and crumb_name(e) or nil
-        return name or view_label(e.view)
+        local name, qual = Util.step_name(e)
+        if qual then return name .. Util.crumb_arrow(" > ") .. qual end
+        return name
     end
     local function add_trail(stk, with_main)
         if with_main then
@@ -9675,7 +10140,7 @@ function Util.view_trail_jump(stack)
             first = false
             if stk then
                 for i = 1, #stk do
-                    push(Util.crumb_arrow("> "), step_name(stk[i]), stk, i)
+                    push(Util.crumb_arrow("> "), step_label(stk[i]), stk, i)
                 end
             end
             return
@@ -9683,7 +10148,7 @@ function Util.view_trail_jump(stack)
         if not stk or #stk == 0 then return end
         for i = 1, #stk do
             push(i == 1 and (first and "" or SEP) or Util.crumb_arrow("> "),
-                 step_name(stk[i]), stk, i)
+                 step_label(stk[i]), stk, i)
         end
         first = false
     end

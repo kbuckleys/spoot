@@ -19,8 +19,8 @@ inputbar {
 }
 
 listview {
-    columns: 2;
-    lines: 14;
+    columns: 1;
+    lines: 6;
 }
 
 element-text {
