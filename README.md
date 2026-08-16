@@ -4,12 +4,8 @@
 </picture></p>
 
 <h3><p align="center">
-A keyboard-centric Spotify client</b> --  An advanced <a href="https://github.com/davatorium/rofi">rofi</a> interface powered by <a href="https://github.com/Spotifyd/spotifyd">spotifyd</a>
+A keyboard-centric Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 <br>
-Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
-</p></h3>
-
-[2026-08-11-213527-DP-1.webm](https://github.com/user-attachments/assets/e0e801fe-cf48-4f70-ac5e-871bc00ad2af)
 
 # The philosophy behind spoot
 Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spoot was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. spoot was meant to bridge that gap, think of it as a remote control for your stereo system.
@@ -45,20 +41,19 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
+spoot will attempt to automatically install these dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
 ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```spotifyd``` &nbsp; ```rofi 1.7+``` &nbsp; ```songrec``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```perl``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font```
 
 > JetBrainsMono is spoot's typeface of choice for three very important reasons; legibility, closest-to-perfect dimension uniformity across different language scripts, and lastly; nerd icons support. While you may use whatever typeface you want, **you need AT LEAST one nerd font installed**, otherwise; iconography will be left artifacted with no fallback
 
 # Installation
-First things first; spoot is designed to be as intuitive as possible, which meant giving the ```backspace``` key a double life -- as it is both editorial as well as navigational. This is something rofi cannot do naively, so it's crucial that you follow the first step in particular for an optimal experience.
-- Add your username to the input group ```sudo usermod -aG input <username>``` and re-login for it to fully register
 - Place the spoot directory wherever you want
-- Make ```spoot.lua``` executable
+- Make ```/bin/spoot``` executable
 - Set a keybind for it in your compositor's config
 - Have fun
 
 **OPTIONAL:** Set a second keybind if you want on-the-fly track detection
-- Set a keybind pointing to ```spoot.lua --listen```
+- Set a keybind pointing to ```/bin/spoot --listen```
   > You can still access this panel from ```main > playback```
 
 That's it! No need to place the directory inside rofi's config directory, no need to configure rofi or spotifyd themselves. The script is independent from rofi's and spotifyd's globals and is completely self-contained with its own config and theme files. Well except for that part where you have to add your username to the input group.
