@@ -11,6 +11,10 @@ Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 
 [2026-08-11-213527-DP-1.webm](https://github.com/user-attachments/assets/e0e801fe-cf48-4f70-ac5e-871bc00ad2af)
 
+<h3><p align="center">
+No longer maintained, in favor of the main branch. Still usable
+</p></h3>
+
 # The philosophy behind spoot
 Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spoot was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. spoot was meant to bridge that gap, think of it as a remote control for your stereo system.
 
