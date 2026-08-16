@@ -42,6 +42,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 
 # Dependencies
 spoot will attempt to automatically install these dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
+
 ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```spotifyd``` &nbsp; ```rofi 1.7+``` &nbsp; ```songrec``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```perl``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font```
 
 > JetBrainsMono is spoot's typeface of choice for three very important reasons; legibility, closest-to-perfect dimension uniformity across different language scripts, and lastly; nerd icons support. While you may use whatever typeface you want, **you need AT LEAST one nerd font installed**, otherwise; iconography will be left artifacted with no fallback
