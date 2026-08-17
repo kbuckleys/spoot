@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/buck/spoot-next/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
