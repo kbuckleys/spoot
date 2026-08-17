@@ -43,7 +43,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 Installation is automatic if you allow it, spoot will attempt to automatically install the missing dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font Propo```
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono Nerd Font Propo```
 
 - wl-copy or xclip (wl-clipboard, xclip, xsel) — copying a web link
 - xdg-open (xdg-utils) — opening the login page in your browser
