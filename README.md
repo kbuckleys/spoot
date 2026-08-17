@@ -43,7 +43,13 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 Installation is automatic if you allow it, spoot will attempt to automatically install the missing dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```spotifyd``` &nbsp; ```songrec``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```perl``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font```
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```JetBrainsMono Nerd Font Propo```
+
+- wl-copy or xclip (wl-clipboard, xclip, xsel) — copying a web link
+- xdg-open (xdg-utils) — opening the login page in your browser
+- perl (perl) — receiving the login callback
+- openssl (openssl) — the login handshake
+- pkill (procps-ng / procps) — stopping spoot's own background helpers
 
 # Installation
 - Place the spoot directory wherever you want
@@ -58,32 +64,30 @@ Installation is automatic if you allow it, spoot will attempt to automatically i
 # Controls
 Keybinds can also be viewed from <b>Main > System > Keybinds</b>
 
-<body>
-  <table>
-    <thead>
-      <tr><th>Key</th><th>Action</th><th>Context</th></tr>
-    </thead>
-    <tbody>
-      <tr><td><kbd>tab</kbd></td><td>trail menu / history -- search type filter</td><td>contextual</td></tr>
-      <tr><td><kbd>return</kbd></td><td>select -- play/pause/resume selected item</td><td>contextual</td></tr>
-      <tr><td><kbd>delete</kbd></td><td>delete entry in search or trail history</td><td>contextual</td></tr>
-      <tr><td><kbd>escape</kbd></td><td>collapse current menu</td><td>universal</td></tr>
-      <tr><td><kbd>backspace</kbd></td><td>clear input / back one level</td><td>universal</td></tr>
-      <tr><td><kbd>alt = / -</kbd></td><td>quick seek +10s / -10s</td><td>universal</td></tr>
-      <tr><td><kbd>shift return</kbd></td><td>hovered item's action menu</td><td>contextual</td></tr>
-      <tr><td><kbd>alt return</kbd></td><td>jump to current track's Action Menu</td><td>universal</td></tr>
-      <tr><td><kbd>alt delete</kbd></td><td>clear session</td><td>universal</td></tr>
-      <tr><td><kbd>alt space</kbd></td><td>jump to main menu</td><td>universal</td></tr>
-      <tr><td><kbd>alt e</kbd></td><td>jump to seek menu</td><td>universal</td></tr>
-      <tr><td><kbd>alt l</kbd></td><td>jump to liked tracks</td><td>universal</td></tr>
-      <tr><td><kbd>alt p</kbd></td><td>jump to recently played</td><td>universal</td></tr>
-      <tr><td><kbd>alt y</kbd></td><td>jump to lyrics of current track</td><td>universal</td></tr>      
-      <tr><td><kbd>alt a</kbd></td><td>jump to albumart of current track</td><td>universal</td></tr>
-      <tr><td><kbd>alt r</kbd></td><td>cycle repeat modes</td><td>universal</td></tr>
-      <tr><td><kbd>alt s</kbd></td><td>toggle shuffle</td><td>universal</td></tr>
-      <tr><td><kbd>alt g</kbd></td><td>open spotify web link</td><td>universal</td></tr>
-      <tr><td><kbd>alt c</kbd></td><td>jump to current track in list / jump to current lyric line in lyrics view</td><td>contextual</td></tr>
-    </tbody>
-  </table>
-</body>
-</html>
+| Keybind | Description | Context |
+| --- | --- | --- |
+| `Tab` | trail menu / history | Universal |
+| `Return` | select -- play/pause/resume selected item | Universal |
+| `Delete` | delete entry in search or trail history | Search history, Trail history |
+| `Escape` | clear filter, then hide spoot | Universal |
+| `Backspace` | clear filter, then back one level | Universal |
+| `Alt` + `=` / `-` | quick seek + / - 10s | Universal |
+| `Shift` + `Return` | hovered item's action menu | Any list or grid row |
+| `Alt` + `Return` | jump to current track's action menu | Universal |
+| `Alt` + `Delete` | clear session | Universal |
+| `Alt` + `Space` | jump to main menu | Universal |
+| `Alt` + `E` | jump to seek menu | Universal |
+| `Alt` + `L` | jump to liked tracks | Universal |
+| `Alt` + `P` | jump to recently played | Universal |
+| `Alt` + `T` | jump to top tracks | Universal |
+| `Alt` + `Q` | jump to your queue | Universal |
+| `Space` | play / pause -- unless you are typing | Universal |
+| `Alt` + `Y` | jump to lyrics of current track | Universal |
+| `Alt` + `A` | jump to albumart of current track | Universal |
+| `Alt` + `R` | cycle repeat modes | Universal |
+| `Alt` + `S` | toggle shuffle | Universal |
+| `Alt` + `G` | open spotify web link | Universal |
+| `Alt` + `C` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
+| `Alt` + `←` / `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
+| `Ctrl` + `←` / `→` | previous / next track | Universal |
+| `Alt` + `1`–`9` | jump to a step in the trail, or click the step itself | Universal |
