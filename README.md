@@ -69,7 +69,7 @@ If you prefer doing it yourself for whatever reason...
 > ```bin/spoot``` lands beside ```ui/``` and ```engine/``` — it resolves the project root from its own location, so it works as a keybind target from anywhere, and must stay where it lands. A second invocation hands its request to the first over a socket and exits, so binding the same command to a key toggles rather than starting a second copy
 
 # Controls
-Keybinds can also be viewed from <b>Main > System > Keybinds</b>
+Keybinds can also be viewed from ```Main > System > Keybinds```
 
 | Keybind | Description | Context |
 | --- | --- | --- |
