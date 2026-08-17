@@ -61,6 +61,20 @@ Installation is automatic if you allow it, spoot will attempt to automatically i
 - Set a keybind pointing to ```/bin/spoot --listen```
   > You can still access this panel from ```main > playback```
 
+# Building it yourself
+
+**Prerequisites:**
+- ```CMake 3.21+``` and a ```C++17``` compiler
+- ```Qt 6 — Gui```, ```Qml```, ```Quick```, ```Network``` (development packages)
+- ```LayerShellQt``` (development package)
+- ```lua 5.4+``` and ```lua-cjson```
+
+**Build Sequence:**
+- ```cmake -S . -B build```
+- ```cmake --build build -j"$(nproc)"```
+
+> ```bin/spoot``` lands beside ```ui/``` and ```engine/``` — it resolves the project root from its own location, so it works as a keybind target from anywhere, and must stay where it lands. A second invocation hands its request to the first over a socket and exits, so binding the same command to a key toggles rather than starting a second copy
+
 # Controls
 Keybinds can also be viewed from <b>Main > System > Keybinds</b>
 
