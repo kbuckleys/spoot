@@ -53,8 +53,8 @@ Installation is automatic if you allow it, spoot will attempt to automatically i
 
 # Installation
 - Place the spoot directory wherever you want
-- Make ```/bin/spoot``` executable
-- Set a keybind for it in your compositor's config
+- run ```bash install.sh```
+- Set a keybind for ```/bin/spoot``` it in your compositor's config
 - Have fun
 
 **OPTIONAL:** Set a second keybind if you want on-the-fly track detection
