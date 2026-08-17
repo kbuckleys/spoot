@@ -52,9 +52,8 @@ Installation is automatic if you allow it, spoot will attempt to automatically i
 - pkill (procps-ng / procps) — stopping spoot's own background helpers
 
 # Installation
-- Place the spoot directory wherever you want
 - run ```bash install.sh```
-- Set a keybind for ```/bin/spoot``` it in your compositor's config
+- Set a keybind for ```/bin/spoot``` in your compositor's config
 - Have fun
 
 **OPTIONAL:** Set a second keybind if you want on-the-fly track detection
