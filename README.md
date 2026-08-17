@@ -43,7 +43,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 Installation is automatic if you allow it, spoot will attempt to automatically install the missing dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono Nerd Font Propo```
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono```
 
 - wl-copy or xclip (wl-clipboard, xclip, xsel) — copying a web link
 - xdg-open (xdg-utils) — opening the login page in your browser
@@ -66,28 +66,28 @@ Keybinds can also be viewed from <b>Main > System > Keybinds</b>
 
 | Keybind | Description | Context |
 | --- | --- | --- |
-| `Tab` | trail menu / history | Universal |
-| `Return` | select -- play/pause/resume selected item | Universal |
-| `Delete` | delete entry in search or trail history | Search history, Trail history |
-| `Escape` | clear filter, then hide spoot | Universal |
-| `Backspace` | clear filter, then back one level | Universal |
-| `Alt` + `=` / `-` | quick seek + / - 10s | Universal |
-| `Shift` + `Return` | hovered item's action menu | Any list or grid row |
-| `Alt` + `Return` | jump to current track's action menu | Universal |
-| `Alt` + `Delete` | clear session | Universal |
-| `Alt` + `Space` | jump to main menu | Universal |
-| `Alt` + `E` | jump to seek menu | Universal |
-| `Alt` + `L` | jump to liked tracks | Universal |
-| `Alt` + `P` | jump to recently played | Universal |
-| `Alt` + `T` | jump to top tracks | Universal |
-| `Alt` + `Q` | jump to your queue | Universal |
-| `Space` | play / pause -- unless you are typing | Universal |
-| `Alt` + `Y` | jump to lyrics of current track | Universal |
-| `Alt` + `A` | jump to albumart of current track | Universal |
-| `Alt` + `R` | cycle repeat modes | Universal |
-| `Alt` + `S` | toggle shuffle | Universal |
-| `Alt` + `G` | open spotify web link | Universal |
-| `Alt` + `C` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
-| `Alt` + `←` / `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
-| `Ctrl` + `←` / `→` | previous / next track | Universal |
-| `Alt` + `1`–`9` | jump to a step in the trail, or click the step itself | Universal |
+| `tab` | trail menu / history | Universal |
+| `return` | select -- play/pause/resume selected item | Universal |
+| `delete` | delete entry in search or trail history | Search history, Trail history |
+| `escape` | clear filter, then hide spoot | Universal |
+| `backspace` | clear filter, then back one level | Universal |
+| `alt` `=` / `-` | quick seek + / - 10s | Universal |
+| `shift` `return` | hovered item's action menu | Any list or grid row |
+| `alt` `return` | jump to current track's action menu | Universal |
+| `alt` `delete` | clear session | Universal |
+| `alt` `space` | jump to main menu | Universal |
+| `alt` `e` | jump to seek menu | Universal |
+| `alt` `l` | jump to liked tracks | Universal |
+| `alt` `p` | jump to recently played | Universal |
+| `alt` `t` | jump to top tracks | Universal |
+| `alt` `q` | jump to your queue | Universal |
+| `space` | play / pause -- unless you are typing | Universal |
+| `alt` `y` | jump to lyrics of current track | Universal |
+| `alt` `a` | jump to albumart of current track | Universal |
+| `alt` `r` | cycle repeat modes | Universal |
+| `alt` `s` | toggle shuffle | Universal |
+| `alt` `g` | open spotify web link | Universal |
+| `alt` `c` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
+| `alt` `←` / `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
+| `ctrl` `←` / `→` | previous / next track | Universal |
+| `alt` `1`–`9` | jump to a step in the trail, or click the step itself | Universal |
