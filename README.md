@@ -15,8 +15,8 @@ But as spoot's development pressed on, it became mature enough to be its own pla
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
 # Functionality
-- First run will automatically take you to Spotify's authentication page. Authenticate, and at which point you can start using spoot right away
-- Your paths are nested and retained by default, given the number of menus and submenus. This is why some custom keybinds had to be set in place, instead of reopening the main menu every time and going through multiple depth levels
+- Setup is a breeze. First run will prompt you to automatically sync missing dependencies with your permission, then take you to Spotify's authentication page. Authenticate, and at which point you can start using spoot right away
+- Your paths are nested and retained by default, given the number of menus and submenus
 
 # Limitations:
 Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception
