@@ -62,6 +62,7 @@ Installation is automatic if you allow it, spoot will attempt to automatically i
   > You can still access this panel from ```main > playback```
 
 # Building it yourself
+If you prefer doing it yourself for whatever reason...
 
 **Prerequisites:**
 - ```CMake 3.21+``` and a ```C++17``` compiler
