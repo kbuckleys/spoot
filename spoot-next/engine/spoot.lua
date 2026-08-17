@@ -11899,6 +11899,33 @@ end
 -- crumb you cannot move through. Written next to session.json in the cache,
 -- which is the one location spoot already owns.
 function Util.serve_nav_save(hops, pos, tip, tip_roots)
+    -- LISTENING IS AN ACT, NOT A PLACE, and it is the one act that must not be
+    -- resumed into. Util.view_listen blocks on songrec for P.listen_timeout
+    -- seconds, during which the engine reads no request and answers nothing --
+    -- so a saved trail ending in it means the NEXT cold start records the room
+    -- for thirty seconds before it will draw anything at all, having been asked
+    -- to open a music menu.
+    --
+    -- It became reachable in exactly that way when `spoot --listen` started
+    -- working at a resident shell (see Shell::askListen): the hop it appends is
+    -- a root like any other and was persisted like any other.
+    --
+    -- Trimmed rather than refused, so the trail you were ON is still resumed --
+    -- you come back where you were, not into a recording. Only `listen`: every
+    -- other keybind view is cheap to replay, and a rule listing them all would
+    -- be guessing at which ones someone might mind.
+    hops = hops or {}
+    local n = #hops
+    while n > 0 and type(hops[n]) == "table"
+          and hops[n].cmd == "view" and hops[n].key == "listen" do
+        n = n - 1
+    end
+    if n < #hops then
+        local cut = {}
+        for i = 1, n do cut[i] = hops[i] end
+        hops = cut
+        if type(pos) ~= "number" or pos > n then pos = n end
+    end
     Util.serve_nav_state = {
         hops = hops or {}, pos = pos,
         tip = (type(tip) == "table" and #tip > 0) and tip or nil,

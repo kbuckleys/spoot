@@ -20,6 +20,7 @@ events:
     names:
       - "uname"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -30,12 +31,14 @@ events:
       - "/usr/lib/rustup/bin/"
       - "/bin/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/uname"
       - "/home/buck/.local/share/zinit/polaris/bin/uname"
       - "/usr/local/sbin/uname"
       - "/usr/local/bin/uname"
     found: "/usr/bin/uname"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -72,6 +75,7 @@ events:
       - "make"
       - "smake"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -81,6 +85,7 @@ events:
       - "/usr/bin/core_perl/"
       - "/usr/lib/rustup/bin/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gmake"
       - "/home/buck/.local/share/zinit/polaris/bin/gmake"
       - "/usr/local/sbin/gmake"
       - "/usr/local/bin/gmake"
@@ -89,12 +94,14 @@ events:
       - "/usr/bin/vendor_perl/gmake"
       - "/usr/bin/core_perl/gmake"
       - "/usr/lib/rustup/bin/gmake"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/make"
       - "/home/buck/.local/share/zinit/polaris/bin/make"
       - "/usr/local/sbin/make"
       - "/usr/local/bin/make"
     found: "/usr/bin/make"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -132,6 +139,7 @@ events:
       - "icx"
       - "clang++"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -141,12 +149,14 @@ events:
       - "/usr/bin/core_perl/"
       - "/usr/lib/rustup/bin/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/c++"
       - "/home/buck/.local/share/zinit/polaris/bin/c++"
       - "/usr/local/sbin/c++"
       - "/usr/local/bin/c++"
     found: "/usr/bin/c++"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -182,6 +192,7 @@ events:
     found: "/usr/share/cmake/Modules/CMakeCXXCompilerId.cpp.in"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -233,6 +244,7 @@ events:
       - "ar"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -243,6 +255,7 @@ events:
     found: "/usr/bin/ar"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -272,6 +285,7 @@ events:
       - "ranlib"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -282,6 +296,7 @@ events:
     found: "/usr/bin/ranlib"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -311,6 +326,7 @@ events:
       - "strip"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -321,6 +337,7 @@ events:
     found: "/usr/bin/strip"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -350,6 +367,7 @@ events:
       - "ld"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -360,6 +378,7 @@ events:
     found: "/usr/bin/ld"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -389,6 +408,7 @@ events:
       - "nm"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -399,6 +419,7 @@ events:
     found: "/usr/bin/nm"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -428,6 +449,7 @@ events:
       - "objdump"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -438,6 +460,7 @@ events:
     found: "/usr/bin/objdump"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -467,6 +490,7 @@ events:
       - "objcopy"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -477,6 +501,7 @@ events:
     found: "/usr/bin/objcopy"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -506,6 +531,7 @@ events:
       - "readelf"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -516,6 +542,7 @@ events:
     found: "/usr/bin/readelf"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -545,6 +572,7 @@ events:
       - "dlltool"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -554,6 +582,7 @@ events:
       - "/usr/lib/rustup/bin/"
     searched_directories:
       - "/usr/bin/dlltool"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/dlltool"
       - "/home/buck/.local/share/zinit/polaris/bin/dlltool"
       - "/usr/local/sbin/dlltool"
       - "/usr/local/bin/dlltool"
@@ -564,6 +593,7 @@ events:
     found: false
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -593,6 +623,7 @@ events:
       - "addr2line"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -603,6 +634,7 @@ events:
     found: "/usr/bin/addr2line"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -632,6 +664,7 @@ events:
       - "tapi"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -641,6 +674,7 @@ events:
       - "/usr/lib/rustup/bin/"
     searched_directories:
       - "/usr/bin/tapi"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/tapi"
       - "/home/buck/.local/share/zinit/polaris/bin/tapi"
       - "/usr/local/sbin/tapi"
       - "/usr/local/bin/tapi"
@@ -651,6 +685,7 @@ events:
     found: false
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -683,6 +718,7 @@ events:
       - "gcc-ar"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -692,6 +728,7 @@ events:
       - "/usr/lib/rustup/bin/"
     searched_directories:
       - "/usr/bin/gcc-ar-16.2"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ar-16.2"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ar-16.2"
       - "/usr/local/sbin/gcc-ar-16.2"
       - "/usr/local/bin/gcc-ar-16.2"
@@ -700,6 +737,7 @@ events:
       - "/usr/bin/core_perl/gcc-ar-16.2"
       - "/usr/lib/rustup/bin/gcc-ar-16.2"
       - "/usr/bin/gcc-ar-16"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ar-16"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ar-16"
       - "/usr/local/sbin/gcc-ar-16"
       - "/usr/local/bin/gcc-ar-16"
@@ -708,6 +746,7 @@ events:
       - "/usr/bin/core_perl/gcc-ar-16"
       - "/usr/lib/rustup/bin/gcc-ar-16"
       - "/usr/bin/gcc-ar16"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ar16"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ar16"
       - "/usr/local/sbin/gcc-ar16"
       - "/usr/local/bin/gcc-ar16"
@@ -718,6 +757,7 @@ events:
     found: "/usr/bin/gcc-ar"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -750,6 +790,7 @@ events:
       - "gcc-ranlib"
     candidate_directories:
       - "/usr/bin/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -759,6 +800,7 @@ events:
       - "/usr/lib/rustup/bin/"
     searched_directories:
       - "/usr/bin/gcc-ranlib-16.2"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ranlib-16.2"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ranlib-16.2"
       - "/usr/local/sbin/gcc-ranlib-16.2"
       - "/usr/local/bin/gcc-ranlib-16.2"
@@ -767,6 +809,7 @@ events:
       - "/usr/bin/core_perl/gcc-ranlib-16.2"
       - "/usr/lib/rustup/bin/gcc-ranlib-16.2"
       - "/usr/bin/gcc-ranlib-16"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ranlib-16"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ranlib-16"
       - "/usr/local/sbin/gcc-ranlib-16"
       - "/usr/local/bin/gcc-ranlib-16"
@@ -775,6 +818,7 @@ events:
       - "/usr/bin/core_perl/gcc-ranlib-16"
       - "/usr/lib/rustup/bin/gcc-ranlib-16"
       - "/usr/bin/gcc-ranlib16"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/gcc-ranlib16"
       - "/home/buck/.local/share/zinit/polaris/bin/gcc-ranlib16"
       - "/usr/local/sbin/gcc-ranlib16"
       - "/usr/local/bin/gcc-ranlib16"
@@ -785,6 +829,7 @@ events:
     found: "/usr/bin/gcc-ranlib"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -802,8 +847,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S"
-      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S"
+      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc"
+      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
       CMAKE_CXX_FLAGS_DEBUG: "-g"
@@ -814,13 +859,13 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: false
       stdout: |
-        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S'
+        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc'
         
-        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_957d2/fast
-        /usr/bin/make  -f CMakeFiles/cmTC_957d2.dir/build.make CMakeFiles/cmTC_957d2.dir/build
-        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S'
-        Building CXX object CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o
-        /usr/bin/c++   -v -o CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -c /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_e4939/fast
+        /usr/bin/make  -f CMakeFiles/cmTC_e4939.dir/build.make CMakeFiles/cmTC_e4939.dir/build
+        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc'
+        Building CXX object CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o
+        /usr/bin/c++   -v -o CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -c /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp
         Using built-in specs.
         COLLECT_GCC=/usr/bin/c++
         Target: x86_64-pc-linux-gnu
@@ -828,8 +873,8 @@ events:
         Thread model: posix
         Supported LTO compression algorithms: zlib zstd
         gcc version 16.2.1 20260810 (GCC) 
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/'
-         /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus -quiet -v -D_GNU_SOURCE /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_957d2.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/cciwmmzv.s
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/'
+         /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus -quiet -v -D_GNU_SOURCE /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_e4939.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/ccW70YVz.s
         GNU C++20 (GCC) version 16.2.1 20260810 (x86_64-pc-linux-gnu)
         	compiled by GNU C version 16.2.1 20260810, GMP version 6.3.0, MPFR version 4.2.2, MPC version 1.4.1, isl version isl-0.28-GMP
         
@@ -846,14 +891,14 @@ events:
          /usr/include
         End of search list.
         Compiler executable checksum: 4e9ac8b201f4ca740be09d0c7a39f82f
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/'
-         as -v --64 -o CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o /tmp/cciwmmzv.s
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/'
+         as -v --64 -o CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o /tmp/ccW70YVz.s
         GNU assembler version 2.47 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.47
         COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/
         LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/
-        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.'
-        Linking CXX executable cmTC_957d2
-        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_957d2.dir/link.txt --verbose=1
+        COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.'
+        Linking CXX executable cmTC_e4939
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_e4939.dir/link.txt --verbose=1
         Using built-in specs.
         COLLECT_GCC=/usr/bin/c++
         COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper
@@ -864,14 +909,14 @@ events:
         gcc version 16.2.1 20260810 (GCC) 
         COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/
         LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/
-        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_957d2' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_957d2.'
-         /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_e4939' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_e4939.'
+         /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
         collect2 version 16.2.1 20260810
-        /usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
+        /usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o
         GNU ld (GNU Binutils) 2.47
-        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_957d2' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_957d2.'
-        /usr/bin/c++  -v -Wl,-v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_957d2
-        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S'
+        COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_e4939' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_e4939.'
+        /usr/bin/c++  -v -Wl,-v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_e4939
+        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc'
         
       exitCode: 0
   -
@@ -910,13 +955,13 @@ events:
       Parsed CXX implicit link information:
         link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|wild|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
         linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|wild))("|,| |$)]
-        ignore line: [Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S']
+        ignore line: [Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc']
         ignore line: []
-        ignore line: [Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_957d2/fast]
-        ignore line: [/usr/bin/make  -f CMakeFiles/cmTC_957d2.dir/build.make CMakeFiles/cmTC_957d2.dir/build]
-        ignore line: [make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-tx3t6S']
-        ignore line: [Building CXX object CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o]
-        ignore line: [/usr/bin/c++   -v -o CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -c /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_e4939/fast]
+        ignore line: [/usr/bin/make  -f CMakeFiles/cmTC_e4939.dir/build.make CMakeFiles/cmTC_e4939.dir/build]
+        ignore line: [make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-beyXgc']
+        ignore line: [Building CXX object CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o]
+        ignore line: [/usr/bin/c++   -v -o CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -c /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/usr/bin/c++]
         ignore line: [Target: x86_64-pc-linux-gnu]
@@ -924,8 +969,8 @@ events:
         ignore line: [Thread model: posix]
         ignore line: [Supported LTO compression algorithms: zlib zstd]
         ignore line: [gcc version 16.2.1 20260810 (GCC) ]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/']
-        ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus -quiet -v -D_GNU_SOURCE /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_957d2.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/cciwmmzv.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/']
+        ignore line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1plus -quiet -v -D_GNU_SOURCE /usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_e4939.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mtune=generic -march=x86-64 -version -o /tmp/ccW70YVz.s]
         ignore line: [GNU C++20 (GCC) version 16.2.1 20260810 (x86_64-pc-linux-gnu)]
         ignore line: [	compiled by GNU C version 16.2.1 20260810  GMP version 6.3.0  MPFR version 4.2.2  MPC version 1.4.1  isl version isl-0.28-GMP]
         ignore line: []
@@ -942,14 +987,14 @@ events:
         ignore line: [ /usr/include]
         ignore line: [End of search list.]
         ignore line: [Compiler executable checksum: 4e9ac8b201f4ca740be09d0c7a39f82f]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/']
-        ignore line: [ as -v --64 -o CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o /tmp/cciwmmzv.s]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/']
+        ignore line: [ as -v --64 -o CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o /tmp/ccW70YVz.s]
         ignore line: [GNU assembler version 2.47 (x86_64-pc-linux-gnu) using BFD version (GNU Binutils) 2.47]
         ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
         ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.']
-        ignore line: [Linking CXX executable cmTC_957d2]
-        ignore line: [/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_957d2.dir/link.txt --verbose=1]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o' '-c' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.']
+        ignore line: [Linking CXX executable cmTC_e4939]
+        ignore line: [/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_e4939.dir/link.txt --verbose=1]
         ignore line: [Using built-in specs.]
         ignore line: [COLLECT_GCC=/usr/bin/c++]
         ignore line: [COLLECT_LTO_WRAPPER=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper]
@@ -960,13 +1005,13 @@ events:
         ignore line: [gcc version 16.2.1 20260810 (GCC) ]
         ignore line: [COMPILER_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/]
         ignore line: [LIBRARY_PATH=/usr/lib/gcc/x86_64-pc-linux-gnu/16/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/:/lib/../lib/:/usr/lib/../lib/:/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../:/lib/:/usr/lib/]
-        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_957d2' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_957d2.']
-        link line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
+        ignore line: [COLLECT_GCC_OPTIONS='-v' '-o' 'cmTC_e4939' '-shared-libgcc' '-mtune=generic' '-march=x86-64' '-dumpdir' 'cmTC_e4939.']
+        link line: [ /usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2] ==> ignore
           arg [-plugin] ==> ignore
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so] ==> ignore
           arg [-plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper] ==> ignore
-          arg [-plugin-opt=-fresolution=/tmp/ccORr0qt.res] ==> ignore
+          arg [-plugin-opt=-fresolution=/tmp/ccXpGPCB.res] ==> ignore
           arg [-plugin-opt=-pass-through=-lgcc_s] ==> ignore
           arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
           arg [-plugin-opt=-pass-through=-latomic_asneeded] ==> ignore
@@ -982,7 +1027,7 @@ events:
           arg [/lib64/ld-linux-x86-64.so.2] ==> ignore
           arg [-pie] ==> ignore
           arg [-o] ==> ignore
-          arg [cmTC_957d2] ==> ignore
+          arg [cmTC_e4939] ==> ignore
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o]
@@ -994,7 +1039,7 @@ events:
           arg [-L/lib] ==> dir [/lib]
           arg [-L/usr/lib] ==> dir [/usr/lib]
           arg [-v] ==> ignore
-          arg [CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
+          arg [CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o] ==> ignore
           arg [-lstdc++] ==> lib [stdc++]
           arg [-lm] ==> lib [m]
           arg [-lgcc_s] ==> lib [gcc_s]
@@ -1006,9 +1051,9 @@ events:
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o]
           arg [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
         ignore line: [collect2 version 16.2.1 20260810]
-        link line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> linker [/usr/bin/ld]
-        link line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> linker architecture flags [-m;elf]
-        ignore line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccORr0qt.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_957d2 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_957d2.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
+        link line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> linker [/usr/bin/ld]
+        link line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o] ==> linker architecture flags [-m;elf]
+        ignore line: [/usr/bin/ld -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/tmp/ccXpGPCB.res -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-latomic_asneeded -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc_s -plugin-opt=-pass-through=-lgcc --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o cmTC_e4939 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbeginS.o -L/usr/lib/gcc/x86_64-pc-linux-gnu/16 -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib -L/lib/../lib -L/usr/lib/../lib -L/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../.. -L/lib -L/usr/lib -v CMakeFiles/cmTC_e4939.dir/CMakeCXXCompilerABI.cpp.o -lstdc++ -lm -lgcc_s -lgcc -latomic_asneeded -lc -lgcc_s -lgcc /usr/lib/gcc/x86_64-pc-linux-gnu/16/crtendS.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crtn.o]
         linker tool for 'CXX': /usr/bin/ld -m;elf
         collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o] ==> [/usr/lib/Scrt1.o]
         collapse obj [/usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o] ==> [/usr/lib/crti.o]
@@ -1052,8 +1097,8 @@ events:
     checks:
       - "Performing Test CMAKE_HAVE_LIBC_PTHREAD"
     directories:
-      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh"
-      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh"
+      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz"
+      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
       CMAKE_CXX_FLAGS_DEBUG: "-g"
@@ -1064,17 +1109,17 @@ events:
       variable: "CMAKE_HAVE_LIBC_PTHREAD"
       cached: true
       stdout: |
-        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh'
+        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz'
         
-        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_b4c13/fast
-        /usr/bin/make  -f CMakeFiles/cmTC_b4c13.dir/build.make CMakeFiles/cmTC_b4c13.dir/build
-        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh'
-        Building CXX object CMakeFiles/cmTC_b4c13.dir/src.cxx.o
-        /usr/bin/c++ -DCMAKE_HAVE_LIBC_PTHREAD  -std=gnu++17 -o CMakeFiles/cmTC_b4c13.dir/src.cxx.o -c /home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh/src.cxx
-        Linking CXX executable cmTC_b4c13
-        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_b4c13.dir/link.txt --verbose=1
-        /usr/bin/c++ CMakeFiles/cmTC_b4c13.dir/src.cxx.o -o cmTC_b4c13
-        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-vfjfAh'
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_80e18/fast
+        /usr/bin/make  -f CMakeFiles/cmTC_80e18.dir/build.make CMakeFiles/cmTC_80e18.dir/build
+        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz'
+        Building CXX object CMakeFiles/cmTC_80e18.dir/src.cxx.o
+        /usr/bin/c++ -DCMAKE_HAVE_LIBC_PTHREAD  -std=gnu++17 -o CMakeFiles/cmTC_80e18.dir/src.cxx.o -c /home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz/src.cxx
+        Linking CXX executable cmTC_80e18
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_80e18.dir/link.txt --verbose=1
+        /usr/bin/c++ CMakeFiles/cmTC_80e18.dir/src.cxx.o -o cmTC_80e18
+        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-LaoQoz'
         
       exitCode: 0
   -
@@ -1103,6 +1148,7 @@ events:
     names:
       - "GL/gl.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1127,6 +1173,7 @@ events:
       - "/usr/openwin/share/include/"
       - "/opt/graphics/OpenGL/include/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GL/gl.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GL/gl.h"
       - "/usr/local/sbin/GL/gl.h"
       - "/usr/local/bin/GL/gl.h"
@@ -1140,6 +1187,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1186,6 +1234,7 @@ events:
     names:
       - "GL/glx.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1207,6 +1256,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GL/glx.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GL/glx.h"
       - "/usr/local/sbin/GL/glx.h"
       - "/usr/local/bin/GL/glx.h"
@@ -1220,6 +1270,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1266,6 +1317,7 @@ events:
     names:
       - "EGL/egl.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1287,6 +1339,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/EGL/egl.h"
       - "/home/buck/.local/share/zinit/polaris/bin/EGL/egl.h"
       - "/usr/local/sbin/EGL/egl.h"
       - "/usr/local/bin/EGL/egl.h"
@@ -1300,6 +1353,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1346,6 +1400,7 @@ events:
     names:
       - "GLES2/gl2.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1367,6 +1422,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GLES2/gl2.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GLES2/gl2.h"
       - "/usr/local/sbin/GLES2/gl2.h"
       - "/usr/local/bin/GLES2/gl2.h"
@@ -1380,6 +1436,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1426,6 +1483,7 @@ events:
     names:
       - "GLES3/gl3.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1447,6 +1505,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GLES3/gl3.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GLES3/gl3.h"
       - "/usr/local/sbin/GLES3/gl3.h"
       - "/usr/local/bin/GLES3/gl3.h"
@@ -1460,6 +1519,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1506,6 +1566,7 @@ events:
     names:
       - "GL/xmesa.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1530,6 +1591,7 @@ events:
       - "/usr/openwin/share/include/"
       - "/opt/graphics/OpenGL/include/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GL/xmesa.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GL/xmesa.h"
       - "/usr/local/sbin/GL/xmesa.h"
       - "/usr/local/bin/GL/xmesa.h"
@@ -1556,6 +1618,7 @@ events:
     found: false
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1602,6 +1665,7 @@ events:
     names:
       - "GL/glu.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1623,6 +1687,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/GL/glu.h"
       - "/home/buck/.local/share/zinit/polaris/bin/GL/glu.h"
       - "/usr/local/sbin/GL/glu.h"
       - "/usr/local/bin/GL/glu.h"
@@ -1636,6 +1701,7 @@ events:
     found: "/usr/include/"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1682,6 +1748,7 @@ events:
     names:
       - "OpenGL"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1703,6 +1770,7 @@ events:
       - "/opt/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -1716,6 +1784,7 @@ events:
     found: "/usr/lib/libOpenGL.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1762,6 +1831,8 @@ events:
     names:
       - "GLX"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/libglvnd/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/libglvnd/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/libglvnd/"
@@ -1803,6 +1874,8 @@ events:
       - "/usr/lib/X11/libglvnd/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/libglvnd/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/libglvnd/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/libglvnd/"
@@ -1827,6 +1900,7 @@ events:
     found: "/usr/lib/libGLX.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1873,6 +1947,8 @@ events:
     names:
       - "EGL"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/libglvnd/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/libglvnd/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/libglvnd/"
@@ -1914,6 +1990,8 @@ events:
       - "/usr/lib/X11/libglvnd/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/libglvnd/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/libglvnd/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/libglvnd/"
@@ -1938,6 +2016,7 @@ events:
     found: "/usr/lib/libEGL.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -1984,6 +2063,7 @@ events:
     names:
       - "GLESv2"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2005,6 +2085,7 @@ events:
       - "/opt/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2018,6 +2099,7 @@ events:
     found: "/usr/lib/libGLESv2.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2065,6 +2147,7 @@ events:
       - "GLESv3"
       - "GLESv2"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2086,6 +2169,7 @@ events:
       - "/opt/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2106,6 +2190,7 @@ events:
       - "/opt/lib/"
       - "/opt/"
       - "/usr/lib/X11/"
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2119,6 +2204,7 @@ events:
     found: "/usr/lib/libGLESv2.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2166,6 +2252,7 @@ events:
       - "GLU"
       - "MesaGLU"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2190,6 +2277,7 @@ events:
       - "/usr/openwin/lib/"
       - "/usr/shlib/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2203,6 +2291,7 @@ events:
     found: "/usr/lib/libGLU.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2247,6 +2336,7 @@ events:
     names:
       - "vulkan/vulkan.h"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2268,6 +2358,7 @@ events:
       - "/opt/"
       - "/usr/include/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/vulkan/vulkan.h"
       - "/home/buck/.local/share/zinit/polaris/bin/vulkan/vulkan.h"
       - "/usr/local/sbin/vulkan/vulkan.h"
       - "/usr/local/bin/vulkan/vulkan.h"
@@ -2291,6 +2382,7 @@ events:
     found: false
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2335,6 +2427,7 @@ events:
     names:
       - "vulkan"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2356,6 +2449,7 @@ events:
       - "/opt/"
       - "/usr/lib/X11/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2369,6 +2463,7 @@ events:
     found: "/usr/lib/libvulkan.so"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2413,6 +2508,7 @@ events:
     names:
       - "glslc"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2439,12 +2535,14 @@ events:
       - "/opt/sbin/"
       - "/opt/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/glslc"
       - "/home/buck/.local/share/zinit/polaris/bin/glslc"
       - "/usr/local/sbin/glslc"
       - "/usr/local/bin/glslc"
     found: "/usr/bin/glslc"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2487,6 +2585,7 @@ events:
     names:
       - "glslangValidator"
     candidate_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/"
       - "/home/buck/.local/share/zinit/polaris/bin/"
       - "/usr/local/sbin/"
       - "/usr/local/bin/"
@@ -2513,12 +2612,14 @@ events:
       - "/opt/sbin/"
       - "/opt/"
     searched_directories:
+      - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/glslangValidator"
       - "/home/buck/.local/share/zinit/polaris/bin/glslangValidator"
       - "/usr/local/sbin/glslangValidator"
       - "/usr/local/bin/glslangValidator"
     found: "/usr/bin/glslangValidator"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2615,6 +2716,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6CoreToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6coretools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6CoreTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6coretools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6CoreTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6coretools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/Qt6CoreToolsConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -2692,6 +2817,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2785,6 +2911,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6GuiToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6guitools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6GuiTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6guitools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6GuiTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6guitools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/Qt6GuiToolsConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -2862,6 +3012,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -2901,8 +3052,8 @@ events:
     checks:
       - "Performing Test HAVE_STDATOMIC"
     directories:
-      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV"
-      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV"
+      source: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl"
+      binary: "/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl"
     cmakeVariables:
       CMAKE_CXX_FLAGS: ""
       CMAKE_CXX_FLAGS_DEBUG: "-g"
@@ -2913,17 +3064,17 @@ events:
       variable: "HAVE_STDATOMIC"
       cached: true
       stdout: |
-        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV'
+        Change Dir: '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl'
         
-        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_fe0d9/fast
-        /usr/bin/make  -f CMakeFiles/cmTC_fe0d9.dir/build.make CMakeFiles/cmTC_fe0d9.dir/build
-        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV'
-        Building CXX object CMakeFiles/cmTC_fe0d9.dir/src.cxx.o
-        /usr/bin/c++ -DHAVE_STDATOMIC  -std=gnu++17 -o CMakeFiles/cmTC_fe0d9.dir/src.cxx.o -c /home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV/src.cxx
-        Linking CXX executable cmTC_fe0d9
-        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_fe0d9.dir/link.txt --verbose=1
-        /usr/bin/c++ CMakeFiles/cmTC_fe0d9.dir/src.cxx.o -o cmTC_fe0d9
-        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-Q95AJV'
+        Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_23622/fast
+        /usr/bin/make  -f CMakeFiles/cmTC_23622.dir/build.make CMakeFiles/cmTC_23622.dir/build
+        make[1]: Entering directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl'
+        Building CXX object CMakeFiles/cmTC_23622.dir/src.cxx.o
+        /usr/bin/c++ -DHAVE_STDATOMIC  -std=gnu++17 -o CMakeFiles/cmTC_23622.dir/src.cxx.o -c /home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl/src.cxx
+        Linking CXX executable cmTC_23622
+        /usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_23622.dir/link.txt --verbose=1
+        /usr/bin/c++ CMakeFiles/cmTC_23622.dir/src.cxx.o -o cmTC_23622
+        make[1]: Leaving directory '/home/buck/Projects/spoot-next/build/CMakeFiles/CMakeScratch/TryCompile-jUeQBl'
         
       exitCode: 0
   -
@@ -3032,6 +3183,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3130,6 +3282,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6DBusToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6dbustools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6DBusTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6dbustools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6DBusTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6dbustools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/Qt6DBusToolsConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -3207,6 +3383,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3331,6 +3508,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3447,6 +3625,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3540,6 +3719,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6QmlToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6qmltools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6QmlTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6qmltools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6QmlTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6qmltools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/Qt6QmlToolsConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -3617,6 +3820,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3725,6 +3929,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3841,6 +4046,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -3927,6 +4133,30 @@ events:
         reason: "no_exist"
       -
         path: "/home/buck/Projects/spoot-next/build/CMakeFiles/pkgRedirects/share/cps/qt6qmlcompilerplusprivatetools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6QmlCompilerPlusPrivateToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6qmlcompilerplusprivatetools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6QmlCompilerPlusPrivateTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6qmlcompilerplusprivatetools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6QmlCompilerPlusPrivateTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6qmlcompilerplusprivatetools.cps"
         mode: "cps"
         reason: "no_exist"
       -
@@ -4148,6 +4378,7 @@ events:
     found: null
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -4456,6 +4687,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -4549,6 +4781,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6QuickToolsConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6quicktools-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6QuickTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6quicktools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6QuickTools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6quicktools.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/Qt6QuickToolsConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -4626,6 +4882,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -4742,6 +4999,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -4863,6 +5121,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -4979,6 +5238,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -5103,6 +5363,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -5643,6 +5904,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -5741,6 +6003,30 @@ events:
         reason: "no_exist"
       -
         path: "/home/buck/Projects/spoot-next/build/CMakeFiles/pkgRedirects/share/cps/qt6.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/Qt6Config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/qt6-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/Qt6.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/qt6.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/Qt6.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/qt6.cps"
         mode: "cps"
         reason: "no_exist"
       -
@@ -7205,6 +7491,7 @@ events:
       version: "6.11.1"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
@@ -7293,6 +7580,30 @@ events:
         mode: "cps"
         reason: "no_exist"
       -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/LayerShellQtConfig.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/layershellqt-config.cmake"
+        mode: "config"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/LayerShellQt.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/lib/cps/layershellqt.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/LayerShellQt.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
+        path: "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub/share/cps/layershellqt.cps"
+        mode: "cps"
+        reason: "no_exist"
+      -
         path: "/home/buck/.local/share/zinit/polaris/LayerShellQtConfig.cmake"
         mode: "config"
         reason: "no_exist"
@@ -7370,6 +7681,7 @@ events:
       version: "6.7.4"
     search_context:
       ENV{PATH}:
+        - "/tmp/claude-1000/-home-buck/564ac566-471b-42e0-b4ad-3c097faad11e/scratchpad/stub"
         - "/home/buck/.local/share/zinit/polaris/bin"
         - "/usr/local/sbin"
         - "/usr/local/bin"
