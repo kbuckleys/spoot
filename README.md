@@ -14,12 +14,8 @@ But as spoot's development pressed on, it became mature enough to be its own pla
 
 But most importantly, a music player should pretty much know its place. It's not the user's center of attention.
 
-# Functionality
-- Setup is a breeze. First run will prompt you to automatically sync missing dependencies with your permission, then take you to Spotify's authentication page. Authenticate, and at which point you can start using spoot right away
-- Your paths are nested and retained by default, given the number of menus and submenus
-
 # Limitations:
-Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception
+Third-party Spotify clients are inherently bound to what the Spotify Web API allows, and spoot is no exception. I felt obligated to be upfront about what spoot cannot do, for reassurance and to save your time
 
 - **Remove from queue -- Spotify Web API limitation**
   - Local queue can be implemented as an alternative. In which case it will provide full control over its functions. However...
@@ -41,18 +37,15 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
-Installation is automatic if you allow it, spoot will attempt to automatically install the missing dependencies for you. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
+The included install script can automatically take care of everything for you if you allow it, spoot will attempt to automatically install the missing dependencies. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono```
-
-- wl-copy or xclip (wl-clipboard, xclip, xsel) — copying a web link
-- xdg-open (xdg-utils) — opening the login page in your browser
-- perl (perl) — receiving the login callback
-- openssl (openssl) — the login handshake
-- pkill (procps-ng / procps) — stopping spoot's own background helpers
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono```
 
 # Installation
-- run ```bash install.sh```
+Setup is a breeze. ```bash install.sh``` will automatically install the required core dependencies -- you don't even have to chmod the install script if you prefixed the filename with bash as denoted earlier -- then launch spoot. At this point, spoot will prompt you to automatically sync missing dependencies with your permission, then take you to Spotify's authentication page. Authenticate, then you have instant access to your library. This whole process is automated, save for the part when you have to input your sudo password and actually authenticate
+
+- Run ```bash install.sh```
+- Finalize your spoot installation and authenticate
 - Set a keybind for ```/bin/spoot``` in your compositor's config
 - Have fun
 
