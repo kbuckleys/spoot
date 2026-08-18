@@ -67,8 +67,8 @@ If you prefer building spoot manually, although the install script does exactly 
 - ```lua 5.4+``` and ```lua-cjson```
 
 ```
-- cmake -S . -B build
-- cmake --build build -j"$(nproc)"
+cmake -S . -B build
+cmake --build build -j"$(nproc)"
 ```
 
 > ```bin/spoot``` lands beside ```ui/``` and ```engine/``` — it resolves the project root from its own location, so it works as a keybind target from anywhere, and must stay where it lands. A second invocation hands its request to the first over a socket and exits, so binding the same command to a key toggles rather than starting a second copy
