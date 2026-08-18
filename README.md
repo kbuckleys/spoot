@@ -55,7 +55,7 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
 
 **Removal:**
 - Simply run ```bash setup``` again and choose ```Remove```
-  > This option will only remove spoot's compiled binary and dependencies you did not have prior to spoot's initial setup
+  > This option will only remove spoot's compiled binary, cache files as well as dependencies you did not have prior to spoot's initial setup. At which point, all you have to do is manually remove the spoot directory. 100% clean removal
 
 # Building it yourself
 If you prefer building spoot manually, although the install script does exactly the same thing
