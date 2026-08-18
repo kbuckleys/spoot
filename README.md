@@ -58,7 +58,7 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
   > This option will only remove spoot's compiled binary and dependencies you did not have prior to spoot's initial setup
 
 # Building it yourself
-Only follow these steps If you prefer building spoot manually, although the install script does exactly the same thing
+If you prefer building spoot manually, although the install script does exactly the same thing
 
 **Prerequisites:**
 - ```CMake 3.21+``` and a ```C++17``` compiler
