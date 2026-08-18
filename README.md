@@ -37,12 +37,13 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
     > This was already tested in an internal build, it required an additional separate process dedicated just for the function of detecting starting and near-ending tracks. It was also fighting playerctl's volume during its 5s-windows and ended up reserving a significant chunk in the codebase. In the end; it wasn't exactly smart enough to detect tracks that already start loud/pitched, resulting in this track criteria not starting off as they were intended by their artists. The cons vastly outweighed the pros, thus scrapped
 
 # Dependencies
-The included install script can automatically take care of everything for you if you allow it, spoot will attempt to automatically install the missing dependencies. Should all its measures fail, you'll be prompted with a command you can copy straight from spoot that you can input in your terminal to get the dependencies, with zero effort
+The included install script can automatically take care of everything for you, but it's important to be clear about what spoot requires
 
 ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono```
 
 # Installation
-Setup is a breeze. ```bash install.sh``` will automatically install the required core dependencies -- you don't even have to chmod the install script if you prefixed the filename with bash as denoted earlier -- then launch spoot. At this point, spoot will prompt you to automatically sync missing dependencies with your permission, then take you to Spotify's authentication page. Authenticate, then you have instant access to your library. This whole process is automated, save for the part when you have to input your sudo password and actually authenticate
+Setup is a breeze. ```bash install.sh``` will automatically install the required core dependencies -- you don't even have to chmod the install script if you prefixed the filename with bash as denoted earlier -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
+> An uninstall script is also included for a one-shot removal for your convenience
 
 - Run ```bash install.sh```
 - Finalize your spoot installation and authenticate
