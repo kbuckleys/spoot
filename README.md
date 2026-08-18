@@ -42,9 +42,9 @@ The included install script can automatically take care of everything for you, b
 ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```ttf-jetbrains-mono-nerd```
 
 # Setup
-It's a breeze. ```bash setup``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefixed the filename with ```bash``` as denoted -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
+It's a breeze. ```bash manage``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefixed the filename with ```bash``` as denoted -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
 
-- Run ```bash setup```
+- Run ```bash manage```
 - Complete the Spotify authentication step
 - Set a keybind for ```/bin/spoot``` in your compositor's config
 - Have fun
@@ -54,7 +54,7 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
   > You can still access this panel from ```main > playback```
 
 **Removal:**
-- Simply run ```bash setup``` again and choose ```Remove```
+- Simply run ```bash manage``` again and choose ```Remove```
   > This option will only remove spoot's compiled binary, initial setup cache (not your library cache), as well as dependencies you did not have prior to spoot's initial setup. If you want a complete removal afterwards, simply delete the spoot directory along with its cache directory in ```~/.cache/spoot/```
 
 # Building it yourself
