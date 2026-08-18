@@ -58,7 +58,7 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
   > This option will only remove spoot's compiled binary and dependencies you did not have prior to spoot's initial setup
 
 # Building it yourself
-If you prefer doing it yourself for whatever reason...
+Only follow these steps If you prefer building spoot manually, although the install script does exactly the same thing
 
 **Prerequisites:**
 - ```CMake 3.21+``` and a ```C++17``` compiler
@@ -66,9 +66,10 @@ If you prefer doing it yourself for whatever reason...
 - ```LayerShellQt``` (development package)
 - ```lua 5.4+``` and ```lua-cjson```
 
-**Build Sequence:**
-- ```cmake -S . -B build```
-- ```cmake --build build -j"$(nproc)"```
+```
+- cmake -S . -B build
+- cmake --build build -j"$(nproc)"
+```
 
 > ```bin/spoot``` lands beside ```ui/``` and ```engine/``` — it resolves the project root from its own location, so it works as a keybind target from anywhere, and must stay where it lands. A second invocation hands its request to the first over a socket and exits, so binding the same command to a key toggles rather than starting a second copy
 
