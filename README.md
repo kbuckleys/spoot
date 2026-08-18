@@ -39,7 +39,7 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 The included install script can automatically take care of everything for you, but it's important to be clear about what spoot requires
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```JetBrainsMono```
+```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```lua 5.4+``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```openssl``` &nbsp; ```perl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```ttf-jetbrains-mono-nerd```
 
 # Setup
 It's a breeze. ```bash setup``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefixed the filename with ```bash``` as denoted -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
