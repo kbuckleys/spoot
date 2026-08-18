@@ -43,7 +43,6 @@ The included install script can automatically take care of everything for you, b
 
 # Installation
 Setup is a breeze. ```bash install.sh``` will automatically install the required core dependencies -- you don't even have to chmod the install script if you prefixed the filename with ```bash``` as denoted -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
-> An uninstall script is also included for a one-shot removal for your convenience
 
 - Run ```bash install.sh```
 - Finalize your spoot installation and authenticate
