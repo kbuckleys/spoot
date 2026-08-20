@@ -54,7 +54,7 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
   > You can still access this panel from ```main > playback```
 
 **Where spoot stores its files:**
-Everything is stored in the spoot directory and in ```~/.cache/spoot/```
+- Everything is stored in the spoot directory and in ```~/.cache/spoot/```
 
 # Building it yourself
 If you prefer building spoot manually, although the install script does exactly the same thing
