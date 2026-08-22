@@ -82,7 +82,7 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `delete` | delete entry in search or trail history | Search history, Trail history |
 | `escape` | clear filter, then hide spoot | Universal |
 | `backspace` | clear filter, then back one level | Universal |
-| `alt` `=` / `-` | quick seek + / - 10s | Universal |
+| `alt` `=` `-` | quick seek + / - 10s | Universal |
 | `shift` `return` | hovered item's action menu | Any list or grid row |
 | `alt` `return` | jump to current track's action menu | Universal |
 | `alt` `delete` | clear session | Universal |
@@ -99,5 +99,5 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `alt` `s` | toggle shuffle | Universal |
 | `alt` `g` | open spotify web link | Universal |
 | `alt` `c` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
-| `alt` `←` / `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
-| `ctrl` `←` / `→` | previous / next track | Universal |
+| `alt` `←` `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
+| `ctrl` `←` `→` | previous / next track | Universal |
