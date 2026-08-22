@@ -101,4 +101,3 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `alt` `c` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
 | `alt` `←` / `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
 | `ctrl` `←` / `→` | previous / next track | Universal |
-| `alt` `1`–`9` | jump to a step in the trail, or click the step itself | Universal |
