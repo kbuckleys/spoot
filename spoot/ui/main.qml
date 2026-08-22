@@ -10,6 +10,7 @@
 import QtQuick
 import QtQuick.Window
 import QtQuick.Shapes
+import QtQuick.Effects
 import "views"
 import "components"
 
@@ -39,9 +40,11 @@ Window {
     // Every kind of overlay, or the panel sizes itself for the view underneath.
     // A structured sheet was missing from this test, so it was laid out as if it
     // were the list behind it -- twenty rows in a ten-row window.
+    // A SHEET REPLACES THE BODY and so decides the panel's shape. The image
+    // viewer no longer belongs in this list: it is drawn on the surface, over an
+    // untouched panel, and the panel sizing itself for it was the whole bug.
     readonly property bool overlayUp: root.sheet.length > 0
                                    || root.sheetRows.length > 0
-                                   || root.artPath.length > 0
     readonly property int bodyHeight: {
         // An overlay sizes ITSELF. It borrowed the layout of the view underneath
         // before this, so a details sheet opened over an album grid was 13 rows
@@ -69,6 +72,15 @@ Window {
         var used = Math.min(Math.ceil(rows.count / root.columns), root.menuG.lines)
         return used * (layout === "grid" ? zenon.cellHeight : zenon.rowHeight)
     }
+    // THE ROOM A CARD NEEDS THAT THE MENU DOES NOT ALREADY HAVE. Kept apart from
+    // bodyHeight and added to the PANEL instead, because a RowList is a GridView
+    // flowing top to bottom: change its height and it changes how many rows fit in
+    // a column, and the whole list re-flows underneath the card. That is the text
+    // going crooked behind an open action menu -- the same fault the art viewer hit
+    // when it borrowed the body's line count, and the same answer. The list keeps
+    // exactly the shape it had; the panel grows around it.
+    readonly property int ctxExtra: root.ctxUp
+        ? Math.max(0, root.ctxCardHeight + zenon.messagePadV * 4 - bodyHeight) : 0
     // Every bar in the column pays for itself, and each collapses to nothing
     // when it has nothing to say -- the input bar outside search, the message
     // bar with no caption and no trail, the notification between notifications,
@@ -80,6 +92,7 @@ Window {
     // below every cover and every artist image.
     readonly property int menuHeight: inputBar.height + message.height + bodyHeight
                                      + noticeBar.height + nowBar.height + zenon.borderWidth
+                                     + ctxExtra
     // A sheet is still a panel and sizes the window to itself. The art viewer is
     // a card ON the menu, so the surface only has to grow enough to hold it --
     // and when the menu is already taller, it does not grow at all.
@@ -144,6 +157,11 @@ Window {
         })
     }
     ListModel { id: rows }
+    // The card's rows. A second model rather than a second app: the engine hands
+    // back ONE draw per round trip (see Util.serve_run), so the only way to have
+    // a list and the menu about one of its rows on screen at once is to keep the
+    // list where it is and put the menu somewhere else.
+    ListModel { id: ctxRows }
 
     // --- engine plumbing ----------------------------------------------------
     property var pending: ({})
@@ -181,6 +199,52 @@ Window {
     // the binding simply kept its old value and the view drew the previous
     // view's path. Clamping is the fix; the assignment order is not.
     function trailEnd() { return Math.min(root.trailPos, root.hops.length) }
+    // A HOP THAT ONLY EVER OPENED A CARD. Going THROUGH an action menu does leave
+    // its step on the trail -- it has to, or the engine could not replay the path
+    // to wherever you ended up -- but the menu itself is still not a place, so
+    // walking back over that step must not stop on it. Recognised by its shape
+    // rather than remembered: an alt step IS the gesture that opens a context
+    // menu, so nothing has to be stored, nothing has to survive nav.json, and a
+    // trail written by an older build reads correctly too.
+    // HOW MANY STEPS THE ENGINE SHOULD STILL BE COUNTING, if every hop that
+    // produced the current card described a place. Compared against the draw's
+    // own `keep` -- see applyContext, where a shortfall is the engine saying the
+    // verb you picked ACTED rather than went anywhere.
+    //
+    // Walked rather than added: a root hop among them (Alt+Return) starts the
+    // count again, because that is what a root means and `keep` counts steps
+    // inside the current one.
+    function ctxKeepWanted() {
+        var n = root.path.length
+        for (var i = 0; i < root.ctxHops.length; i++) {
+            if (root.ctxHops[i].cmd) n = 0
+            else n++
+        }
+        return n
+    }
+    // THE ROW THE CARD IS ABOUT, in the list behind it. A copy receipt is drawn
+    // on a row of THAT list, so `lastSrc` has to name something in it -- the
+    // verb's own index named whichever track happened to sit at the same
+    // position, which is how Copy Web Link put its tick on an unrelated row.
+    readonly property int ctxSubjectSrc: {
+        var h = root.ctxHops.length ? root.ctxHops[0] : null
+        return (h && h.step && typeof h.step === "object" && h.step.i !== undefined)
+               ? h.step.i : -1
+    }
+    function isCtxHop(h) {
+        return !!(h && h.step && typeof h.step === "object" && h.step.alt === true)
+    }
+    // ...and walking past it, in whichever direction you were going. Guarded
+    // against a trail of nothing but alt steps, which cannot happen and would
+    // spin here if it did.
+    function skipCtx(pos, dir) {
+        var guard = 0
+        while (pos > 0 && pos <= root.hops.length
+               && root.isCtxHop(root.hops[pos - 1]) && guard++ <= root.hops.length) {
+            pos += (dir < 0 ? -1 : 1)
+        }
+        return Math.max(0, Math.min(root.hops.length, pos))
+    }
     function rootAt(pos) {
         var p = Math.min(pos, root.hops.length)
         for (var i = p - 1; i >= 0; i--) if (root.hops[i] && root.hops[i].cmd) return i
@@ -211,6 +275,9 @@ Window {
     property var preHops: []
     property int prePos: 0
     function pushHop(h) {
+        // Going somewhere puts the card away. Every root and every ordinary step
+        // comes through here, so this is the one place it has to be said.
+        root.closeContext()
         root.preHops = root.hops
         root.prePos = root.trailPos
         var hs = root.activeHops()
@@ -527,6 +594,9 @@ Window {
             // before this Connections object exists and it is simply lost. The
             // first draw is PULLED in bootstrap() instead, which cannot race.
             if (name === "ready") { /* handshake seen; nothing to do */ }
+            // See Util.view_trail_jump: the engine cannot walk a path that spans
+            // roots, so it names the step and this does the walking.
+            else if (name === "jump") { root.jumpTrail(data.crumb || 0) }
             // A view that wants to say "No results" says it here -- rofi_message
             // has nowhere to draw when the front end is not rofi.
             else if (name === "message") {
@@ -540,7 +610,6 @@ Window {
                     root.sheet = t
                     root.overlayFresh = true
                     root.overlayTheme = data.theme || "meta"
-                    root.popTransient()
                 }
                 else root.notify(t)
             }
@@ -583,7 +652,6 @@ Window {
                 root.overlayFresh = true
                 root.sheetKind = data.kind || ""
                 root.overlayTheme = data.theme || "meta"
-                root.popTransient()
             }
             else if (name === "listening") {
                 // Reuses the art overlay wholesale: a 300px asset with a caption
@@ -592,15 +660,24 @@ Window {
                 // A second "modal with a picture" would have been a duplicate.
                 root.artPath = data.asset || ""
                 root.overlayFresh = true
-                root.artMesg = "spoot is listening\u2026"
+                root.artMesg = root.listenLines[
+                    Math.floor(Math.random() * root.listenLines.length)] + "\u2026"
                 root.overlayTheme = "listen"
+                // FIXED, whatever it is drawn over and whichever output it lands
+                // on. See zenon.listenIcon.
+                root.artIsListen = true
+                root.artIcon = zenon.listenIcon
+                root.artPad = zenon.sheetPad
             }
             else if (name === "prompt") {
                 root.promptFor = data.prompt || ""
                 root.setFilter(data.preset || "")
                 // The step that opened the prompt is not a place either -- the
                 // engine answered nil and stayed put -- so it comes off the path
-                // and is re-sent with the text appended when you submit.
+                // and is re-sent with the text appended when you submit. Here
+                // rather than with the empty draw below, because a prompt is the
+                // one transient the user then TYPES into: the next thing sent has
+                // to be built on a trail that no longer holds this step.
                 root.popTransient()
             }
             else if (name === "art-view") {
@@ -608,7 +685,20 @@ Window {
                 root.overlayFresh = true
                 root.artMesg = data.mesg || ""
                 root.overlayTheme = data.theme || "art"
-                root.popTransient()
+                root.artIsListen = false
+                // NO FRAME AT ALL. The picture IS the thing -- a ground, a border
+                // and a margin around it are three ways of drawing attention to
+                // the container instead. The listener keeps its card, because a
+                // listener is a small object doing something; a cover is just a
+                // cover, with its title over it.
+                root.artPad = 0
+                // The VIEWER does have to fit: it asks for 1000px, which no
+                // narrow output can give it. Worked out once, here, rather than
+                // as a live binding that would re-answer as the card leaves.
+                root.artIcon = Math.max(160,
+                    Math.min(zenon.geom(root.overlayTheme).icon || 400,
+                             root.width - zenon.sheetPad * 4,
+                             root.height - zenon.sheetPad * 10))
             }
         }
     }
@@ -632,8 +722,13 @@ Window {
         // Untagged events predate nothing and are trusted; a tagged one has to
         // belong to the draw on screen.
         if (data.req !== undefined && data.req !== root.drawReq) return
-        if (name === "art") root.applyArt(data)
-        else root.contextArt = data.path || ""
+        if (name === "art") { root.applyArt(data); return }
+        root.contextArt = data.path || ""
+        // A CONTEXT MENU THAT BROUGHT ITS OWN COVER outranks the shelf rule. On a
+        // shelf, artLive means "the backdrop follows the music" -- right for the
+        // list, wrong for a card that is about one specific track and arrived from
+        // nowhere. Reset by the next ordinary draw, which sets artLive itself.
+        if (data.own) root.artLive = false
     }
     function flushHeldArt() {
         var q = root.heldArt
@@ -678,12 +773,22 @@ Window {
     }
 
     function applyFilter() {
-        rows.clear()
-        // While composing a query the history stays whole -- it is a suggestion
-        // list, not a menu you are confined to.
-        var f = root.composing ? "" : root.filter.toLowerCase()
-        for (var i = 0; i < root.allRows.length; i++) {
-            var r = root.allRows[i]
+        root.fillRows(rows, root.allRows, root.filter)
+    }
+    // The card's half of the same thing. Typing while a context menu is up
+    // narrows ITS verbs, not the list behind it -- which is the whole reason the
+    // two models and the two filters exist.
+    function applyCtxFilter() {
+        root.fillRows(ctxRows, root.ctxAll, root.ctxFilter)
+    }
+    // ONE FILLER. It used to be applyFilter's body, with the model and the source
+    // named inline; a context menu needs the identical walk over a different pair
+    // and copying it would have been two rules for what a match is.
+    function fillRows(model, source, filter) {
+        model.clear()
+        var f = root.narrows ? filter.toLowerCase() : ""
+        for (var i = 0; i < source.length; i++) {
+            var r = source[i]
             // Substring, case-insensitive -- rofi's default matcher.
             // EVERY role is present on every append, even when empty. ListModel
             // fixes its roles from the first object it is given, so appending a
@@ -696,7 +801,7 @@ Window {
             // -- and played a completely different track. Shift+Return had the
             // same fault, for the same reason.
             if (!f.length || String(r.label).toLowerCase().indexOf(f) >= 0)
-                rows.append({label: r.label, icon: r.icon || "", key: r.key || "",
+                model.append({label: r.label, icon: r.icon || "", key: r.key || "",
                              // The row's own track id, so the view can tell
                              // which row is playing without being told again.
                              id: r.id || "",
@@ -735,6 +840,13 @@ Window {
         return true
     }
 
+    // A CONTEXT MENU NEEDS SOMETHING TO SIT ON. A session restored straight into
+    // an action menu, and Alt+Return -- which pushes a root hop of its own -- both
+    // arrive with nothing drawn underneath. There the menu is the only thing there
+    // is, so it is drawn as one, and the full-panel path stays a live route rather
+    // than becoming a branch nothing reaches.
+    function isContext(d) { return d && d.context === true && rows.count > 0 }
+
     function render(d) {
         // The draw this was waiting on. Released FIRST, so bodyHeight is sizing
         // from the rows below rather than from the height it was holding.
@@ -757,6 +869,33 @@ Window {
         if (d && d.empty === true) {
             root.abortSwap()
             root.overlayFresh = false
+            // A STEP THAT DREW NOTHING WAS NOT A PLACE. Alt+y on a track with no
+            // lyrics says so and draws no menu -- and the hop that asked stayed on
+            // the trail, so every refresh after it replayed the step, said it
+            // again, and swallowed whatever you had actually pressed. Playing
+            // another track just re-announced that the first one had no lyrics.
+            //
+            // The overlay EVENTS used to drop the step themselves, each in its own
+            // handler, and a plain one-line message had no handler to do it in.
+            // Worse, they had stopped being right: a card's steps are provisional
+            // and live on ctxHops, so Track Details opened from one ate a real
+            // trail step instead. Decided here now, at the single moment the
+            // engine has said "there is no menu at the end of this", and on
+            // whichever list the step actually went to.
+            if (root.ctxHops.length) root.ctxHops = root.ctxShown.slice()
+            else root.popTransient()
+            return
+        }
+        // AN ACTION MENU GOES ON TOP OF THE MENU, not in place of it. Decided
+        // before anything else about the transition, because there is no
+        // transition: the body is staying exactly where it is.
+        if (root.isContext(d)) {
+            // ...and if a swap had already begun -- a leftover from a request
+            // still in flight when this one answered -- it has nothing to swap
+            // to any more. Put the body back, or the card would sit over a list
+            // that is halfway faded out.
+            if (swapOut.running || root.heldDraw) root.abortSwap()
+            root.applyContext(d)
             return
         }
         // Still going out. Held until it has, and applied by swapOut itself.
@@ -771,13 +910,17 @@ Window {
 
     // The rows, updated in place. Answers false when it cannot -- a different
     // number of rows, or a filter narrowing them -- and the caller rebuilds.
-    function patchRows(list) {
-        if (root.filter.length || list.length !== rows.count) return false
+    //
+    // Told WHICH model and WHICH filter, because the card redraws the same way
+    // the body does: Like and Play answer with the same action menu one row
+    // different, and rebuilding it would blink the card for a marker moving.
+    function patchRows(model, list, filter) {
+        if (filter.length || list.length !== model.count) return false
         for (var i = 0; i < list.length; i++) {
-            var r = list[i], m = rows.get(i)
-            if (m.label !== r.label) rows.setProperty(i, "label", String(r.label))
+            var r = list[i], m = model.get(i)
+            if (m.label !== r.label) model.setProperty(i, "label", String(r.label))
             var rich = r.rich || ""
-            if (m.rich !== rich) rows.setProperty(i, "rich", rich)
+            if (m.rich !== rich) model.setProperty(i, "rich", rich)
             // AN EMPTY ICON NEVER CLEARS ONE. A draw carries no artwork at all:
             // Util.serve_run defers album_thumbs so the rows go out first, and
             // every cover arrives afterwards as an `art` event. So on a REDRAW
@@ -794,33 +937,60 @@ Window {
             // "not resolved yet" and "there is none" arrive here as the same
             // empty string, and one of them happens constantly.
             var icon = r.icon || ""
-            if (icon.length && m.icon !== icon) rows.setProperty(i, "icon", icon)
+            if (icon.length && m.icon !== icon) model.setProperty(i, "icon", icon)
             var key = r.key || ""
-            if (m.key !== key) rows.setProperty(i, "key", key)
+            if (m.key !== key) model.setProperty(i, "key", key)
             var rid = r.id || ""
-            if (m.id !== rid) rows.setProperty(i, "id", rid)
+            if (m.id !== rid) model.setProperty(i, "id", rid)
         }
         return true
     }
 
-    function applyDraw(d, quiet) {
-        // A DRAW MEANS THE OVERLAY IS DONE -- unless this draw is the one that
-        // brought it. An overlay arrives as an EVENT, and the engine writes its
-        // events before the response, so the reply that follows is the very menu
-        // the overlay was opened from. Closing on that reply shut every viewer
-        // the instant it opened: Albumart out of an action menu, an artist's
-        // impression, a details sheet. Only the art views reached from Alt+a
-        // survived, and only because those answer with an empty draw that never
-        // gets this far.
-        //
-        // So: an overlay this round trip opened stays, and one left over from an
-        // earlier menu goes -- which is the case this was written for, a session
-        // resumed into a viewer that then sat on top of Main.
+    // A DRAW MEANS THE OVERLAY IS DONE -- unless this draw is the one that
+    // brought it. An overlay arrives as an EVENT, and the engine writes its
+    // events before the response, so the reply that follows is the very menu
+    // the overlay was opened from. Closing on that reply shut every viewer
+    // the instant it opened: Albumart out of an action menu, an artist's
+    // impression, a details sheet. Only the art views reached from Alt+a
+    // survived, and only because those answer with an empty draw that never
+    // gets this far.
+    //
+    // So: an overlay this round trip opened stays, and one left over from an
+    // earlier menu goes -- which is the case this was written for, a session
+    // resumed into a viewer that then sat on top of Main.
+    //
+    // Its own function because a CONTEXT draw shares exactly this and nothing
+    // else below it: opening a card retires a stale viewer, and moves the trail
+    // not at all.
+    function dropStaleOverlay() {
         if (!root.overlayFresh
             && (root.sheet.length || root.sheetRows.length || root.artPath.length)) {
             root.closeOverlay()
         }
         root.overlayFresh = false
+    }
+
+    // WHERE THIS DRAW LEAVES YOU, as opposed to what it puts on screen. Only
+    // applyDraw calls this: a context menu is not a place, so none of it applies
+    // to one. Runs FIRST, because the trail arithmetic moves trailPos and
+    // everything after it reads that.
+    function applyWhere(d) {
+        root.dropStaleOverlay()
+        // A CARD'S HOPS WERE A JOURNEY AFTER ALL. This answer is a real menu, so
+        // the provisional steps that produced it described places -- they join
+        // the trail here, ahead of the keep block, which then trims whichever of
+        // them merely acted, exactly as it does for any other step. Held off
+        // until this moment so that the far commoner case, a verb that acts and
+        // answers with the same card, never touches the trail at all.
+        if (root.ctxHops.length) {
+            root.preHops = root.hops
+            root.prePos = root.trailPos
+            root.hops = root.activeHops().concat(root.ctxHops)
+            root.trailPos = root.hops.length
+            root.fullCrumb = []; root.fullRoots = []
+            root.ctxHops = []
+            root.ctxShown = []
+        }
         // The engine says how many path steps still describe WHERE YOU ARE;
         // anything beyond that ran an action and left no place behind it. Done
         // FIRST, because posKey() reads root.path -- a list keeps its identity,
@@ -852,6 +1022,169 @@ Window {
                 root.trailPos = want
             }
         }
+    }
+
+    // WHAT THIS MENU IS -- its name in the trail, the view it counts as, and the
+    // keys it claims. The other half applyDraw shares with a context menu: a card
+    // floating over a list is still the menu with the keyboard, so Delete and Tab
+    // have to follow it rather than staying with the list underneath.
+    function applyIdentity(d) {
+        root.canDelete = d.del === true
+        root.canTab = d.tab === true
+        root.scope = d.scope || ""
+        root.crumb = root.toArray(d.crumb)
+        root.crumbRoots = root.toArray(d.roots)
+        // Standing at the tip, THIS crumb is the deepest one -- remember it so
+        // that stepping back can still show what lies ahead. Read after the
+        // assignment above, never before: the crumb here is the one just drawn.
+        if (root.trailPos >= root.hops.length) {
+            root.fullCrumb = root.crumb.slice()
+            root.fullRoots = root.crumbRoots.slice()
+        }
+        // Record where we are, keyed by how deep the crumb reads.
+        if (root.crumb.length > 0) root.trailMap[root.crumb.length] = root.trailPos
+        root.lyricTimes = []; root.lyricFor = ""; root.lyricIndex = -1
+        if (d.scope === "lyrics" && d.track) {
+            var want = d.track
+            root.call("lyrics", {id: want}, function (ly) {
+                // Positional, so the cues must line up with the rows the view
+                // drew. If they do not, the track has lyrics but not synced ones
+                // -- show them, just do not pretend to follow along.
+                // ...and not into a view that has since been left. The row-count
+                // test below usually catches that by accident; this says it.
+                if (root.scope !== "lyrics") return
+                if (ly && ly.synced && ly.lines && ly.lines.length === rows.count) {
+                    root.lyricTimes = root.toArray(ly.times)
+                    root.lyricFor = want
+                }
+            })
+        }
+    }
+
+    function applyOrigin() {
+        // The trail describes the menu again -- the step that played has been
+        // dropped by `keep` -- so this is the moment the origin is knowable.
+        // WHERE THE PLAYING TRACK CAN BE SEEN is an origin, whether or not you
+        // played it from here. Recording only at the moment of playing left
+        // Alt+c with nothing to go on for anything started in an earlier session,
+        // or from a menu the trail no longer remembers -- and there is no honest
+        // answer to "take me to it" without one.
+        //
+        // An ACTION MENU is never an origin: it is a list of verbs about a track,
+        // not a place the track lives. That used to need a step subtracted here to
+        // say so; now it costs no step at all, so trailEnd() already names the
+        // list it was opened from and there is nothing to correct.
+        if (root.armOrigin.length || (root.playback.id && root.playingRowIndex() >= 0)) {
+            var oid = root.armOrigin.length ? root.armOrigin : root.playback.id
+            var opos = root.trailEnd()
+            root.armOrigin = ""
+            root.originId = oid
+            root.originHops = root.hops.slice(0, opos)
+            root.originPos = opos
+        }
+    }
+
+    // AN ACTION MENU, PUT ON TOP. Everything about where you are still happens --
+    // the trail moved, the crumb grew, this menu claims the keyboard -- and the
+    // only thing that does NOT is the half of applyDraw that replaces the body:
+    // no allRows, no themeName, no positions, no swap animation, and no cover.
+    //
+    // The cover especially. The engine marks every action menu `art=false`, which
+    // through applyDraw would strip the backdrop off the list showing behind the
+    // card -- a visible change to something that did not change. A context menu
+    // has no backdrop of its own and takes none away.
+    function applyContext(d) {
+        // NOT applyWhere. Nothing about the trail changed: the hops that produced
+        // this card are not on it, so there is no `keep` arithmetic to do and no
+        // position to move. Only the stale-viewer sweep is shared.
+        root.dropStaleOverlay()
+        // A CONTEXT MENU DOES NOT SURVIVE BEING USED. `keep` is the engine saying
+        // which of the steps behind this draw described a place; when the last
+        // provisional one did not, the verb ACTED -- Play, Like, Albumart, Copy
+        // Web Link -- and what came back is this same menu redrawn rather than a
+        // menu you went to. The card closes on the pick, like a context menu
+        // anywhere else, instead of sitting there over a list it has finished
+        // with. That it stayed is why backing out of Albumart still found it, and
+        // why the next Backspace went one level too far.
+        //
+        // Shift+Return on a verb is the case this must NOT catch: it opens a
+        // nested action menu, the step survives, keep matches, and the new card
+        // replaces the old.
+        if (d.keep !== undefined && d.keep < root.ctxKeepWanted()) {
+            root.closeContext()
+            // AN OVERLAY THIS PICK OPENED SURVIVES THE REFRESH BELOW. Track
+            // Details, Album Details and Albumart all arrive as an EVENT just
+            // ahead of this draw, and the round trip below is a SECOND draw --
+            // which would find the sheet sitting there with overlayFresh already
+            // spent, decide it was left over from an earlier menu, and close it
+            // on sight. It is not left over: the pick that opened it is still in
+            // flight. Re-armed rather than never cleared, so an overlay that
+            // genuinely IS stale still goes.
+            if (root.sheet.length || root.sheetRows.length || root.artPath.length) {
+                root.overlayFresh = true
+            }
+            // ...and the list behind is asked again, because the verb may well
+            // have changed it -- Like moves a heart on the very row the card was
+            // about. Same menu, so applyDraw patches the rows in place and
+            // nothing moves or fades. This is the one round trip a card costs,
+            // and it buys correctness rather than a redraw of something unchanged.
+            root.refresh(0)
+            return
+        }
+        root.ctxShown = root.ctxHops.slice()
+        root.ctxTheme = d.theme || ""
+        root.ctxMesg = d.mesg || d.prompt || ""
+        var list = root.toArray(d.rows)
+        // Same rule the body follows: patch where the shape allows it, rebuild
+        // where it does not. Liking a track answers with this very menu one word
+        // different, and rebuilding it for that would blink the card.
+        var patched = root.patchRows(ctxRows, list, root.ctxFilter)
+        root.ctxAll = list
+        if (!patched) {
+            root.ctxFilter = ""
+            root.applyCtxFilter()
+        }
+        root.applyIdentity(d)
+        root.applyOrigin()
+        // The card places its own cursor, and only when it is new -- a patched
+        // redraw leaves every row where it was, so moving the cursor would be the
+        // card scrolling under a keypress that did not ask it to.
+        if (!patched && ctxList) ctxList.currentIndex = 0
+        root.measureCtx()
+        root.ctxUp = true
+        if (!root.opened) root.showPanel()
+        // THE SAME LINE THE BODY LOGS. ui/check.sh proves a draw happened by
+        // finding one of these, and proves it was not blank by reading its row
+        // count -- so a menu that stops logging stops being checked. Shift+Return
+        // is one of the seven things that guard drives.
+        console.log("render: rows=" + ctxRows.count + " layout=context"
+                    + " card=" + root.ctxCardWidth + "x" + root.ctxCardHeight
+                    + " theme=" + root.ctxTheme
+                    + " trail=" + root.trailPos + "/" + root.hops.length
+                    + " crumb=" + JSON.stringify(root.crumb))
+    }
+    // Any draw that is not a context menu puts the card away. One place, so a
+    // route that forgets to close it cannot exist -- and dismiss() and goHome()
+    // call it too, because neither goes through a draw.
+    function closeContext() {
+        root.ctxHops = []
+        root.ctxShown = []
+        if (!root.ctxUp) return
+        root.ctxUp = false
+        root.ctxFilter = ""
+        root.ctxAll = []
+        root.ctxFlashSrc = -1
+        ctxRows.clear()
+    }
+
+    function applyDraw(d, quiet) {
+        // applyWhere FIRST, then the card. applyWhere is where a card's
+        // provisional hops become real, and closeContext throws them away -- so
+        // closing first meant a verb that navigated arrived somewhere the trail
+        // had no record of: the crumb read three deep and the trail still said
+        // one, and Backspace out of the album it opened landed on Main.
+        root.applyWhere(d)
+        root.closeContext()
         root.filter = ""
         // The cover is NOT cleared here. Clearing it optimistically and waiting
         // for the draw's own context-art to put one back collapsed it to zero
@@ -872,12 +1205,10 @@ Window {
         // so the list goes from a handful of matches back to all of it. The row
         // you picked was then somewhere else entirely and nothing went looking
         // for it -- which is "selecting a filtered item doesn't jump to it".
-        var patched = quiet === true && root.patchRows(root.allRows)
+        var patched = quiet === true && root.patchRows(rows, root.allRows, root.filter)
         if (!patched) applyFilter()
         root.layout = d.layout || "grid"
         root.viewMesg = d.mesg || d.prompt || ""
-        root.canDelete = d.del === true
-        root.canTab = d.tab === true
         // The menu's own word that it has no subject -- see contextCover.wanted,
         // which refuses a backdrop to whole kinds of view; this refuses it to one
         // menu inside a view that otherwise wears one.
@@ -886,51 +1217,12 @@ Window {
         // coverArt: on a shelf the live poll value wins, so the backdrop follows
         // the music rather than the menu.
         root.artLive = d.artLive === true
-        root.crumb = root.toArray(d.crumb)
-        root.crumbRoots = root.toArray(d.roots)
-        // Standing at the tip, THIS crumb is the deepest one -- remember it so
-        // that stepping back can still show what lies ahead. Read after the
-        // assignment above, never before: the crumb here is the one just drawn.
-        if (root.trailPos >= root.hops.length) {
-            root.fullCrumb = root.crumb.slice()
-            root.fullRoots = root.crumbRoots.slice()
-        }
-        // Record where we are, keyed by how deep the crumb reads.
-        if (root.crumb.length > 0) root.trailMap[root.crumb.length] = root.trailPos
+        // NOT in applyIdentity: this is the PANEL's geometry, and a context menu
+        // deliberately leaves the panel shaped like the menu underneath it. The
+        // card reads its own theme from root.ctxTheme instead.
         root.themeName = d.theme || ""
-        root.scope = d.scope || ""
-        root.lyricTimes = []; root.lyricFor = ""; root.lyricIndex = -1
-        if (d.scope === "lyrics" && d.track) {
-            var want = d.track
-            root.call("lyrics", {id: want}, function (ly) {
-                // Positional, so the cues must line up with the rows the view
-                // drew. If they do not, the track has lyrics but not synced ones
-                // -- show them, just do not pretend to follow along.
-                if (ly && ly.synced && ly.lines && ly.lines.length === rows.count) {
-                    root.lyricTimes = root.toArray(ly.times)
-                    root.lyricFor = want
-                }
-            })
-        }
-        // The trail describes the menu again -- the step that played has been
-        // dropped by `keep` -- so this is the moment the origin is knowable.
-        // WHERE THE PLAYING TRACK CAN BE SEEN is an origin, whether or not you
-        // played it from here. Recording only at the moment of playing left
-        // Alt+c with nothing to go on for anything started in an earlier session,
-        // or from a menu the trail no longer remembers -- and there is no honest
-        // answer to "take me to it" without one.
-        //
-        // An ACTION MENU is never an origin: it is a list of verbs about a track,
-        // not a place the track lives, so it records the list it was opened from.
-        if (root.armOrigin.length || (root.playback.id && root.playingRowIndex() >= 0)) {
-            var oid = root.armOrigin.length ? root.armOrigin : root.playback.id
-            var opos = root.trailEnd()
-            if (root.scope === "action" && opos > 0) opos -= 1
-            root.armOrigin = ""
-            root.originId = oid
-            root.originHops = root.hops.slice(0, opos)
-            root.originPos = opos
-        }
+        root.applyIdentity(d)
+        root.applyOrigin()
         // Not on a patched redraw: the cursor never moved, and putting it back
         // where it already is scrolls the view to it.
         if (!patched) root.applyPos()
@@ -980,6 +1272,92 @@ Window {
             Math.max(0, Math.min(rows.count - 1, want === undefined ? 0 : want))
     }
     property string viewMesg: ""
+    // --- THE CONTEXT MENU -------------------------------------------------
+    // An action menu, drawn as a card OVER the list it was opened from instead of
+    // replacing it. The engine has called these context menus in comments since
+    // before the Qt port -- "no Util.scope and no trail step", see
+    // Util.open_playlist_actions -- and now says so on the draw itself; this is
+    // the half that draws them like one.
+    //
+    // NOT an overlay in the `overlayUp` sense. An overlay IS the panel: it sizes
+    // it, replaces the body and owns Escape. A context menu leaves the panel
+    // shaped like the menu underneath, keeps that menu on screen, and stays a
+    // real trail step you can Backspace out of and reach from the trail menu.
+    property bool ctxUp: false
+    // THE HOPS THAT PRODUCED THE CARD, and the only place they live. An action
+    // menu is not somewhere you have been, so opening one costs no trail step, no
+    // crumb, no nav.json entry and nothing to walk back into with Alt+left -- the
+    // engine is simply asked to answer one more row than the trail describes.
+    //
+    // They accumulate while the answers keep being menus (an action menu opened
+    // from an action menu), and they are thrown away when the card closes --
+    // which is why closing costs no request at all: the list underneath never
+    // went anywhere, and it is still on screen.
+    //
+    // The one exception is a verb that NAVIGATES. Then the answer is a real menu,
+    // these hops were a journey after all, and they join the trail on the way
+    // through -- see applyDraw, where `keep` then trims whichever of them merely
+    // acted, exactly as it does for any other step.
+    property var ctxHops: []
+    // ctxHops AS THE CARD ON SCREEN WAS DRAWN. A verb that answers with nothing
+    // -- Albumart, Track Details, anything that opens a viewer instead of a menu
+    // -- must leave the card exactly as it is, so the provisional step that asked
+    // for it goes back off. Reverting to a snapshot rather than popping one,
+    // because an empty answer can also arrive when no card is up at all.
+    property var ctxShown: []
+    property var ctxAll: []
+    property string ctxFilter: ""
+    property string ctxMesg: ""
+    // Its own theme, kept apart from root.themeName for the same reason its rows
+    // are kept apart from `rows`: themeName is the PANEL's geometry and the panel
+    // is still the menu underneath.
+    property string ctxTheme: ""
+    readonly property var ctxG: zenon.geom(root.ctxTheme)
+    // THE CARD'S SHAPE, taken from the model and never from the item. bodyHeight
+    // grows to hold the card (see bodyHeight), so a card that sized itself against
+    // the space it is being given would be a binding loop.
+    readonly property int ctxLines: Math.max(1, Math.min(ctxRows.count, root.ctxG.lines))
+    readonly property int ctxCardHeight: root.ctxLines * zenon.rowHeight
+                                       + zenon.rowHeight + zenon.messagePadV * 4
+    // AS WIDE AS ITS LONGEST VERB, which is what makes it a card rather than a
+    // second panel. The `action` theme declares 1000px because as a FULL menu it
+    // had to match the one it was replacing, and a 1000px card over a 1000px panel
+    // is just the old behaviour with a border. The theme width becomes a cap.
+    //
+    // Measured the way PairSheet measures its columns -- TextMetrics knows the
+    // width of a string before a single delegate exists -- but assigned from a
+    // function rather than computed in a binding, because a binding that WRITES to
+    // the thing it reads re-triggers itself.
+    property int ctxCardWidth: 0
+    function measureCtx() {
+        // THE ROWS DECIDE. The caption may widen the card, but only so far: a
+        // track's caption is its name, its artist and its album, and letting that
+        // set the width outright made the card exactly as wide as the panel it is
+        // supposed to be sitting ON -- which is the old full-menu behaviour with a
+        // border drawn round it.
+        //
+        // Half the menu's declared width is where it stops and starts eliding.
+        // The verbs are what you act on; the caption is a reminder of what they
+        // are about, and a reminder can be trimmed.
+        var w = 0
+        ctxMetrics.font.bold = false
+        for (var i = 0; i < root.ctxAll.length; i++) {
+            ctxMetrics.text = String(root.ctxAll[i].label)
+            if (ctxMetrics.width > w) w = ctxMetrics.width
+        }
+        ctxMetrics.font.bold = true
+        ctxMetrics.text = root.ctxMesg
+        var cap = Math.min(ctxMetrics.width, root.ctxG.width / 2)
+        ctxMetrics.font.bold = false
+        root.ctxCardWidth = Math.min(root.ctxG.width,
+                                     Math.ceil(Math.max(w, cap)) + zenon.rowPadH * 4)
+    }
+    TextMetrics {
+        id: ctxMetrics
+        font.family: zenon.fontFamily
+        font.pointSize: root.ctxG.rowSize || zenon.fontSize
+        font.weight: root.ctxG.rowWeight || zenon.fontWeight
+    }
     // Raised by an overlay EVENT and cleared by the next draw. See applyDraw: it
     // is the difference between the overlay this menu just opened and one the
     // last menu left behind.
@@ -1035,12 +1413,39 @@ Window {
     // edge and centres on the output.
     //
     // LISTENING IS NOT ONE OF THOSE. It is spoot doing something and telling you
-    // it is doing it -- the same class of thing as a menu -- and floating it in
-    // the middle of the screen made a thirty-second wait feel like a modal the
-    // app had thrown at you. It stays docked south where every other view lives,
-    // and only the card's contents differ.
-    readonly property bool artCentred:
-        root.artPath.length > 0 && root.overlayTheme !== "listen"
+    // The listening card, which is the art overlay wearing a different hat: same
+    // scrim, same card, same picture slot -- and a different shape, place and
+    // caption, because it is a thing working rather than a thing to look at.
+    readonly property bool listenMode: root.overlayTheme === "listen"
+    // THE PICTURE'S SIZE, TAKEN ONCE WHEN IT OPENS. This used to be read live off
+    // root.g -- which falls back to the MENU's geometry the moment overlayTheme
+    // clears, and a menu theme names no icon, so it landed on the 400 default. On
+    // the way out the listener's 300px image therefore jumped to 400 and the card
+    // stretched upward as it faded. An overlay's size is settled when it opens and
+    // has no business changing while it is up.
+    // LATCHED WHEN THE OVERLAY OPENS, and deliberately not derived from anything.
+    // listenMode flips the instant overlayTheme clears -- which is WHILE the card
+    // is still fading out -- so every piece of geometry reading it recomputed
+    // mid-fade: the padding jumped, the picture jumped, and the card visibly
+    // stretched on its way off screen. Measured it doing exactly that: 264x291
+    // while listening, 264x1260 one frame after the overlay theme cleared.
+    //
+    // Behaviour reads listenMode, which must flip at once -- the panel has to come
+    // back, the poll has to stop. SHAPE reads these, which must not.
+    property bool artIsListen: false
+    property int artIcon: 400
+    property int artPad: 5
+    // WHAT SPOOT SAYS WHILE IT WORKS. A fixed line under a spinner is furniture;
+    // a different one each time is the app having a personality for the eight
+    // seconds you are looking at it. Picked once per spawn -- see the `listening`
+    // event -- so it does not shuffle under you mid-listen.
+    readonly property var listenLines: [
+        "spoot is listening", "spoot is snooping", "spoot is calibrating",
+        "spoot is eavesdropping", "spoot is all ears", "spoot is tuning in",
+        "spoot is holding its breath", "spoot is consulting the archives",
+        "spoot is narrowing it down", "spoot is pricking up its ears",
+        "spoot is checking its notes", "spoot is running the tape back"
+    ]
     readonly property string coverArt:
         root.artLive ? (root.playback.art || root.contextArt)
                      : (root.contextArt.length ? root.contextArt : (root.playback.art || ""))
@@ -1085,8 +1490,6 @@ Window {
         var out = ""
         for (var i = 0; i < root.crumb.length; i++) {
             var seam = (root.crumbRoots || []).indexOf(i) >= 0
-            if (i > 0) out += root.crumbSpan(seam ? zenon.crumbRoot : zenon.crumbArrow,
-                                             root.crumbSep(seam))
             // The step you are ON is not a destination -- and now that the cursor
             // can sit anywhere along the trail, it has to SHOW. Bright means
             // "here", the same colour the root seams use; the steps behind stay
@@ -1094,6 +1497,15 @@ Window {
             var last = (i === root.crumb.length - 1)
             var col = last ? zenon.crumbRoot
                            : (root.crumbHover === i ? zenon.foreground : zenon.dim)
+            // THE ARROW BELONGS TO THE STEP IT INTRODUCES, and takes its colour.
+            // It had a grey of its own -- darker than the dimmest step -- which
+            // read as a chain of bright words strung on something else's rule.
+            // The root SEAM keeps its own colour: that glyph is not punctuation
+            // between steps, it is the mark that says a different trail starts
+            // here, and it has to carry across whatever the steps either side of
+            // it are doing.
+            if (i > 0) out += root.crumbSpan(seam ? zenon.crumbRoot : col,
+                                             root.crumbSep(seam))
             out += root.crumbSpan(col, root.esc(root.crumb[i]), last ? undefined : i)
         }
         // What you stepped back OUT of, held at the arrow's own grey so it reads
@@ -1102,6 +1514,9 @@ Window {
         // honestly where it would land. Alt+right walks them.
         for (var j = 0; j < root.crumbAhead.length; j++) {
             var k = root.crumb.length + j
+            // Arrow and step in ONE span, so the two share a colour here for the
+            // same reason they do above -- these are simply all at the walked-out
+            // grey rather than at the step's own.
             out += root.crumbSpan(zenon.crumbArrow,
                                   root.crumbSep((root.fullRoots || []).indexOf(k) >= 0)
                                   + root.esc(root.crumbAhead[j]))
@@ -1118,6 +1533,14 @@ Window {
     property string scope: ""
     // The theme's column count, and nothing overrules it.
     readonly property int columns: root.menuG.columns
+    // WHICHEVER LIST HAS THE KEYBOARD. A context menu is modal but NAVIGABLE, so
+    // its keys cannot be swallowed the way a sheet swallows them -- they have to
+    // reach the card instead of the body. Named once here rather than branched
+    // inside each of the six functions that move a cursor or read a row, which
+    // is the difference between one routing rule and six.
+    readonly property var focusItem: root.ctxUp ? ctxList : body.item
+    readonly property var focusModel: root.ctxUp ? ctxRows : rows
+    readonly property var focusG: root.ctxUp ? root.ctxG : root.menuG
     // The overlay's geometry wins while one is up, exactly as rofi's separate
     // window did -- otherwise a 640px artist impression would be drawn inside a
     // 1000px panel with dead space either side.
@@ -1175,6 +1598,12 @@ Window {
         return root.entryCmd + "|" + root.entryKey + "|" + JSON.stringify(root.path)
     }
     function rememberPos() {
+        // NOT WHILE A CARD IS UP. posKey() names the path, and with a context
+        // menu open the path includes the step that opened it -- so this would
+        // file the LIST's cursor under the CARD's key and grow `positions` a dead
+        // entry per action menu. The list's own cursor was already stored on the
+        // way in, by the activate() that opened the card.
+        if (root.ctxUp) return
         if (body.item && rows.count) root.positions[posKey()] = body.item.currentIndex
     }
 
@@ -1213,7 +1642,21 @@ Window {
         // see drawReq. Held in a local first so the callback can name the very
         // request it is answering.
         var id = root.call("nav", {hops: root.hops, pos: root.trailPos,
-                                   tip: root.fullCrumb, tipRoots: root.fullRoots},
+                                   // BESIDE the trail, never in it. See ctxHops:
+                                   // the engine walks these and then leaves them
+                                   // out of the crumb, out of what it echoes back
+                                   // and out of nav.json.
+                                   tail: root.ctxHops,
+                                   // The deepest crumb this trail reached -- or,
+                                   // when nothing is ahead of the cursor, simply
+                                   // the one on screen. It used to send only the
+                                   // former, and pushHop clears that: so the trail
+                                   // menu, which is opened BY a pushHop, was handed
+                                   // an empty path and fell back to listing the one
+                                   // segment the engine can see by itself.
+                                   tip: root.fullCrumb.length ? root.fullCrumb : root.crumb,
+                                   tipRoots: root.fullCrumb.length ? root.fullRoots
+                                                                   : root.crumbRoots},
                            function (d) { root.drawReq = id; root.render(d) })
         root.drawIds[id] = true
     }
@@ -1250,6 +1693,20 @@ Window {
     // Backspace all have to agree about which kind of typing this is, and they
     // were agreeing by coincidence.
     readonly property bool composing: root.isSearchPrompt || root.promptFor.length > 0
+    // ...and WHETHER TYPING NARROWS THE ROWS, which is a different question and
+    // was answered by `composing` only because nobody had asked it separately.
+    //
+    // Everywhere but a prompt asking for a NAME -- New Playlist, Rename -- where
+    // what is on screen is not a menu you are choosing from and there is nothing
+    // for the characters to narrow.
+    //
+    // The search box DOES narrow now. The query you are typing and a filter over
+    // your past queries are the same characters, so a history of thirty searches
+    // gets out of the way while you type the thirty-first instead of sitting there
+    // whole. Return still submits what you TYPED rather than the row under the
+    // cursor -- free text wins there, as it does in rofi -- so narrowing the list
+    // underneath costs nothing and reaches an old query in fewer keys.
+    readonly property bool narrows: root.promptFor.length === 0
 
     // WHERE THE PLAYING TRACK WAS PLAYED FROM -- the exact menu, not the album it
     // happens to belong to. Those are rarely the same place: a track played out
@@ -1281,22 +1738,60 @@ Window {
     //
     // A sequence number rather than a boolean: picking the same row twice is two
     // events, and a flag that is already true has no way to say so.
+    // IS THERE A PLAYER BEHIND ANY OF THIS. The poll always names a track -- on a
+    // cold start, the last one Spotify remembers, hours old and loaded nowhere --
+    // and until the engine started saying so there was no way to tell that apart
+    // from a track paused a moment ago. See Util.played_here.
+    readonly property bool playbackLive: root.playback.live === true
+    // YOU PICKED SOMETHING, so the cursor is spent. The engine says the same on
+    // its next poll -- picking a track plays it, and playback then has a player
+    // behind it -- but a poll is up to a second away and the acknowledgement of a
+    // keypress cannot be. Never reset: "selecting any track removes the cursor" is
+    // about the selection, not about whether the track turned out to be playable.
+    property bool picked: false
+    // WHERE YOU LEFT OFF. Empty as soon as either of the above says the question
+    // has been answered, which is why no view needs to know any of this.
+    readonly property string lastId:
+        (root.playbackLive || root.picked) ? "" : (root.playback.id || "")
+    readonly property string lastAlbumId:
+        (root.playbackLive || root.picked) ? "" : (root.playback.albumId || "")
+    // ...and the marker's own id, which is now the one that has to be earned.
+    readonly property string liveId: root.playbackLive ? (root.playback.id || "") : ""
+    readonly property string liveAlbumId:
+        root.playbackLive ? (root.playback.albumId || "") : ""
     property int flashSrc: -1
     property int flashSeq: 0
+    // The card's own pair. Both lists match a flash by `src`, so one shared
+    // counter had picking the third verb in a card sweep the third ROW of the
+    // list behind it at the same moment -- an acknowledgement of something
+    // nobody touched.
+    property int ctxFlashSrc: -1
+    property int ctxFlashSeq: 0
     function flashRow(i) {
-        if (i < 0 || i >= rows.count) return
-        root.flashSrc = rows.get(i).src
+        var m = root.focusModel
+        if (i < 0 || i >= m.count) return
+        if (root.ctxUp) { root.ctxFlashSrc = m.get(i).src; root.ctxFlashSeq++; return }
+        root.flashSrc = m.get(i).src
         root.flashSeq++
     }
 
     function activate(i, alt) {
         root.rememberPos()
         root.flashRow(i)
-        if (root.entryCmd === "main" && !alt) {
+        // The cursor is spent. See root.picked -- picking THIS row or any other is
+        // the answer to the question it was asking. Not a verb in a card, which
+        // is a choice ABOUT a track rather than a choice of one; the ones that do
+        // start playback set it the honest way, through the engine's next poll.
+        if (!root.ctxUp) root.picked = true
+        // Main's tiles are OPENED, not stepped into -- but only Main's own. A card
+        // in front of them is a list of verbs, and its rows carry no tile key at
+        // all, so this branch would have opened `undefined`.
+        if (root.entryCmd === "main" && !alt && !root.ctxUp) {
             if (rows.count) root.openTile(rows.get(i).key)
             return
         }
-        var src = (i >= 0 && i < rows.count) ? rows.get(i).src : (i + 1)
+        var m = root.focusModel
+        var src = (i >= 0 && i < m.count) ? m.get(i).src : (i + 1)
         // A prompt is waiting: what you typed IS the answer. Same string-step
         // mechanism the search box uses.
         if (root.promptFor.length) {
@@ -1315,14 +1810,25 @@ Window {
         // has something to mark. By `src` -- its index in the unfiltered list --
         // rather than by position: the draw that follows clears the filter, so
         // the row moves, and only src stays put through that.
-        root.lastSrc = src
+        root.lastSrc = (root.ctxUp && root.ctxSubjectSrc > 0) ? root.ctxSubjectSrc : src
         // ...and the cursor is remembered by src for the same reason. rememberPos
         // stored where the row was among the FILTERED ones, so picking the third
         // match of a search put the cursor on the third row of the whole list
         // once the filter cleared -- somewhere you had not been looking at.
-        if (root.filter.length && src > 0) root.positions[posKey()] = src - 1
+        //
+        // Not for a card: `positions` is keyed by the view you are standing in,
+        // and the card is not it. Writing there would move the LIST's cursor to
+        // wherever a verb happened to sit.
+        if (!root.ctxUp && root.filter.length && src > 0) root.positions[posKey()] = src - 1
         // Lua is 1-based, and so are the indices rofi hands back.
-        root.pushHop({step: alt ? {i: src, alt: true} : src})
+        // PROVISIONAL, when this is a card's step or the gesture that opens one.
+        // Shift+Return on a row IS that gesture everywhere it does anything, and
+        // every menu it reaches answers `context`. If one ever does not, applyWhere
+        // adopts the hop into the trail and the result is exactly what pushHop
+        // would have given -- so the wrong guess costs nothing.
+        var hop = {step: alt ? {i: src, alt: true} : src}
+        if (root.ctxUp || alt) root.ctxHops = root.ctxHops.concat([hop])
+        else root.pushHop(hop)
         root.refresh()
     }
     // Hides rather than exits. The engine, the token and every warm cache stay
@@ -1339,60 +1845,32 @@ Window {
     function cancelPrompt() { root.promptFor = ""; root.setFilter("") }
 
     function closeOverlay() {
-        // LEAVING THE IMAGE VIEWER IS AN ARRIVAL. That viewer is the one overlay
-        // that moves the panel -- it centres on the screen and comes back to the
-        // bottom edge -- so dismissing it does not reveal the menu, it brings the
-        // panel back to where the panel lives. Playing the open animation is what
-        // that motion IS: the same expand-and-fade a summon uses, because from
-        // where you are sitting it is the same event.
+        // GIVING UP STOPS THE RECORDER. Nothing used to: the card went away and
+        // songrec kept the audio monitor until it timed out, which is why a
+        // second attempt could find the device busy and why killing spoot left it
+        // running. Sent before the state is cleared, while we still know it was a
+        // listen that is being abandoned.
+        if (root.listenMode) root.call("listen-stop", {})
+        // LEAVING THE IMAGE VIEWER USED TO BE AN ARRIVAL. The viewer moved the
+        // panel -- it centred on the screen and came back to the bottom edge --
+        // so dismissing it did not reveal the menu, it brought the panel home,
+        // and the open animation was replayed to be that journey.
         //
-        // Only this one. A sheet is drawn inside the panel and never moves it, so
-        // closing one is a change of contents and the ordinary flow covers it.
-        //
-        // THE ORDER MATTERS. Clearing artPath re-anchors the panel to the bottom
-        // and resizes it from the card to the menu, and that resize is animated
-        // (see the Behavior on panel height). Animating the open at the same time
-        // plays it on a panel that is still travelling, which reads as a slide
-        // rather than a summon.
-        //
-        // So the panel is blanked, cleared, and animated once it has settled --
-        // the resize happens at zero opacity and is never seen. This was written
-        // for a slower version of the same problem, when the panel WAS the
-        // surface and clearing artPath meant a re-anchor round trip through
-        // Wayland; the delay outlives that because the resize outlives it too.
-        // ...and only for the overlay that actually moved it. The listening card
-        // never left the bottom edge (see root.artCentred), so there is no
-        // journey back for the open animation to be, and replaying it there is a
-        // panel flashing itself for nothing.
-        var wasArt = root.artCentred
-        if (wasArt) {
-            openAnim.stop(); closeAnim.stop()
-            root.collapsing = false
-            root.opened = true
-            root.showFactor = 0
-        }
+        // The viewer draws on the surface now and the panel never leaves the
+        // bottom edge, so there is no journey to play and the whole blank-clear-
+        // reopen dance it needed has gone with it. Closing a viewer is a change
+        // of what is on top and nothing else.
         root.sheet = ""
         root.sheetRows = []
         root.sheetKind = ""
         root.artPath = ""
         root.overlayTheme = ""
-        // AND THE VIEW GOES BACK WHERE IT WAS. The card widened the panel while
-        // it was up, so every column boundary moved and the cursor's row is no
-        // longer where the scroll position says it is -- which reads as a list
-        // showing two half-columns of text. Deferred, because the panel's width
-        // and height are still settling in this same frame.
+        // AND THE VIEW GOES BACK WHERE IT WAS -- for a SHEET, which does still
+        // resize the panel: every column boundary moves with it and the cursor's
+        // row is no longer where the scroll position says it is, which reads as a
+        // list showing two half-columns of text. Deferred, because the panel is
+        // still settling in this same frame.
         Qt.callLater(root.snapToCursor)
-        if (wasArt) reopenDelay.restart()
-    }
-    // Long enough for the compositor to have re-anchored and resized the surface,
-    // short enough to read as one movement rather than two. A guess at a number
-    // the compositor does not report -- but a safe one in the direction that
-    // matters: the panel is invisible until this fires, so being late costs a
-    // few frames of nothing, where being early costs the whole animation.
-    Timer {
-        id: reopenDelay
-        interval: 110
-        onTriggered: openAnim.restart()
     }
 
     // Overlays (art, sheets) arrive as EVENTS, before the response that carries
@@ -1496,6 +1974,7 @@ Window {
         // Leaving the view alone means the next reveal shows exactly where you
         // were, and the stack on disk stays deep for a real cold start.
         if (typeof Shell === "undefined") { Qt.quit(); return }
+        root.closeContext()
         root.opened = false
         root.collapsing = true
         openAnim.stop(); closeAnim.restart()
@@ -1504,12 +1983,46 @@ Window {
     // n=1. Anything we have stood at is restorable exactly; anything else falls
     // back to home rather than guessing.
     function jumpToCrumb(n) {
-        if (n >= root.crumb.length) return          // already there
+        if (n === root.crumb.length) return         // already there
         var pos = root.trailMap[n]
-        // A cursor, not a destination -- so a click behaves exactly like holding
-        // Alt+left that many times, trail and all.
+        // A cursor, not a destination -- so this behaves exactly like holding
+        // Alt+left (or Alt+right) that many times, trail and all.
         if (pos === undefined || pos > root.hops.length) { if (n <= 1) root.goHome(); return }
-        root.rememberPos(); root.trailPos = pos; root.refresh(-1)
+        // FORWARD IS A JUMP TOO. The guard used to refuse anything at or beyond
+        // the current depth, which was right while the only way here was clicking
+        // a step BEHIND you -- the trail menu lists the whole path, the ghosted
+        // part ahead included, and walking forward into it is as valid a move as
+        // walking back.
+        var back = pos < root.trailPos
+        root.rememberPos(); root.closeContext()
+        root.trailPos = pos; root.refresh(back ? -1 : 1)
+    }
+    // THE TRAIL MENU'S ANSWER. It lists the whole path -- which spans roots, and
+    // so exists only as this hop list -- and hands back which step was picked
+    // rather than trying to walk there itself. Its own hop comes off first:
+    // looking at where you have been is not somewhere you went.
+    function jumpTrail(i) {
+        // EVERYTHING FROM THE TRAIL MENU'S OWN ROOT ONWARD comes off -- the hop
+        // that opened it and the step that picked a row in it. Neither is a
+        // place: looking at where you have been is not going anywhere, and the
+        // step is only how the answer got out.
+        //
+        // Walked back to the last root rather than popping one hop: activate()
+        // pushes the step BEFORE this event arrives, so by now there are two.
+        // And read off the hop list rather than root.entryKey, which is a chain
+        // of bindings that has not settled -- an event reaches the UI ahead of
+        // the response that would settle them.
+        for (var k = root.hops.length - 1; k >= 0; k--) {
+            var h = root.hops[k]
+            if (!h || !h.cmd) continue
+            if (h.key === "trail-jump") {
+                root.hops = root.hops.slice(0, k)
+                root.trailPos = Math.min(root.trailPos, root.hops.length)
+                root.fullCrumb = []; root.fullRoots = []
+            }
+            break
+        }
+        root.jumpToCrumb(i + 1)
     }
 
     // JUMPING to Main is a new root like any other: it appends, so Alt+left
@@ -1523,6 +2036,7 @@ Window {
     // CLEARS the trail -- "alt delete / clear session", and the fallback for
     // anything that finds itself without a trail to stand on.
     function goHome() {
+        root.closeContext()
         root.hops = []; root.trailPos = 0
         root.fullCrumb = []; root.fullRoots = []
         root.trailMap = ({})
@@ -1535,15 +2049,28 @@ Window {
         // At Main there is nothing behind. A navigation key does not exit --
         // Escape and Backspace are the ways out.
         if (root.trailPos <= 0) return
-        root.rememberPos(); root.trailPos -= 1; root.refresh(-1)
+        root.rememberPos(); root.closeContext()
+        root.trailPos = root.skipCtx(root.trailPos - 1, -1); root.refresh(-1)
     }
     function trailForward() {
         if (root.trailPos >= root.hops.length) return
-        root.rememberPos(); root.trailPos += 1; root.refresh()
+        root.rememberPos(); root.closeContext()
+        root.trailPos = root.skipCtx(root.trailPos + 1, 1); root.refresh()
     }
-    function setFilter(f) { root.filter = f; root.applyFilter() }
+    // Typed characters go to whichever list is in front. The card's filter is
+    // its own string so that closing it leaves the list behind exactly as wide
+    // as it was -- narrowing a menu of verbs is not narrowing the shelf under it.
+    function setFilter(f) {
+        if (root.ctxUp) { root.ctxFilter = f; root.applyCtxFilter(); return }
+        root.filter = f
+        root.applyFilter()
+    }
+    // ...and the one every caller reads to ask "is anything typed here".
+    readonly property string liveFilter: root.ctxUp ? root.ctxFilter : root.filter
     function activateCurrent(alt) {
-        if (rows.count && body.item) { root.activate(body.item.currentIndex, alt === true); return }
+        if (root.focusModel.count && root.focusItem) {
+            root.activate(root.focusItem.currentIndex, alt === true); return
+        }
         // NO ROWS IS NOT NOTHING TO DO. The search box lists past queries, and on
         // a cache that has none it has no rows at all -- so requiring one under
         // the cursor made Return do nothing there, and the only way to get a
@@ -1559,13 +2086,14 @@ Window {
     // is the only axis that means anything there -- which is also how rofi
     // behaves in a list versus a grid.
     function move(dx, dy) {
-        if (!body.item || rows.count === 0) return
+        var view = root.focusItem
+        if (!view || root.focusModel.count === 0) return
         root.lastManualMove = Date.now()
         // Yours to steer: instant. See RowList.glideMs.
-        if (body.item.glideMs !== undefined) body.item.glideMs = 0
-        var cols = root.columns
-        var n = rows.count
-        var i = body.item.currentIndex + dx + dy * cols
+        if (view.glideMs !== undefined) view.glideMs = 0
+        var cols = root.focusG.columns || 1
+        var n = root.focusModel.count
+        var i = view.currentIndex + dx + dy * cols
         // WRAPS, but only for a single step. Off the bottom comes back to the
         // top and off the top to the bottom, which is what a list of a few rows
         // wants and what holding Down through a long one expects at the end.
@@ -1577,19 +2105,20 @@ Window {
             if (i < 0) i = n - 1
             else if (i >= n) i = 0
         }
-        body.item.currentIndex = Math.max(0, Math.min(n - 1, i))
+        view.currentIndex = Math.max(0, Math.min(n - 1, i))
     }
     // A PAGE, not three rows. `lines` is what the theme says fits on screen, and
     // move() multiplies by the column count itself, so this is one screenful in
     // a list and one in a grid without either being spelled out here.
     function page(dir) {
-        root.move(0, dir * Math.max(1, root.menuG.lines))
+        root.move(0, dir * Math.max(1, root.focusG.lines))
     }
     function moveTo(i) {
         root.lastManualMove = Date.now()
-        if (!body.item) return
-        if (body.item.glideMs !== undefined) body.item.glideMs = 0
-        body.item.currentIndex = (i < 0 ? rows.count - 1 : i)
+        var view = root.focusItem
+        if (!view) return
+        if (view.glideMs !== undefined) view.glideMs = 0
+        view.currentIndex = (i < 0 ? root.focusModel.count - 1 : i)
     }
     function control(action, by) {
         var a = {action: action}
@@ -1617,11 +2146,25 @@ Window {
     // text did -- that is, when the whole menu was rebuilt. It also matched
     // Main's Playback tile, which is LABELLED with what is playing without being
     // it.
+    // WHERE THE PLAYING THING IS IN THIS LIST, if it is here at all.
+    //
+    // Either id, exactly as TileGrid's marker matches either: a grid's rows are
+    // ALBUMS, so the tile that is playing is the one HOLDING the track, and
+    // matching on the track id alone could only ever find a single. That is why
+    // Alt+c in an album grid never noticed it was already looking at the right
+    // menu, fell through to the re-entry branch below, and appended the very
+    // segment it was standing on -- the duplicate.
     function playingRowIndex() {
         var id = root.playback.id || ""
-        if (!id.length) return -1
+        var alb = root.playback.albumId || ""
+        if (!id.length && !alb.length) return -1
         for (var i = 0; i < rows.count; i++) {
-            if (rows.get(i).id === id) return i
+            var rid = rows.get(i).id
+            if (id.length && rid === id) return i
+        }
+        if (!alb.length || root.layout !== "grid") return -1
+        for (var j = 0; j < rows.count; j++) {
+            if (rows.get(j).id === alb) return j
         }
         return -1
     }
@@ -1665,10 +2208,23 @@ Window {
         // because nothing can work it out afterwards. Matching on the album it
         // belongs to was the wrong question: a track played out of Liked or out
         // of a search result belongs to an album you may never have opened.
-        if (root.originId.length && root.originId === (root.playback.id || "")) {
+        // A LIST, NOT A TRACK. This used to require the recorded origin to still
+        // be the playing track, so the moment autoplay moved on -- or you pressed
+        // next -- the answer became "nowhere to jump to", while the list it came
+        // out of was sitting right there on the trail. The next track is playing
+        // from the same place; where you came from does not change because the
+        // song did. originId is still recorded, and is still what a cold start
+        // restores, but it no longer has to match for the jump to be possible.
+        if (root.originPos > 0 || root.originHops.length) {
             root.rememberPos()
             root.seekPlaying = true
             if (root.originOnTrail()) {
+                // ALREADY STANDING THERE. Re-entering costs a duplicate segment
+                // and the only thing that was actually wanted was the cursor,
+                // which cursorToPlaying could not place because the row is not
+                // here yet -- so ask for the menu again rather than for a second
+                // copy of it.
+                if (root.originPos === root.trailPos) { root.refresh(0); return }
                 // Still on this trail: a walk, exactly as Alt+left or Alt+right
                 // would be, and nothing behind or ahead of you is disturbed.
                 var back = root.originPos < root.trailEnd()
@@ -1676,24 +2232,21 @@ Window {
                 root.refresh(back ? -1 : 1)
                 return
             }
-            // GONE FROM THE TRAIL -- branched away from since. The list is
-            // re-entered as a NEW ROOT, rebuilt from the segment that led to it:
-            // its own root hop and the steps taken inside it, so what opens is
-            // that list and not merely something with the same name.
-            var r = -1
-            for (var i = root.originPos - 1; i >= 0; i--) {
-                if (root.originHops[i] && root.originHops[i].cmd) { r = i; break }
-            }
-            if (r >= 0) {
-                var hs = root.activeHops()
-                for (var j = r; j < root.originPos; j++) hs.push(root.originHops[j])
-                root.hops = hs
-                root.trailPos = hs.length
-                root.fullCrumb = []; root.fullRoots = []
-                root.refresh()
-                return
-            }
-            root.seekPlaying = false
+            // GONE FROM THE TRAIL -- branched away from since. THE LAST STEP,
+            // and only that. This used to replay the whole segment that led there
+            // -- the root hop and every step inside it -- so jumping back to a
+            // track played out of an album three levels into an artist rebuilt
+            // the artist, then their albums, then the album, as a fresh journey
+            // nobody asked to walk again.
+            //
+            // The engine records the one scope entry the list IS (see
+            // Util.play_origin_save) and can reopen it standing on nothing, which
+            // is something a hop list cannot express: an album is not a named
+            // view you can name in a hop. So this asks for that entry by name and
+            // gets a single root back.
+            root.pushHop({cmd: "view", key: "origin"})
+            root.refresh()
+            return
         }
         // NEVER PLAYBACK. This key means one thing -- take me to the track -- and
         // Playback is a menu of verbs, not the place the track lives; landing
@@ -1723,15 +2276,30 @@ Window {
         return true
     }
     function deleteEntry() {
-        if (!root.canDelete || !body.item || !rows.count) {
+        if (!root.canDelete || !root.focusItem || !root.focusModel.count) {
             root.notify("Nothing to delete here")
             return
         }
         root.rememberPos()
-        root.pushHop({step: {i: rows.get(body.item.currentIndex).src, del: true}})
+        root.pushHop({step: {i: root.focusModel.get(root.focusItem.currentIndex).src,
+                             del: true}})
         root.refresh()
     }
     function goBack() {
+        // A CARD CLOSES WITHOUT ASKING ANYONE. Its hops were never on the trail,
+        // so dropping the last of them is the whole of it -- and when that was the
+        // last one, the list underneath is still drawn, still scrolled where it
+        // was and still correct, so there is nothing to fetch. Reopening the
+        // parent was the tax the old shape paid: the step had to come off the
+        // trail, and taking a step off the trail means a round trip.
+        if (root.ctxHops.length) {
+            root.ctxHops = root.ctxHops.slice(0, root.ctxHops.length - 1)
+            // Except one card over another, where the card underneath has to be
+            // drawn again -- there is only ever one set of card rows.
+            if (root.ctxHops.length) root.refresh(-1)
+            else root.closeContext()
+            return
+        }
         root.rememberPos()
         // DESTRUCTIVE, unlike trailBack: this removes the step rather than
         // stepping over it, so there is nothing to walk forward into.
@@ -1750,7 +2318,10 @@ Window {
         if (root.trailPos > 0) {
             // May remove a ROOT hop, which lands you on the tip of the segment
             // before it -- the trail reads as one walk, so it unwinds as one.
-            root.hops = root.hops.slice(0, root.trailPos - 1)
+            // ...and it takes the step that opened a card with it, rather than
+            // stopping on one: backing out of the album a track's menu sent you
+            // to returns you to the list, not to the menu.
+            root.hops = root.hops.slice(0, root.skipCtx(root.trailPos - 1, -1))
             root.trailPos = root.hops.length
             root.fullCrumb = []; root.fullRoots = []
             root.refresh(-1)
@@ -1779,6 +2350,18 @@ Window {
     // the same 60fps clock the fill does rather than on the 1Hz poll -- a line
     // lands when it is sung, not up to a second later.
     function syncLyrics() {
+        // ONLY IN THE LYRICS VIEW. This writes straight into body.item.currentIndex,
+        // and body.item is whichever view happens to be loaded -- so a cue landing
+        // a moment after you left drove the TRACK LIST's cursor to whatever line
+        // number the song had reached. Backing out of a song's lyrics dropped you
+        // thirty rows down the list you came from, and the same mechanism ran the
+        // other way: a paused track's cues could walk a list you were reading.
+        //
+        // The cues are cleared on every draw (see applyIdentity), but the fetch
+        // that fills them is asynchronous and the interpolator ticks every 16ms,
+        // so "cleared on leaving" was never a guarantee. The scope is: it is the
+        // engine's word for which view this is.
+        if (root.scope !== "lyrics") return
         if (!root.lyricTimes.length) return
         // Only for the track the cues belong to: skipping to the next song must
         // not leave the previous song's lines marching along.
@@ -1872,14 +2455,16 @@ Window {
             model: rows
             flashSrc: root.flashSrc
             flashSeq: root.flashSeq
-            playingId: root.playback.id || ""
-            playingAlbumId: root.playback.albumId || ""
+            playingId: root.liveId
+            playingAlbumId: root.liveAlbumId
+            lastId: root.lastId
+            lastAlbumId: root.lastAlbumId
             paused: root.playback.playing !== true
             columns: root.columns
-            // NOT while composing: there the typing is a query, and applyFilter
-            // deliberately leaves the rows alone, so there is nothing on screen
-            // that matched it.
-            filter: root.composing ? "" : root.filter
+            // Marked wherever the rows were narrowed -- root.narrows is the one
+            // predicate both halves read, so a row can never be kept by a match
+            // that is then not shown.
+            filter: root.narrows ? root.filter : ""
             focus: false
         }
     }
@@ -1894,15 +2479,15 @@ Window {
             copiedSrc: root.copiedSrc
             flashSrc: root.flashSrc
             flashSeq: root.flashSeq
-            playingId: root.playback.id || ""
+            playingId: root.liveId
+            lastId: root.lastId
             paused: root.playback.playing !== true
             // Per-theme, with ZENON's defaults where a theme says nothing.
             centered: root.menuG.center === true
             rowSize: root.menuG.rowSize || zenon.fontSize
             rowWeight: root.menuG.rowWeight || zenon.fontWeight
-            // See TileGrid above: the search box and the name prompts type a
-            // QUERY, and nothing in the list behind them matched it.
-            filter: root.composing ? "" : root.filter
+            // See TileGrid above: one predicate for narrowing and for marking.
+            filter: root.narrows ? root.filter : ""
             focus: false
         }
     }
@@ -1932,6 +2517,20 @@ Window {
         anchors.fill: parent
         acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
         onClicked: function (m) {
+            // A CARD IS ITS OWN EDGE. With a context menu up, everything outside
+            // the card is "away" -- the list showing around it included -- and one
+            // click there closes the card rather than the app, which is what a
+            // context menu does everywhere else. Checked first, because the panel
+            // test below would let a click on the list fall straight through.
+            // With the panel hidden there is no shape to be outside OF, so any
+            // click is a click away from the listener -- which is a cancel.
+            if (root.listenMode) { root.closeOverlay(); return }
+            if (root.ctxUp) {
+                var c = outside.mapToItem(ctxCard, m.x, m.y)
+                if (c.x < 0 || c.y < 0 || c.x > ctxCard.width || c.y > ctxCard.height)
+                    root.goBack()
+                return
+            }
             var p = outside.mapToItem(panel, m.x, m.y)
             if (p.x < 0 || p.y < 0 || p.x > panel.width || p.y > panel.height)
                 root.dismiss()
@@ -1943,21 +2542,15 @@ Window {
         // A structured sheet sizes the panel to ITSELF; every other view takes
         // the width its theme declares. Clamped to the screen so a pathological
         // value cannot push it off.
-        // The image viewer widens it to whatever the picture needs, because the
-        // picture is a fixed size and the panel is not: art.rasi says the window
-        // is 1000 and the icon is 1000, which cannot both be true once the frame
-        // around it is drawn. The frame is what gives, and the panel grows by it.
+        // THE IMAGE VIEWER NO LONGER TOUCHES IT. It used to widen and re-centre
+        // the panel so the panel could be the picture's frame -- which is the
+        // black box that showed behind every cover. The viewer draws its own
+        // card on the surface now (see the art viewer, below the panel), and the
+        // panel just sits there being the menu.
         width: root.sheetRows.length
                ? Math.min(keySheet.naturalWidth + zenon.sheetPad * 2, Screen.width - 80)
-               : root.artPath.length
-                 ? Math.min(Screen.width - 40, artCard.width + zenon.borderWidth * 2)
-                 : root.g.width
-        // A sheet is still a panel and sizes to itself. The art viewer is a card
-        // ON the menu, so the panel only has to grow enough to hold it -- and
-        // when the menu is already taller, it does not grow at all.
-        height: root.artPath.length
-                ? Math.max(root.menuHeight, artCard.height + zenon.messagePadV * 4)
-                : (root.overlayUp ? root.bodyHeight + zenon.borderWidth : root.menuHeight)
+               : root.g.width
+        height: root.overlayUp ? root.bodyHeight + zenon.borderWidth : root.menuHeight
         // IT RESIZES SMOOTHLY between menus of different heights. It used to
         // snap, at the instant the held draw was applied -- which is invisible
         // going to a TALLER menu, because the panel grows into space that was
@@ -1973,11 +2566,11 @@ Window {
         // reach for. Both are plain anchors now; this used to be a call into the
         // host asking the compositor to re-anchor the SURFACE, which took long
         // enough that the exit animation played before it landed.
-        // artCentred, not artPath: the listening card is an image overlay too and
-        // sizes the panel like one, but it does not MOVE it. See root.artCentred.
+        // ...and it is docked south, always. The image viewer used to move it to
+        // the middle of the output and back; it has its own card now and the
+        // panel stays where every view lives.
         anchors.horizontalCenter: parent.horizontalCenter
-        anchors.verticalCenter: root.artCentred ? parent.verticalCenter : undefined
-        anchors.bottom: root.artCentred ? undefined : parent.bottom
+        anchors.bottom: parent.bottom
         // Anchored south, so the edge it is attached to is the edge it grows
         // out of and folds back into. Scale rather than `scale:` because the two
         // axes move by different amounts on the way out -- see panelX/panelY.
@@ -1987,7 +2580,70 @@ Window {
             xScale: root.panelX
             yScale: root.panelY
         }
-        opacity: root.showFactor
+        // NOTHING BEHIND THE LISTENER. The card is a small thing working away on
+        // its own; the menu it happened to be summoned over is not part of what it
+        // is doing, and leaving it there is the "stuff behind it". The panel is
+        // still THERE -- it comes straight back when the listen ends, with its
+        // rows, its scroll and its cursor untouched -- it is simply not drawn.
+        opacity: root.showFactor * (root.listenMode ? 0 : 1)
+        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        // --- the shadow ---------------------------------------------------------
+        // FIRST, so everything else is drawn over it, and a CHILD of the panel so
+        // it inherits the opening scale and the fade rather than carrying a second
+        // copy of both -- see the Scale transform above, which this rides along
+        // with for free.
+        //
+        // Its own shape rather than a layer over the panel: layering would render
+        // the entire menu into an off-screen texture on every frame the progress
+        // bar advances, and take the text's subpixel rendering with it. A shadow
+        // needs the OUTLINE and nothing else.
+        //
+        // It reaches under the panel as well as around it, and the panel's 80%
+        // ground lets that through -- which at this alpha is a few percent of
+        // extra darkness behind a translucent panel. Cutting a hole for it would
+        // cost a second mask texture to remove something nobody can see.
+        // See Theme's shadow tokens for why this is a grown shape and not just a
+        // wide blur. The shape is inflated by `shadowGrow` and pushed down by
+        // `shadowDrop`; the blur then softens an edge that is already OUTSIDE the
+        // object, which is what a shadow is. The capture is padded by all three so
+        // the blur has somewhere to go -- clipped, it comes out as a hard rectangle.
+        Item {
+            anchors.fill: parent
+            anchors.margins: -zenon.shadowPad
+            visible: parent.visible
+            Rectangle {
+                id: panelShadowShape
+                anchors.fill: parent
+                anchors.margins: zenon.shadowPad - zenon.shadowGrow
+                anchors.topMargin: zenon.shadowPad - zenon.shadowGrow + zenon.shadowDrop
+                anchors.bottomMargin: zenon.shadowPad - zenon.shadowGrow - zenon.shadowDrop
+                // The corner grows with the shape, or an inflated rectangle would have
+                // sharper corners than the thing casting it.
+                radius: zenon.radius + zenon.shadowGrow
+                color: "black"
+            }
+            ShaderEffectSource {
+                id: panelShadowShot
+                anchors.fill: parent
+                sourceItem: panelShadowShape
+                sourceRect: Qt.rect(-(zenon.shadowPad - zenon.shadowGrow),
+                                    -(zenon.shadowPad - zenon.shadowGrow),
+                                    panelShadowShape.width + (zenon.shadowPad - zenon.shadowGrow) * 2,
+                                    panelShadowShape.height + (zenon.shadowPad - zenon.shadowGrow) * 2)
+                hideSource: true
+                live: true
+                visible: false
+            }
+            MultiEffect {
+                anchors.fill: parent
+                source: panelShadowShot
+                blurEnabled: true
+                blur: 1.0
+                blurMax: zenon.shadowBlur
+                autoPaddingEnabled: false
+                opacity: zenon.shadowAlpha
+            }
+        }
         // --- the panel (ZENON `window`) -----------------------------------------
         Rectangle {
             anchors.fill: parent
@@ -2234,10 +2890,17 @@ Window {
             Item {
             id: bodyArea
             width: parent.width
-            height: root.bodyHeight
+            // The card's room lives HERE, around the menu rather than in it.
+            height: root.bodyHeight + root.ctxExtra
 
             Row {
-                anchors.fill: parent
+                id: bodyRow
+                // Its own height, centred in whatever bodyArea has become. Filling
+                // the parent would hand the extra room to the list, which is the
+                // one thing that must not change size.
+                width: parent.width
+                height: root.bodyHeight
+                anchors.verticalCenter: parent.verticalCenter
                 spacing: 0
                 // The menu transition. The chrome around it deliberately holds
                 // still: only what CHANGED between the two menus moves.
@@ -2270,11 +2933,31 @@ Window {
                     readonly property bool wanted:
                         root.coverArt.length > 0 && root.layout === "list"
                         && !root.noCover
+                        // ...and never behind the listener. That card floats over
+                        // the menu with only a scrim between them, and a square
+                        // crop of the playing track's cover peering out from
+                        // behind it is the "clipped albumart" -- a picture of
+                        // something entirely unrelated to what spoot is doing.
+                        // The rows stay, dimmed, so you can still see you have
+                        // not gone anywhere.
+                        && !root.listenMode
                         && root.themeName !== "trail" && root.themeName !== "search"
                         && root.scope !== "system" && root.scope !== "lyrics"
                     width: wanted ? root.bodyHeight : 0
                     height: root.bodyHeight
-                    visible: width > 0
+                    visible: opacity > 0
+                    // IT ARRIVES RATHER THAN APPEARING. The two images below
+                    // already cross-fade one cover into the next; this is the
+                    // other case -- a cover appearing where there was none, which
+                    // is every track played from a list that had no backdrop, and
+                    // now also every cold cover the poll has just warmed. Without
+                    // it the picture was simply there on the next frame.
+                    //
+                    // Opacity only. The WIDTH stays instant on purpose (see
+                    // below): easing that drags the whole list sideways, which is
+                    // motion the rows did not ask for.
+                    opacity: wanted ? 1 : 0
+                    Behavior on opacity { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
                     // TWO IMAGES, so one cover can give way to the next instead
                     // of blinking out and back. The lower one holds whatever is
                     // already on screen; the upper one loads the new cover behind
@@ -2307,9 +2990,34 @@ Window {
                         // is the other way gaps appear.
                         fillMode: Image.PreserveAspectCrop
                         clip: true
-                        opacity: status === Image.Ready ? 1 : 0
-                        Behavior on opacity { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
-                        onStatusChanged: if (status === Image.Ready) coverUnder.source = source
+                        // THE CROSS-FADE, which never once happened.
+                        //
+                        // The intent was always right: the underlay holds the
+                        // cover you can see, the top one loads the next behind it
+                        // at zero opacity and fades up, and only then does the
+                        // underlay adopt it. What the code did was hand the
+                        // underlay the new source THE MOMENT the top was ready --
+                        // the same instant its opacity flipped to 1 -- so the top
+                        // spent 260ms fading up over an image identical to itself
+                        // and the picture changed instantly underneath. A fade
+                        // was running; there was simply nothing left to fade.
+                        //
+                        // Three pieces now, in order: blanked when the source
+                        // changes so the loading frame cannot hide the old cover,
+                        // animated up once the new one is decoded, and handed
+                        // down to the underlay only when the animation FINISHES.
+                        opacity: 0
+                        onSourceChanged: { coverFade.stop(); coverTop.opacity = 0 }
+                        onStatusChanged: if (status === Image.Ready) coverFade.restart()
+                        NumberAnimation {
+                            id: coverFade
+                            target: coverTop
+                            property: "opacity"
+                            from: 0; to: 1
+                            duration: 420
+                            easing.type: Easing.InOutSine
+                            onFinished: coverUnder.source = coverTop.source
+                        }
                     }
                     // NO ANIMATION ON THE WIDTH. A cover appearing or going is a
                     // change to the width of everything beside it, so easing it
@@ -2390,6 +3098,182 @@ Window {
                     }
                 }
             }
+
+            // --- THE CONTEXT MENU -------------------------------------------------
+            // An action menu drawn ON the list it is about instead of in place of
+            // it. Last in bodyArea, so it is over everything in it -- and INSIDE
+            // bodyArea rather than over the whole panel, so the breadcrumb above and
+            // the now-playing strip below stay readable. The card is about a row,
+            // not about the app.
+            Item {
+                id: ctxLayer
+                anchors.fill: parent
+                opacity: root.ctxUp ? 1 : 0
+                visible: opacity > 0
+                Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+                // THE MENU BEHIND, BLURRED. A scrim alone dims the list but leaves
+                // every row of it sharp and competing for the eye; blurring says
+                // "this is still here, and it is not what you are reading" without
+                // hiding what the card is about.
+                //
+                // Done in the scene, not by the compositor. spoot is ONE
+                // wlr-layer-shell surface, so there is no second window for
+                // Hyprland to blur behind -- the thing to blur is part of the same
+                // surface as the thing blurring it.
+                //
+                // bodyRow, not bodyArea: bodyArea contains this layer, and a
+                // snapshot that includes its own output is a feedback loop.
+                // THE ROW'S GEOMETRY, spelled out rather than anchored to. The
+                // row lives in bodyArea and this lives in the layer OVER bodyArea,
+                // so it is an uncle, not a sibling -- and `anchors.fill: bodyRow`
+                // is silently refused, leaving both of these sized zero and the
+                // blur simply absent. It has to be stated: bodyArea is taller than
+                // the row whenever a card needs the room, and a snapshot stretched
+                // over a bigger box would be a smeared menu.
+                ShaderEffectSource {
+                    id: bodyShot
+                    x: 0
+                    y: (parent.height - root.bodyHeight) / 2
+                    width: parent.width
+                    height: root.bodyHeight
+                    sourceItem: bodyRow
+                    live: true
+                    hideSource: false
+                    visible: false
+                }
+                MultiEffect {
+                    x: bodyShot.x; y: bodyShot.y
+                    width: bodyShot.width; height: bodyShot.height
+                    source: bodyShot
+                    blurEnabled: true
+                    blur: 1.0
+                    blurMax: 40
+                    autoPaddingEnabled: false
+                }
+                // ...and darkened over the blur, because a blurred dark list is
+                // still a dark list and the card needs somewhere to sit. Lighter
+                // than the art viewer's 0.62: that scrim hides a menu behind a
+                // picture, and this one only has to push one back.
+                Rectangle {
+                    x: bodyShot.x; y: bodyShot.y
+                    width: bodyShot.width; height: bodyShot.height
+                    color: Qt.rgba(0, 0, 0, 0.45)
+                }
+
+                // The card's own, by the same rule and for the same reason --
+                // and this is the one no compositor could ever draw, because the
+                // thing it has to sit on is inside the same surface.
+                // See Theme's shadow tokens for why this is a grown shape and not just a
+                // wide blur. The shape is inflated by `shadowGrow` and pushed down by
+                // `shadowDrop`; the blur then softens an edge that is already OUTSIDE the
+                // object, which is what a shadow is. The capture is padded by all three so
+                // the blur has somewhere to go -- clipped, it comes out as a hard rectangle.
+                Item {
+                    anchors.fill: ctxCard
+                    anchors.margins: -zenon.shadowPad
+                    visible: ctxCard.visible
+                    Rectangle {
+                        id: ctxShadowShape
+                        anchors.fill: parent
+                        anchors.margins: zenon.shadowPad - zenon.shadowGrow
+                        anchors.topMargin: zenon.shadowPad - zenon.shadowGrow + zenon.shadowDrop
+                        anchors.bottomMargin: zenon.shadowPad - zenon.shadowGrow - zenon.shadowDrop
+                        // The corner grows with the shape, or an inflated rectangle would have
+                        // sharper corners than the thing casting it.
+                        radius: zenon.radius + zenon.shadowGrow
+                        color: "black"
+                    }
+                    ShaderEffectSource {
+                        id: ctxShadowShot
+                        anchors.fill: parent
+                        sourceItem: ctxShadowShape
+                        sourceRect: Qt.rect(-(zenon.shadowPad - zenon.shadowGrow),
+                                            -(zenon.shadowPad - zenon.shadowGrow),
+                                            ctxShadowShape.width + (zenon.shadowPad - zenon.shadowGrow) * 2,
+                                            ctxShadowShape.height + (zenon.shadowPad - zenon.shadowGrow) * 2)
+                        hideSource: true
+                        live: true
+                        visible: false
+                    }
+                    MultiEffect {
+                        anchors.fill: parent
+                        source: ctxShadowShot
+                        blurEnabled: true
+                        blur: 1.0
+                        blurMax: zenon.shadowBlur
+                        autoPaddingEnabled: false
+                        opacity: zenon.shadowAlpha
+                    }
+                }
+                Rectangle {
+                    id: ctxCard
+                    // CENTRED, on the body and everything in it -- the backdrop
+                    // included. Shifting the card off-centre to clear the cover
+                    // was tried and is worse: a context menu belongs in the middle
+                    // of what it is over, and the blur behind it already separates
+                    // the two.
+                    anchors.centerIn: parent
+                    width: root.ctxCardWidth
+                    height: root.ctxCardHeight
+                    radius: zenon.radius
+                    color: zenon.ground
+                    border.width: zenon.borderWidth
+                    border.color: zenon.borderCol
+                    // It comes UP rather than appearing -- the panel's own gesture,
+                    // at the scale of a card.
+                    scale: root.ctxUp ? 1 : 0.96
+                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+                    // WHAT THE MENU IS ABOUT, and what you have typed into it. The
+                    // panel's message bar cannot say either: it is still describing
+                    // the menu underneath. So the card carries its own, in the same
+                    // two shapes -- the caption, or the query and its match count.
+                    Text {
+                        id: ctxCaption
+                        anchors { top: parent.top; left: parent.left; right: parent.right
+                                  topMargin: zenon.messagePadV * 2
+                                  leftMargin: zenon.rowPadH; rightMargin: zenon.rowPadH }
+                        height: zenon.rowHeight
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                        text: root.ctxFilter.length
+                              ? (root.ctxFilter + "  \u2500  " + ctxRows.count)
+                              : root.ctxMesg
+                        color: zenon.playing
+                        font { family: zenon.fontFamily; pointSize: zenon.fontSize; bold: true }
+                    }
+                    RowList {
+                        id: ctxList
+                        anchors { top: ctxCaption.bottom; left: parent.left
+                                  right: parent.right; bottom: parent.bottom
+                                  bottomMargin: zenon.messagePadV * 2 }
+                        theme: zenon
+                        model: ctxRows
+                        // A card is one column, always: every action menu the engine
+                        // marks `context` reports layout=list.
+                        columns: 1
+                        rowHeight: zenon.rowHeight
+                        copiedSrc: root.copiedSrc
+                        flashSrc: root.ctxFlashSrc
+                        flashSeq: root.ctxFlashSeq
+                        playingId: root.liveId
+                        paused: root.playback.playing !== true
+                        // Straight from the theme the menu named, exactly as the body
+                        // reads its own. Both themes an action menu can draw with --
+                        // "action" and "sub" -- already say center: true, so the rows
+                        // centre without a second rule being written for cards.
+                        centered: root.ctxG.center === true
+                        rowSize: root.ctxG.rowSize || zenon.fontSize
+                        rowWeight: root.ctxG.rowWeight || zenon.fontWeight
+                        filter: root.ctxFilter
+                        // See the body Loader: a focused view eats every key press
+                        // and the keymap never runs.
+                        focus: false
+                    }
+                }
+            }
             }
 
             // --- notification -----------------------------------------------------
@@ -2448,7 +3332,13 @@ Window {
                     var glyph = p.playing ? zenon.glyphPlay : zenon.glyphPause
                     return glyph + p.name + (p.artists ? zenon.sep + p.artists : "")
                 }
-                height: active ? zenon.nowBarHeight : 0
+                // NOT WHILE LISTENING. The card floating above the panel is the
+                // only thing spoot is doing at that moment, and a strip naming
+                // whatever happens to be playing underneath answers a question
+                // nobody asked -- the listener is about a track that is NOT that
+                // one. Collapsed rather than hidden, so the panel closes the gap
+                // instead of leaving a band of nothing.
+                height: (active && !root.listenMode) ? zenon.nowBarHeight : 0
                 visible: height > 0
                 clip: true
                 Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
@@ -2580,113 +3470,215 @@ Window {
             }
         }
 
-        // --- art viewer ----------------------------------------------------------
-        // A CARD OVER THE MENU, not a panel instead of it. It used to fill the
-        // whole surface and paint the menu out, so opening a cover meant leaving
-        // wherever you were; now the menu stays where it is, dimmed, and the
-        // picture floats in the middle of it. Backing out of one puts you
-        // straight back into a view that never went anywhere.
-        Item {
-            anchors.fill: parent
-            visible: opacity > 0
-            opacity: root.artPath.length ? 1 : 0
-            Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
-            // The menu is still there, just behind. Dark enough that the picture
-            // is what you are looking at, light enough that you can see you have
-            // not gone anywhere.
-            Rectangle { anchors.fill: parent; color: Qt.rgba(0, 0, 0, 0.62) }
+    }
 
-            Rectangle {
-                id: artCard
-                anchors.centerIn: parent
-                width: artImage.width + zenon.messagePadV * 2
-                height: artCap.implicitHeight + artImage.height + zenon.messagePadV * 3
-                color: zenon.ground
-                radius: zenon.radius
-                border.width: zenon.borderWidth
-                border.color: zenon.borderCol
-                clip: true
+    // --- art viewer ----------------------------------------------------------
+    // A CARD OVER THE MENU, not a panel instead of it. It used to fill the
+    // whole surface and paint the menu out, so opening a cover meant leaving
+    // wherever you were; now the menu stays where it is, dimmed, and the
+    // picture floats in the middle of it. Backing out of one puts you
+    // straight back into a view that never went anywhere.
+    Item {
+        // ON THE SURFACE, not inside the panel. The comment above has said "a
+        // card over the menu" since it was written, and the code did not do it:
+        // the PANEL was resized and re-centred to become the card's frame, so
+        // its ground painted a second black box behind every picture and its
+        // bottom-squaring strip -- which exists because ZENON rounds only the
+        // top pair of corners on a menu docked south -- drew square corners
+        // under the card's round ones. One cause, both complaints.
+        //
+        // Out here the panel is left entirely alone: it keeps its shape, keeps
+        // its place, and is simply dimmed behind the picture, which is what the
+        // scrim below was always for.
+        anchors.fill: parent
+        visible: opacity > 0
+        // Fades with the app as well as with itself, which it used to get for
+        // free by being the panel's child.
+        opacity: (root.artPath.length ? 1 : 0) * root.showFactor
+        Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
-                // LISTENING rings. Only while songrec is running -- the same card
-                // otherwise shows a still cover, which should not pulse. Three
-                // circles expanding and fading on a stagger, so the window says
-                // "receiving" rather than "frozen" during a thirty-second wait.
-                Repeater {
-                    model: root.overlayTheme === "listen" ? 3 : 0
-                    delegate: Rectangle {
-                        anchors.centerIn: parent
-                        property real phase: 0
-                        width: (root.g.icon || 300) * (0.55 + phase * 0.85)
-                        height: width
-                        radius: width / 2
-                        color: "transparent"
-                        border.width: 2
-                        border.color: zenon.playing
-                        opacity: (1 - phase) * 0.45
-                        SequentialAnimation on phase {
-                            loops: Animation.Infinite
-                            running: root.overlayTheme === "listen"
-                            // Staggered so the rings chase each other outward
-                            // instead of pulsing as one thick band.
-                            PauseAnimation { duration: index * 600 }
-                            NumberAnimation { from: 0; to: 1; duration: 1800
-                                              easing.type: Easing.OutCubic }
-                        }
-                    }
-                }
+        // The menu is still there, just behind. Dark enough that the picture
+        // is what you are looking at, light enough that you can see you have
+        // not gone anywhere.
+        //
+        // A SCRIM STOOD HERE, dimming the whole output behind the card. It went
+        // for the listener first -- a small thing working away in a corner has no
+        // business blacking out the machine -- and then for the image viewer too,
+        // for the same reason: spoot is a panel on your desktop, not something
+        // that takes the desktop over while you look at a cover. Both cards carry
+        // their own ground and their own shadow, which is enough to sit on.
 
-                // THE CAPTION SITS ABOVE THE PICTURE, as it did in rofi: art.rasi
-                // and imp.rasi both order their mainbox [message, listview].
-                Text {
-                    id: artCap
-                    anchors { top: parent.top; horizontalCenter: parent.horizontalCenter
-                              topMargin: zenon.messagePadV }
-                    width: parent.width - zenon.messagePadH
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    text: root.artMesg
-                    color: zenon.foreground
-                    font.family: zenon.fontFamily
-                    // art.rasi and imp.rasi say Bold 12; listen.rasi says 13.
-                    font.pointSize: root.overlayTheme === "listen"
-                                    ? zenon.listenCapSize : zenon.fontSize
-                    font.bold: true
-                }
-                Image {
-                    id: artImage
-                    anchors { top: artCap.bottom; topMargin: zenon.messagePadV
-                              horizontalCenter: parent.horizontalCenter }
-                    // EXACTLY the size the theme names -- art.rasi 1000,
-                    // imp.rasi 640, listen.rasi 300 -- as a square, both sides.
-                    // Not fitted to the window: the WINDOW is what gives way,
-                    // widening to hold the picture and its frame (see root.width).
-                    width: root.g.icon || 400
+        Rectangle {
+            id: artCard
+            // A PICTURE IS LOOKED AT; A LISTENER IS WAITED ON. The image viewer
+            // takes the middle of the output, where a thing you are studying
+            // belongs. The listener is a small card you glance at while it works,
+            // so it sits over the bottom edge where every other view lives --
+            // lifted clear of it, floating rather than docked.
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: root.artIsListen ? undefined : parent.verticalCenter
+            anchors.bottom: root.artIsListen ? parent.bottom : undefined
+            anchors.bottomMargin: root.artIsListen ? zenon.listenLift : 0
+            // ROOM AROUND THE PICTURE, so the corners can actually be round. This
+            // carried a 300px image in a 310px box: the image's own square corners
+            // sat exactly where the card's rounded ones are, and `clip` is a
+            // bounding-box clip, so what you got was a square. A listener is a
+            // glyph rather than artwork and can afford the margin.
+            readonly property int pad: root.artPad
+            // Restored after a cleanup regex ate them: both lines carry a `+`,
+            // and the pattern removing some throwaway logging above was greedy
+            // enough to take every continuation line that had one. The card has
+            // been sized 0x0 ever since, which is why neither the image viewer
+            // nor the listener drew anything at all.
+            width: artImage.width + pad * 2
+            height: pad * 2 + artImage.height + zenon.messagePadV
+                    + artCap.implicitHeight
+            // The listener is a card; the viewer is a picture. See artPad.
+            color: root.artIsListen ? zenon.ground : "transparent"
+            radius: root.artIsListen ? zenon.radius : 0
+            border.width: root.artIsListen ? zenon.borderWidth : 0
+            border.color: zenon.borderCol
+            clip: true
+
+            // LISTENING rings. Only while songrec is running -- the same card
+            // otherwise shows a still cover, which should not pulse. Three
+            // circles expanding and fading on a stagger, so the window says
+            // "receiving" rather than "frozen" during a thirty-second wait.
+            Repeater {
+                model: root.overlayTheme === "listen" ? 3 : 0
+                delegate: Rectangle {
+                    anchors.centerIn: parent
+                    property real phase: 0
+                    // root.artIcon, not root.g.icon: g falls back to the MENU's
+                    // geometry the moment overlayTheme clears, so the rings were
+                    // sized off a different picture than the one they ring.
+                    width: root.artIcon * (0.55 + phase * 0.85)
                     height: width
-                    source: zenon.fileUrl(root.artPath)
-                    asynchronous: true
-                    cache: false        // a viewer shows one image; caching wastes memory
-                    // CROP, not fit. An album cover is square and either does the
-                    // same thing; an artist photo is not, and fitting one inside
-                    // a square box leaves the band of dead space under it that
-                    // made the bottom of an artist image look misshapen. Cropping
-                    // fills the square the theme asked for.
-                    clip: true
-                    fillMode: Image.PreserveAspectCrop
-                    smooth: true
-                    opacity: status === Image.Ready ? 1 : 0
-                    Behavior on opacity { NumberAnimation { duration: 160 } }
-                    // A slow breath while listening, so the icon is alive too.
-                    SequentialAnimation on scale {
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 2
+                    border.color: zenon.playing
+                    opacity: (1 - phase) * 0.45
+                    SequentialAnimation on phase {
                         loops: Animation.Infinite
                         running: root.overlayTheme === "listen"
-                        NumberAnimation { from: 1.0; to: 1.06; duration: 900; easing.type: Easing.InOutSine }
-                        NumberAnimation { from: 1.06; to: 1.0; duration: 900; easing.type: Easing.InOutSine }
+                        // Staggered so the rings chase each other outward
+                        // instead of pulsing as one thick band.
+                        PauseAnimation { duration: index * 600 }
+                        NumberAnimation { from: 0; to: 1; duration: 1800
+                                          easing.type: Easing.OutCubic }
                     }
                 }
             }
-        }
 
+            // THE CAPTION SITS ABOVE THE PICTURE, as it did in rofi: art.rasi
+            // and imp.rasi both order their mainbox [message, listview].
+            //
+            // ...and UNDER it while listening, where it belongs: above a cover the
+            // words name the thing, under a spinner they are its status.
+            Text {
+                id: artCap
+                anchors {
+                    top: root.artIsListen ? artImage.bottom : parent.top
+                    // Against the CARD it is the card's padding; against the
+                    // picture it is the gap between the two. Both arrangements
+                    // then come to the same height: pad, caption, gap, picture,
+                    // pad -- in whichever order.
+                    topMargin: root.artIsListen ? zenon.messagePadV : artCard.pad
+                    horizontalCenter: parent.horizontalCenter
+                }
+                width: parent.width - zenon.messagePadH
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+                text: root.artMesg
+                // GREEN AND BREATHING, because it is not a label -- it is spoot
+                // saying it is still working. The rings behind the icon say the
+                // same thing; this says it in words, on the same beat.
+                color: root.listenMode ? zenon.playing : zenon.foreground
+                SequentialAnimation on opacity {
+                    loops: Animation.Infinite
+                    running: root.listenMode
+                    NumberAnimation { from: 0.45; to: 1.0; duration: 900
+                                      easing.type: Easing.InOutSine }
+                    NumberAnimation { from: 1.0; to: 0.45; duration: 900
+                                      easing.type: Easing.InOutSine }
+                }
+                font.family: zenon.fontFamily
+                // art.rasi and imp.rasi say Bold 12; listen.rasi says 13.
+                font.pointSize: root.overlayTheme === "listen"
+                                ? zenon.listenCapSize : zenon.fontSize
+                font.bold: true
+            }
+            Image {
+                id: artImage
+                // ...and the picture moves with it: first while listening, second
+                // everywhere else.
+                anchors {
+                    top: root.artIsListen ? parent.top : artCap.bottom
+                    topMargin: root.artIsListen ? artCard.pad : zenon.messagePadV
+                    horizontalCenter: parent.horizontalCenter
+                }
+                // EXACTLY the size the theme names -- art.rasi 1000,
+                // imp.rasi 640, listen.rasi 300 -- as a square, both sides.
+                // Not fitted to the window: the WINDOW is what gives way,
+                // widening to hold the picture and its frame (see root.width).
+                width: root.artIcon
+                height: width
+                source: zenon.fileUrl(root.artPath)
+                asynchronous: true
+                cache: false        // a viewer shows one image; caching wastes memory
+                // CROP, not fit. An album cover is square and either does the
+                // same thing; an artist photo is not, and fitting one inside
+                // a square box leaves the band of dead space under it that
+                // made the bottom of an artist image look misshapen. Cropping
+                // fills the square the theme asked for.
+                clip: true
+                fillMode: Image.PreserveAspectCrop
+                smooth: true
+                opacity: status === Image.Ready ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 160 } }
+                // A slow breath while listening, so the icon is alive too.
+                SequentialAnimation on scale {
+                    loops: Animation.Infinite
+                    running: root.overlayTheme === "listen"
+                    NumberAnimation { from: 1.0; to: 1.06; duration: 900; easing.type: Easing.InOutSine }
+                    NumberAnimation { from: 1.06; to: 1.0; duration: 900; easing.type: Easing.InOutSine }
+                }
+            }
+        }
+    }
+
+    // ASKING HOW IT IS GOING. The engine no longer sits in a loop waiting for
+    // songrec -- it starts it, and answers "still listening" until there is
+    // something to say (see Util.listen_poll). This is the asking, and it only
+    // runs while the card is actually up.
+    //
+    // That loop is what used to lock spoot out entirely: thirty seconds during
+    // which no request was read, the loading glow breathed forever because the
+    // draw it was waiting on could not arrive, and killing the process left
+    // songrec holding the audio monitor.
+    Timer {
+        id: listenPoll
+        interval: 400
+        repeat: true
+        running: root.listenMode
+        onTriggered: root.call("listen-poll", {}, function (r) {
+            if (!r || r.state === "listening") return
+            // Whatever it says, the card is done.
+            root.closeOverlay()
+            if (r.state === "match") {
+                // THE IDENTIFIED TRACK, as its own action menu -- a card over
+                // whatever you were on, costing no trail step, which is what
+                // "jump to it" can mean now that an action menu is an overlay.
+                root.ctxHops = [{cmd: "view", key: "listen-result"}]
+                root.refresh()
+            }
+            else if (r.state === "notfound") {
+                root.notify("Not on Spotify \u2014 " + (r.label || ""))
+            }
+            else if (r.state === "none") root.notify("No match")
+        })
     }
 
     // --- keys ----------------------------------------------------------------

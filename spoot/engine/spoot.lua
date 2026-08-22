@@ -63,6 +63,12 @@ local P = {
     -- not move its head, so past this the re-page happens regardless of what the
     -- fingerprint says. This is the number that used to be P.ttl.
     ttl_lib_max = 43200,
+    -- HOW LONG A KNOWINGLY STALE ANSWER IS HELD IN MEMORY. Seconds, not minutes:
+    -- it only has to outlive the redraws immediately in front of it while the
+    -- refresh it just triggered finishes. See cached_fetch's revalidate branch,
+    -- which used to re-arm the FULL ttl on the copy it had that instant decided
+    -- was out of date.
+    ttl_stale = 20,
     ttl_lyrics = 7 * 24 * 3600,  -- 1 week
     spotify   = "d420a117a32841c2b3474932e49fb54b"
 }
@@ -1503,7 +1509,19 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn, opts)
         if opts.revalidate then
             v = disk_get(disk_path)
             if v ~= nil then
-                mem_set(key, v, ttl)
+                -- A SHORT LEASE ON AN ANSWER WE KNOW IS OLD. This used to re-arm
+                -- the full fifteen minutes on the very copy it had just judged
+                -- out of date -- so the refresh spawned on the next line could
+                -- not reach the process that asked for it. The child wrote the
+                -- fresh list to disk in a second or two and the running engine
+                -- went on serving the stale one from memory until its lease ran
+                -- out, which is why a like made on your phone showed up on the
+                -- next COLD START rather than the next time you opened the shelf.
+                --
+                -- Twenty seconds is enough to keep the redraws in front of it off
+                -- the disk, and short enough that the refresh lands in the
+                -- session that paid for it.
+                mem_set(key, v, P.ttl_stale)
                 Util.spawn_revalidate(opts.revalidate, opts.revalidate_arg)
                 return v
             end
@@ -2072,11 +2090,15 @@ get_token = function()
     if not data.access_token then return nil end
     if data.expires_at and type(data.expires_at) == "number" then
         if os.time() > data.expires_at - 120 then
+            -- Declared out here so the failure branch below can read it: whether
+            -- Spotify ANSWERED, and what it said, is the whole difference between
+            -- a revoked credential and an unreachable one.
+            local rd = nil
             if data.refresh_token and type(data.refresh_token) == "string" then
                 local r = shell("curl -s --compressed --max-time 10 -X POST https://accounts.spotify.com/api/token "
                     .. "-d grant_type=refresh_token -d refresh_token=" .. shell_quote(data.refresh_token)
                     .. " -d client_id=" .. P.spotify)
-                local rd = safe_decode(r)
+                rd = safe_decode(r)
                 if rd and rd.access_token then
                     data.access_token = rd.access_token
                     if rd.refresh_token then data.refresh_token = rd.refresh_token end
@@ -2088,8 +2110,30 @@ get_token = function()
                     return data.access_token
                 end
             end
-            -- Refresh failed (offline or revoked); don't hand back a dead token.
-            os.remove(P.token)
+            -- REFUSED IS NOT THE SAME AS UNREACHABLE, and treating them alike is
+            -- how killing spoot turned into signing in again.
+            --
+            -- A killed spoot leaves a token behind that later expires. The next
+            -- start finds it expired and refreshes -- and ANY hiccup on that one
+            -- request used to delete the credential outright: no network up yet,
+            -- DNS still coming, the ten-second curl timeout, Spotify having a
+            -- moment. The refresh token is the only credential there is, and it
+            -- was being thrown away because a request did not come back.
+            --
+            -- Spotify says invalid_grant, and nothing else, when a refresh token
+            -- is genuinely revoked. That is the one answer worth erasing for.
+            -- Everything else is temporary by definition: hand back nothing for
+            -- now, leave the credential alone, and let the next attempt have it.
+            --
+            -- `rd` is the decoded reply; nil means the request never produced
+            -- one. A token file with no refresh_token in it at all is dead by
+            -- construction and there is nothing temporary about that, so it goes
+            -- too -- that is the case the old unconditional remove was written
+            -- for, and the only one it was ever right about.
+            if (rd and rd.error == "invalid_grant")
+               or not (data.refresh_token and type(data.refresh_token) == "string") then
+                os.remove(P.token)
+            end
             mem_bust("token")
             return nil
         end
@@ -3932,12 +3976,34 @@ end
 -- round trip that self-throttles to once per 5s, so this is safe to call on
 -- every menu entry.
 function Util.sync_now()
-    -- Right after do_play the locally patched globals are the ONLY correct
-    -- source: spotifyd needs a moment to pick the track up, so now.json still
-    -- names the previous one and me/player can still answer with it too.
-    -- Syncing inside that window would drag the ▶ marker back to the old track.
-    if P.recent_cmd_at and os.time() - P.recent_cmd_at < 5 then return end
+    -- WAIT FOR THE PLAYER TO CATCH UP, NOT FOR A CLOCK.
+    --
+    -- Right after a play, spotifyd needs a moment to pick the track up: now.json
+    -- still names the previous one and me/player can answer with it too, so
+    -- reading either drags the marker back to the track you just left. That was
+    -- answered with a flat five-second blackout -- five seconds during which
+    -- spoot deliberately did not look, whatever had actually happened in them.
+    --
+    -- But the question was never "how long ago was the command". It is "has the
+    -- player caught up", and that is answerable directly: read, and keep the
+    -- reading unless it is still naming the track we left. It converges the
+    -- moment the player does -- usually well inside a second -- and it cannot go
+    -- on being wrong for five. The five seconds survive only as a ceiling, so a
+    -- play that never starts cannot wedge the marker forever.
+    local guard = P.recent_cmd_at and (os.time() - P.recent_cmd_at < 5)
+    if not guard then
+        if not Util.fast_now_track() then get_playback() end
+        return
+    end
+    local was_track, was_id, was_playing = current_track, current_id, is_playing
     if not Util.fast_now_track() then get_playback() end
+    -- Still the track we left, and we had already moved off it: the player is
+    -- behind. Put our own reading back and ask again next time.
+    if P.pending_from and current_id == P.pending_from and was_id ~= P.pending_from then
+        current_track, current_id, is_playing = was_track, was_id, was_playing
+        return
+    end
+    P.recent_cmd_at, P.pending_from = nil, nil
 end
 
 -- Where Alt+c should put the cursor: the 0-based row holding `id`, matching
@@ -4640,6 +4706,9 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
         -- The status memo goes with it -- transport just changed underneath it.
         if ok then
             P.recent_cmd_at = os.time(); Util.playerctl_bust()
+            -- The track we are LEAVING. Util.sync_now waits for the player to
+            -- stop naming it rather than for a clock -- see there.
+            P.pending_from = current_id
             -- WHERE IT WAS PLAYED FROM is the UI's to remember, and this is the
             -- only moment anything can know it: the menu on screen when a play
             -- succeeds IS the origin, whatever it happens to be -- Liked, a
@@ -4649,6 +4718,13 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
             if Util.serving then
                 Util.serve_write({ev = "played", id = item and item.id or nil})
             end
+            -- ...and its LAST STEP, which is the only part worth reopening. The UI
+            -- remembers the whole trail as well, and that is right while the list
+            -- is still ON it -- going there is then a walk. When it is not, re-
+            -- entering the journey that led there (an artist, then their albums,
+            -- then the album) rebuilds a path nobody asked to walk a second time.
+            -- One entry reopens the list itself and nothing else.
+            Util.play_origin_save()
         end
         return ok
     end
@@ -4663,11 +4739,33 @@ end
 -- failure can (view_playback does) without repeating the call. The flag moves
 -- only on success: claiming paused after a pause that never happened leaves the
 -- marker lying until the next sync corrects it.
+-- HAS ANYTHING PLAYED IN THIS PROCESS. Not "is something playing" -- that is
+-- is_playing -- but whether there is a player behind the state at all.
+--
+-- The two are the same after the first note and quite different before it. On a
+-- cold start Spotify still remembers the last track you heard, hours ago, and
+-- reports it with is_playing false: indistinguishable, from inside, from a track
+-- you paused a moment ago. That mattered in exactly two places and was wrong in
+-- both -- Return on the row asked a player that is not running to resume, and the
+-- UI drew the transport marker on a track that was over.
+Util.played_here = false
+
 function Util.transport(playing)
     local r = os.execute("playerctl " .. (playing and "play" or "pause") .. " 2>/dev/null")
     Util.playerctl_bust()
     local ok = r == true or r == 0
-    if ok then is_playing = playing end
+    -- READ IT BACK rather than assuming it. playerctl exiting 0 says the method
+    -- call was DELIVERED, not that the player did anything with it -- so this
+    -- used to write down what it had asked for and call that the state.
+    --
+    -- It can afford the truth: playerctl is a synchronous D-Bus call, so by the
+    -- time it returns the player has processed it, and fast_now_track reads MPRIS
+    -- locally with no network anywhere near it. The guess only ever covered the
+    -- gap until the next poll, and it covered it by being right most of the time.
+    if ok then
+        Util.played_here = true
+        if not Util.fast_now_track() then is_playing = playing end
+    end
     return ok
 end
 
@@ -4681,11 +4779,18 @@ end
 -- playing anyway moved the marker to a row that never started.
 function Util.play_or_toggle(item, ctx_type, ctx_id, all_items, idx)
     if not item then return false end
-    if item.id and item.id == current_id then
+    -- TOGGLING NEEDS SOMETHING TO TOGGLE. Straight after a cold start current_id
+    -- names the track Spotify last remembers rather than one that is loaded
+    -- anywhere, so this branch sent a resume to a player that was not there and
+    -- the row you pressed Return on did nothing at all -- you had to play some
+    -- OTHER track first to get out of it. Nothing has played here yet, so nothing
+    -- is paused: fall through and start it, like any other row.
+    if item.id and item.id == current_id and (is_playing or Util.played_here) then
         Util.transport(not is_playing)
         return true
     end
     if do_play(item, ctx_type, ctx_id, all_items, idx) then
+        Util.played_here = true
         current_track = item
         current_id = item.id
         is_playing = true
@@ -5034,7 +5139,7 @@ local function album_action_menu(album)
     -- this menu passes neither `current` nor `items`.
     local action = rofi_dmenu(acts,
         {prompt=album.name or "Album", mesg=mesg, theme=THEME_SUB,
-         alt_select=true})
+         context=true, art=false, alt_select=true})
     local alt = Util.alt_pressed
     Util.alt_pressed = false
     if action then
@@ -5051,8 +5156,10 @@ local function album_action_menu(album)
         copy_spotify_url("album", album.id)
         Util.copied_link()
     elseif action == "Go to Artist" then
-        local ar = (album.artists or {})[1]
-        if ar then Util.open_artist({id=ar.id, name=ar.name or ""}, alt) end
+        -- artists[1] used to be taken outright, which on a collaboration meant
+        -- one name won and the rest were unreachable. Same picker the track menu
+        -- has always had -- see Util.go_to_artist.
+        Util.go_to_artist(album.artists, album.name, alt)
     elseif action == "Albumart" then
         view_art({album=album, name=album.name, artists=album.artists})
     elseif action == "Album Details" then
@@ -5080,7 +5187,7 @@ function Util.show_action_menu(show)
     local pre_sel = Util.pos_row(sh_ac_key, akeys)
     local action = rofi_dmenu(acts,
         {prompt=show.name or "Podcast", mesg=Util.display_show(show),
-         theme=THEME_SUB})
+         theme=THEME_SUB, context=true, art=false})
     if action then
         for i, a in ipairs(acts) do
             if a == action then Util.pos_put(sh_ac_key, akeys[i]); break end
@@ -5117,7 +5224,7 @@ local function playlist_action_menu(pl)
         for i, a in ipairs(acts) do if a == saved then pre_sel = i - 1; break end end
     end
     local action = rofi_dmenu(acts,
-            {prompt=display_playlist(pl), mesg=display_playlist(pl) .. SEP .. (pl.owner and pl.owner.display_name or "Unknown owner"), theme=THEME_SUB})
+            {prompt=display_playlist(pl), mesg=display_playlist(pl) .. SEP .. (pl.owner and pl.owner.display_name or "Unknown owner"), theme=THEME_SUB, context=true, art=false})
     if action then
         Util.pos_put(pl_ac_key, action)
     end
@@ -6494,7 +6601,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
     -- playlist rows have no such state and are left alone, which also preserves
     -- album_thumbs' \0icon suffixes. Must match the flags the caller built
     -- `entries` with, or the first refresh re-renders differently.
-    local hide_liked = (ctx == "liked") or nil
+    -- ...and the same for an artist's slice of it. Both are lists OF likes, so
+    -- the heart is a column of one repeated glyph. Must match the flags the
+    -- caller built `entries` with -- see fetch_liked_by_artist, which now passes
+    -- the same -- or the first refresh re-renders differently.
+    local hide_liked = (ctx == "liked" or ctx == "liked-by-artist") or nil
     local function rebuild()
         if is_track then
             entries = format_entries(items, nil, hide_liked, hide_single_artist)
@@ -6533,7 +6644,14 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
         -- Album/artist/playlist rows open content on Return and actions on
         -- Shift+Return, so those lists claim the key. An album's TRACK list is
         -- is_album_list too, but is_track wins the dispatch and keeps the default.
-        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, by_index=true, theme=view_theme, thumbs=is_album_grid or is_playlist_list or is_show_grid or is_artist_list or is_search_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild,
+        -- THIS MENU NAMED A COVER OF ITS OWN. art_path is how a container hands
+        -- one over -- an album's sleeve, a playlist's tile, a podcast's art -- and
+        -- it is the whole of what separates a container from a shelf. See
+        -- Util.serve_shelf, which used to ask instead whether ctx_type was
+        -- "album" and then "album or playlist", a list that could only ever grow
+        -- and had already missed shows: a show's episode list passes no ctx_type
+        -- at all, deliberately, so it was never going to match.
+        local idx = rofi_dmenu(entries, {prompt=ctx or "Browse", mesg=mesg, by_index=true, theme=view_theme, thumbs=is_album_grid or is_playlist_list or is_show_grid or is_artist_list or is_search_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild, own_art=(art_path ~= nil) or nil,
             -- is_show_grid claims Shift+Return for the show action menu. The
             -- EPISODE list deliberately does not: it is is_track, and a track
             -- list must leave Shift+Return to rofi_dmenu's default handler,
@@ -6675,7 +6793,7 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                 if (item.artists or {})[1] then table.insert(acts, 2, "Go to Artist") end
                 -- act_alt, not alt: this list's own Shift+Return is already bound
                 -- to the `alt` above, which is what opened this menu.
-                local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), theme=THEME_SUB, alt_select=true})
+                local action = rofi_dmenu(acts, {prompt=item.name or "Album", mesg=(item.name or "Album") .. album_suffix(item), theme=THEME_SUB, context=true, art=false, alt_select=true})
                 local act_alt = Util.alt_pressed
                 Util.alt_pressed = false
                 if action == "Open Album" then
@@ -6937,29 +7055,30 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
                   episode_unavail=item.unavail or nil,
                   from_current=(item.id ~= nil and item.id == current_id) or nil}, function()
     Util.sync_now()
-    local actions, akeys = {"Play"}, {"play"}
-    local seek_idx = #actions + 1
-    actions[seek_idx] = "Seek"; akeys[seek_idx] = "seek"
-    actions[#actions+1] = "Add to Queue"; akeys[#akeys+1] = "queue"
-    actions[#actions+1] = "Go to Podcast"; akeys[#akeys+1] = "show"
-    actions[#actions+1] = "Copy Web Link"; akeys[#akeys+1] = "url"
-    -- Reads Watch only when the episode arrived carrying its show -- a search
-    -- result does not, and Spotify has no per-episode video field to consult
-    -- either way, so the neutral label is the honest default.
-    local watch = Util.watch_label(Util.is_video_show(item.show))
-    actions[#actions+1] = watch; akeys[#akeys+1] = "watch"
-    actions[#actions+1] = "Podcast Art"; akeys[#akeys+1] = "art"
-    actions[#actions+1] = "Episode Details"; akeys[#akeys+1] = "details"
-
-    -- Same contract as view_actions' rebuild_actions: volatile labels derived
-    -- from live state on every draw, and rows dimmed rather than removed so a
-    -- fixed index never shifts under the cursor.
+    -- Same contract as view_actions' rebuild_actions, and now the same shape:
+    -- the whole list is built on every draw, so a row that cannot act is left out
+    -- rather than drawn dead. Nothing here holds a position any more.
+    local actions, akeys = {}, {}
     local DIM = '<span foreground="' .. Util.DIM .. '">'
+    local function add(label, key)
+        actions[#actions+1] = label; akeys[#akeys+1] = key
+    end
     local function rebuild_actions()
         local playing_this = item.id ~= nil and item.id == current_id
-        actions[1]        = playing_this and (is_playing and "Pause" or "Resume")
-                            or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play")
-        actions[seek_idx] = playing_this and "Seek" or Util.markup(DIM .. 'Seek</span>')
+        for i = #actions, 1, -1 do actions[i] = nil; akeys[i] = nil end
+        add(playing_this and (is_playing and "Pause" or "Resume")
+            or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play"), "play")
+        -- See view_actions: one playhead, in the loaded episode and nowhere else.
+        if playing_this then add("Seek", "seek") end
+        add("Add to Queue", "queue")
+        add("Go to Podcast", "show")
+        add("Copy Web Link", "url")
+        -- Reads Watch only when the episode arrived carrying its show -- a search
+        -- result does not, and Spotify has no per-episode video field to consult
+        -- either way, so the neutral label is the honest default.
+        add(Util.watch_label(Util.is_video_show(item.show)), "watch")
+        add("Podcast Art", "art")
+        add("Episode Details", "details")
         return actions
     end
     rebuild_actions()
@@ -6973,7 +7092,7 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
         -- here, since no row of this one does anything different on alt, but
         -- harmless (Backspace pops the one level) and consistent with the track
         -- menu, which is worth more than special-casing the key away.
-        local sel = rofi_dmenu(actions, {prompt="Episode", mesg=function() return track_mesg(item) end, theme=THEME_SUB, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild_actions})
+        local sel = rofi_dmenu(actions, {prompt="Episode", mesg=function() return track_mesg(item) end, theme=THEME_SUB, context=true, art=false, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild_actions})
         if not sel then return end
         local clean = Util.strip_markup(sel)
         local key
@@ -7016,6 +7135,41 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
     end)
 end
 
+-- ONE ARTIST OPENS; SEVERAL ASK WHICH. Hoisted out of view_actions because an
+-- ALBUM's action menu needs exactly the same question and was answering it by
+-- taking artists[1] -- so a collaboration went to whichever name Spotify happened
+-- to list first and the others were unreachable from there at all.
+--
+-- `subject` is the thing the artists belong to (a track, an album) and is only
+-- the picker's caption. `want_hub` opens the artist's hub rather than their
+-- discography; Shift+Return on a row of the picker asks for it too, so a caller
+-- that did not want it can still be overruled per artist.
+--
+-- Returns true when the caller must unwind: a jump-to-track is in flight.
+function Util.go_to_artist(arts, subject, want_hub)
+    arts = arts or {}
+    if #arts <= 1 then
+        if #arts == 1 then Util.open_artist(arts[1], want_hub) end
+        return jump_to_track_pending
+    end
+    local ae = {}
+    for i, a in ipairs(arts) do ae[i] = display_artist(a) end
+    while true do
+        -- No backdrop: a list of NAMES is not about a track, and the cover of
+        -- whatever is playing beside it is decoration.
+        local aidx = rofi_dmenu(ae, {prompt="Artists",
+            mesg=(subject or "") .. SEP .. #arts .. " artists",
+            by_index=true, theme=THEME_SUB, alt_select=true, art=false})
+        local pick_alt = Util.alt_pressed
+        Util.alt_pressed = false
+        if not aidx then return false end
+        if aidx >= 1 and aidx <= #arts then
+            Util.open_artist(arts[aidx], want_hub or pick_alt)
+            if jump_to_track_pending then return true end
+        end
+    end
+end
+
 view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- Episodes get their own menu. Dispatching HERE rather than at each call
     -- site covers every entry point at once: rofi_dmenu's Shift+Return handler,
@@ -7033,16 +7187,25 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- nil` keeps it out of session.json so older files restore their own track.
     -- ctx_type/ctx_id restore the list context; all_items/cidx cannot be, so a
     -- replayed menu can remove the track but not prune the row.
-    return Util.scope({view="action", track_id=item.id, track_name=item.name or "",
-                  track_artists=item.artists or {}, track_album=item.album or {},
-                  track_duration_ms=item.duration_ms or 0,
-                  -- Carried so a menu restored on a warm start still knows the
-                  -- track cannot play here. `or nil` keeps it out of session.json
-                  -- when false, like from_current below, so older session files
-                  -- load unchanged.
-                  track_unavail=item.unavail or nil,
-                  ctx_type=ctx_type, ctx_id=ctx_id,
-                  from_current=(item.id ~= nil and item.id == current_id) or nil}, function()
+    --
+    -- NO Util.scope, AND THEREFORE NO STACK ENTRY -- the last of the eight action
+    -- menus to give one up. album_action_menu, Util.open_playlist_actions,
+    -- Util.show_action_menu and view_artist all shed theirs long ago, each for
+    -- the same reason and each with the same note: "A CONTEXT MENU, so no
+    -- Util.scope and no trail step". This one kept its scope, which is why every
+    -- trail through a track's verbs read "Liked Tracks > A Formal Arrangement",
+    -- why the crumb grew a step you could jump back into, and why a cold start
+    -- days later reopened a list of verbs about a track as though it were a place.
+    --
+    -- What the entry used to buy was session replay -- reg("action", "Track")
+    -- rebuilt this menu from track_id and friends on a warm start. That is the
+    -- behaviour being removed, not a casualty of removing it: an overlay that
+    -- outlives the session it was opened in is not an overlay. reg("action")
+    -- stays registered so a session.json written by an older build still replays
+    -- instead of failing to parse; nothing writes one any more.
+    --
+    -- ctx_type/ctx_id are still parameters and still reach Remove from Playlist.
+    -- They travelled through the stack entry only because there was one.
     -- Both the mesg and the volatile Play/Pause/Seek/Like labels are derived
     -- from the now-playing globals, and nothing on the way in refreshed them --
     -- so reopening this menu after the track changed (or was paused) elsewhere
@@ -7077,46 +7240,59 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- below relabels Play/Pause/Resume, Like/Unlike and three dim states in place,
     -- so remembering the cursor by label meant reopening this menu after liking or
     -- playing the track always landed back on row 1 -- see Util.pos_row.
-    local actions, akeys = {"Play"}, {"play"}
-    local seek_idx = #actions + 1
-    actions[seek_idx] = "Seek"; akeys[seek_idx] = "seek"
-    actions[#actions+1] = "Add to Queue"; akeys[#akeys+1] = "queue"
-    local like_idx = #actions + 1
-    actions[#actions+1] = "Like"; akeys[#akeys+1] = "like"
-    actions[#actions+1] = "Go to Album"; akeys[#akeys+1] = "album"
-    actions[#actions+1] = "Go to Artist"; akeys[#akeys+1] = "artist"
-    actions[#actions+1] = "Add to Playlist"; akeys[#akeys+1] = "addpl"
-    -- Always present, dimmed by rebuild_actions when the track is in none of
-    -- your playlists -- same treatment as Seek on a track that is not playing.
-    -- A row that appears and disappears also shifts every index below it.
-    local rm_idx = #actions + 1
-    actions[rm_idx] = "Remove from Playlist"; akeys[rm_idx] = "rmpl"
-    local lyrics_idx = #actions + 1
-    actions[lyrics_idx] = "Lyrics"; akeys[lyrics_idx] = "lyrics"
-    actions[#actions+1] = "Copy Web Link"; akeys[#akeys+1] = "url"
-    actions[#actions+1] = "More Like This"; akeys[#akeys+1] = "more"
-    actions[#actions+1] = "Albumart"; akeys[#akeys+1] = "art"
-    actions[#actions+1] = "Track Details"; akeys[#akeys+1] = "details"
-
-    -- The four volatile labels are derived from live state on every draw rather
-    -- than patched by hand in the selection branches, so they stay right when a
-    -- nested action menu (Alt+Return from here) plays or likes this same track
-    -- and rofi_dmenu redraws without this loop running.
+    -- THE WHOLE MENU, BUILT ON EVERY DRAW, rather than a fixed array with a few
+    -- volatile labels patched into remembered slots. Two rows are now HIDDEN when
+    -- they cannot do anything -- Lyrics for a track known to have none, Remove
+    -- from Playlist for a track that is in none of yours -- and a row that comes
+    -- and goes cannot live at a fixed index. So nothing holds one any more: the
+    -- keys are rebuilt beside the labels, and the two places that used to need
+    -- positions (Util.pos_row's cursor memory and the dispatch below) already
+    -- work off the key and the stripped label instead.
+    --
+    -- PLAY STAYS DIMMED, because an unavailable track is still a track you asked
+    -- about and the row explains why nothing happens. Everything else that cannot
+    -- act is simply not drawn: Seek on a track that is not loaded, Lyrics on one
+    -- known to have none, Remove from Playlist on one that is in none of yours.
+    local actions, akeys = {}, {}
     local DIM = '<span foreground="' .. Util.DIM .. '">'
+    local function add(label, key)
+        actions[#actions+1] = label; akeys[#akeys+1] = key
+    end
+    -- The volatile labels are derived from live state on every draw rather than
+    -- patched by hand in the selection branches, so they stay right when a nested
+    -- action menu (Alt+Return from here) plays or likes this same track and
+    -- rofi_dmenu redraws without this loop running.
     local function rebuild_actions()
         local playing_this = item.id ~= nil and item.id == current_id
         is_liked = item.id and liked[item.id]
+        -- Emptied in place, never replaced: the loop below holds a reference to
+        -- this very table and hands it to rofi_dmenu on every pass.
+        for i = #actions, 1, -1 do actions[i] = nil; akeys[i] = nil end
         -- playing_this is tested first for the same reason display_track puts the
         -- green marker ahead of the dim one: if it IS playing, whatever the cache
         -- says about availability, that wins.
-        actions[1]          = playing_this and (is_playing and "Pause" or "Resume")
-                              or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play")
-        actions[seek_idx]   = playing_this and "Seek" or Util.markup(DIM .. 'Seek</span>')
-        actions[like_idx]   = is_liked and "Unlike" or "Like"
-        actions[rm_idx]     = #rm_targets > 0 and "Remove from Playlist"
-                              or Util.markup(DIM .. 'Remove from Playlist</span>')
-        actions[lyrics_idx] = Util.track_has_lyrics(item.id) ~= false and "Lyrics"
-                              or Util.markup(DIM .. 'Lyrics</span>')
+        add(playing_this and (is_playing and "Pause" or "Resume")
+            or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play"), "play")
+        -- SEEK BELONGS TO THE ACTIVE TRACK and to no other. There is one
+        -- playhead, and it is in whatever is loaded -- so on any other row the
+        -- verb has nothing to move. Hidden rather than dimmed, like Lyrics and
+        -- Remove from Playlist: paused counts as active, so this follows
+        -- playing_this (is this the loaded track) and not is_playing.
+        if playing_this then add("Seek", "seek") end
+        add("Add to Queue", "queue")
+        add(is_liked and "Unlike" or "Like", "like")
+        add("Go to Album", "album")
+        add("Go to Artist", "artist")
+        add("Add to Playlist", "addpl")
+        if #rm_targets > 0 then add("Remove from Playlist", "rmpl") end
+        -- `~= false`, not `== true`: nil means "never looked up", and treating
+        -- that as "no lyrics" would hide the row on every track the first time
+        -- its menu was opened -- which is the one time it is most wanted.
+        if Util.track_has_lyrics(item.id) ~= false then add("Lyrics", "lyrics") end
+        add("Copy Web Link", "url")
+        add("More Like This", "more")
+        add("Albumart", "art")
+        add("Track Details", "details")
         return actions
     end
     rebuild_actions()
@@ -7125,26 +7301,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- is written once. Returns true when the caller must unwind -- a
     -- jump-to-track is in flight.
     local function go_to_artist(want_hub)
-        local arts = item.artists or {}
-        if #arts <= 1 then
-            if #arts == 1 then Util.open_artist(arts[1], want_hub) end
-            return jump_to_track_pending
-        end
-        local ae = {}
-        for i, a in ipairs(arts) do ae[i] = display_artist(a) end
-        local pick_key = "artist-pick:" .. (item.id or "")
-        while true do
-            local aidx = rofi_dmenu(ae, {prompt="Artists", mesg=(item.name or "") .. SEP .. #arts .. " artists", by_index=true, theme=THEME_SUB, alt_select=true})
-            -- Shift+Return on the picker reaches the hub even when plain Return
-            -- (want_hub false) is what opened it.
-            local pick_alt = Util.alt_pressed
-            Util.alt_pressed = false
-            if not aidx then return false end
-            if aidx >= 1 and aidx <= #arts then
-                Util.open_artist(arts[aidx], want_hub or pick_alt)
-                if jump_to_track_pending then return true end
-            end
-        end
+        return Util.go_to_artist(item.artists, item.name, want_hub)
     end
 
     local act_key = "action:" .. (item.id or "")
@@ -7181,8 +7338,13 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         -- Claimed so Shift+Return on "Go to Album" can offer the album's own
         -- action menu (Return there opens the album outright). Every other row
         -- reproduces the default below: a nested action menu for this track.
+        -- An explicit local, never `Util.action_art and nil or false`: the and/or
+        -- idiom cannot carry `false`, which is the one value this has to send.
+        local no_art = false
+        if Util.action_art then no_art = nil end
         local sel = rofi_dmenu(actions,
             {prompt="Action", mesg=function() return track_mesg(item) end, theme=action_theme, refresh=rebuild_actions,
+             context=true, art=no_art,
              ctx_type=ctx_type, ctx_id=ctx_id, items=all_items, entries=entries,
              alt_select=true})
         local alt = Util.alt_pressed
@@ -7195,13 +7357,14 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             return
         end
 
-        -- rebuild_actions hands rofi pango-wrapped labels for the dimmed Seek and
-        -- Lyrics rows, and rofi echoes back exactly what it was given -- so the
-        -- raw string is "<span color=...>Lyrics</span>", which matched no branch
-        -- below and made a dimmed row silently redraw the menu. Normalise once
-        -- and dispatch on that, the way the cursor-memory lookup above already
-        -- does. A dimmed Lyrics now reaches view_lyrics, which says "No lyrics
-        -- found" instead of doing nothing at all.
+        -- rebuild_actions hands rofi pango-wrapped labels for the dimmed Play and
+        -- Seek rows, and rofi echoes back exactly what it was given -- so the raw
+        -- string is "<span color=...>Seek</span>", which matched no branch below
+        -- and made a dimmed row silently redraw the menu. Normalise once and
+        -- dispatch on that, the way the cursor-memory lookup above already does.
+        -- A dimmed row now reaches its handler and gets a real answer out of it.
+        -- Lyrics and Remove from Playlist are no longer among the dimmed: those
+        -- two are dropped from the menu outright when they have nothing to do.
         local key = Util.strip_markup(sel)
 
         -- Resolved against `actions` as drawn; rebuild_actions has not run again
@@ -7311,10 +7474,9 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
                     if target.from_ctx then
                         return
                     end
-                    -- rebuild_actions dims the row once rm_targets empties. The
-                    -- entry is never spliced out: seek_idx/like_idx/lyrics_idx
-                    -- are fixed positions into this array, and removing an
-                    -- element would slide the labels into the wrong slots.
+                    -- rebuild_actions drops the row once rm_targets empties.
+                    -- Nothing has to be spliced here, and nothing may be: the
+                    -- whole list is rebuilt from scratch on the next draw.
                 else
                     rofi_message("Failed to remove from " .. (target.name or "playlist"))
                 end
@@ -7332,7 +7494,6 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             else rofi_message("Not the current track") end
         end
     end
-    end)
 end
 
 -- SHARED HELPERS (used by both view functions and replay_session)
@@ -7349,7 +7510,11 @@ local function fetch_liked_by_artist(artist_id, artist_name)
     local tracks = get_liked_by_artist(artist_id)
     if #tracks == 0 then return nil end
     table.sort(tracks, function(a,b) return (a.name or ""):lower() < (b.name or ""):lower() end)
-    local te = format_entries(tracks, nil, nil, true)
+    -- NO HEART ON A LIST OF LIKES. Every row here is liked by definition -- that
+    -- is the whole selection -- so the glyph marks nothing and only takes the
+    -- column. Liked Tracks has always said this about itself (see view_browse's
+    -- hide_liked); an artist's liked tracks is the same list, narrowed.
+    local te = format_entries(tracks, nil, true, true)
     return tracks, te, (artist_name or "") .. SEP .. #tracks .. " liked tracks"
 end
 
@@ -7540,7 +7705,7 @@ function Util.open_playlist_actions(pl, on_change)
                   or "Open Playlist", "Rename Playlist", "Delete Playlist", "Playlist Art", "Copy Web Link"}
     while true do
         local asel = rofi_dmenu(acts, {prompt=display_playlist(pl), mesg=display_playlist(pl),
-            theme=THEME_SUB})
+            theme=THEME_SUB, context=true, art=false})
         if not asel then return end
         local token = get_token()
         if asel == "Open Playlist" then
@@ -7611,7 +7776,10 @@ function Util.view_discover_genre()
     Util.scope({view="discover-genre"}, function()
         local gk = "discover-genre||"
         while true do
-            local idx = rofi_dmenu(genres, {prompt="Genre", mesg="Discover by Genre" .. SEP .. #genres .. " genres", by_index=true})
+            -- NO BACKDROP. A list of genre NAMES is not about a track, and the
+            -- cover of whatever happens to be playing beside it is decoration --
+            -- the same case the search results' type filter makes about itself.
+            local idx = rofi_dmenu(genres, {prompt="Genre", mesg="Discover by Genre" .. SEP .. #genres .. " genres", by_index=true, art=false})
             if not idx then return end
             if idx >= 1 and idx <= #genres then Util.open_genre_tracks(genres[idx]) end
             if jump_to_track_pending then return end
@@ -7835,7 +8003,7 @@ view_artist = function(artist)
     local art_ac_key = "artist-ac:" .. (artist.id or "")
 
     while true do
-        local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist", theme=THEME_SUB})
+        local sel = rofi_dmenu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist", theme=THEME_SUB, context=true, art=false})
         if not sel then
             Util.back_pressed = false
             return
@@ -9037,7 +9205,48 @@ function Util.listen_lookup(m)
     return d and d.tracks and d.tracks[1] or nil
 end
 
-function Util.view_listen()
+-- LISTENING, WITHOUT HOLDING THE ENGINE HOSTAGE.
+--
+-- This used to be one function that started songrec and then sat in a polling
+-- loop for up to P.listen_timeout seconds. The engine is a single stdio loop, so
+-- for those thirty seconds it read no request and answered none: every poll the
+-- UI sent queued up behind it, the loading glow breathed forever because the
+-- draw it was waiting on could never arrive, and spoot was locked in whatever
+-- menu it happened to be on. Killing the process did not help, because the
+-- backgrounded songrec outlived it still holding the monitor.
+--
+-- Split into three, none of which waits: start it, ask how it is doing, stop it.
+-- The UI drives the asking while its card is up, which is also what finally gives
+-- the card a working cancel.
+Util.listen = nil          -- {out, pidf, device, deadline} while one is running
+Util.listen_track = nil    -- what the last completed listen identified
+
+function Util.listen_pid()
+    if not Util.listen then return nil end
+    local p = trim(read_file(Util.listen.pidf) or "")
+    return p:match("^%d+$")
+end
+
+-- Kills the recorder and clears the files. Safe to call when nothing is running,
+-- because every route out of a listen comes through here.
+function Util.listen_stop()
+    local st = Util.listen
+    Util.listen = nil
+    if not st then return {state = "idle"} end
+    local pid = trim(read_file(st.pidf) or ""):match("^%d+$")
+    if pid then os.execute("kill " .. pid .. " 2>/dev/null") end
+    -- Scoped to our own invocation, device and all: a bare `pkill songrec` would
+    -- take down an unrelated one the user started themselves.
+    os.execute("pkill -f " .. shell_quote("songrec recognize -d " .. st.device) .. " 2>/dev/null")
+    for _, f in ipairs({st.out, st.pidf}) do os.remove(f) end
+    return {state = "idle"}
+end
+
+function Util.listen_start()
+    -- Whatever was running is over: a second Alt+l while one is up restarts it
+    -- rather than stacking two recorders on the same monitor.
+    Util.listen_stop()
+    Util.listen_track = nil
     if trim(shell("command -v songrec 2>/dev/null") or "") == "" then
         rofi_message("songrec is not installed"); return
     end
@@ -9050,66 +9259,66 @@ function Util.view_listen()
 
     local out_tf = Util.tmpfile("listen.out")
     local sr_pidf = Util.tmpfile("listen.sr.pid")
-    -- The row that carried listen.png into rofi is gone with the window; the
-    -- asset path travels in the `listening` event instead.
-
-    -- songrec first, so recognition is already running while rofi maps its
-    -- window. Backgrounded bare rather than inside a { } group: `$!` has to be
-    -- songrec's own pid, because killing a wrapping subshell would leave the
-    -- recorder holding the monitor. Its exit is also what marks the output file
-    -- complete, so the loop below never reads a half-written response.
+    -- Backgrounded bare rather than inside a { } group: `$!` has to be songrec's
+    -- own pid, because killing a wrapping subshell would leave the recorder
+    -- holding the monitor. Its exit is also what marks the output file complete,
+    -- so nothing ever reads a half-written response.
     os.execute("songrec recognize -d " .. shell_quote(device) .. " -j > " .. shell_quote(out_tf)
         .. " 2>/dev/null & echo $! > " .. shell_quote(sr_pidf))
-    -- The window rofi opened here was a placeholder saying "listening" that also
-    -- served as the cancel affordance -- the loop below watched for it closing.
-    -- The Qt front end draws that itself, so this announces the state and the
-    -- loop waits on songrec alone.
-    --
-    -- Flushed BEFORE the wait, which is the whole point: recognition takes
-    -- seconds, and the UI has to be able to say so while it happens.
+    Util.listen = {out = out_tf, pidf = sr_pidf, device = device,
+                   deadline = os.time() + P.listen_timeout}
     Util.serve_write({ev = "listening", asset = P.assets .. "/listen.png",
                       timeout = P.listen_timeout})
+end
 
-    local function pid_of(f)
-        local p = trim(read_file(f) or "")
-        return p:match("^%d+$")
-    end
-    local raw, cancelled = nil, false
-    local deadline = os.time() + P.listen_timeout
-    while true do
-        -- songrec gone means it answered: `recognize` exits on its first match.
-        local sp = pid_of(sr_pidf)
-        if sp and not Util.proc_alive(sp) then raw = read_file(out_tf); break end
-        -- The "window gone means the user gave up" branch went with the rofi
-        -- window. songrec's own exit and the timeout are what end this now.
-        if os.time() >= deadline then break end
-        os.execute("sleep " .. tostring(P.listen_poll))
-    end
-
-    for _, f in ipairs({sr_pidf}) do
-        local p = pid_of(f)
-        if p then os.execute("kill " .. p .. " 2>/dev/null") end
-    end
-    -- Scoped to our own invocation, device and all: a bare `pkill songrec` would
-    -- take down an unrelated one the user started themselves.
-    os.execute("pkill -f " .. shell_quote("songrec recognize -d " .. device) .. " 2>/dev/null")
-    for _, f in ipairs({out_tf, sr_pidf}) do os.remove(f) end
-    if cancelled then return end
-
-    local m = Util.listen_parse(raw)
-    if not m then rofi_message("No match"); return end
+-- HOW IS IT GOING. Answers immediately, every time -- that is the whole point.
+-- The UI asks while its card is up and acts on the state it gets back.
+function Util.listen_poll()
+    local st = Util.listen
+    if not st then return {state = "idle"} end
+    local pid = Util.listen_pid()
+    -- songrec gone means it answered: `recognize` exits on its first match.
+    local done = pid and not Util.proc_alive(pid)
+    if not done and os.time() < st.deadline then return {state = "listening"} end
+    local raw = done and read_file(st.out) or nil
+    Util.listen_stop()
+    local m = raw and Util.listen_parse(raw)
+    if not m then return {state = "none"} end
     local track = Util.listen_lookup(m)
     if not track then
-        rofi_message("Not on Spotify" .. SEP .. (m.artist and (m.artist .. SEP) or "") .. m.title)
-        return
+        return {state = "notfound",
+                label = (m.artist and (m.artist .. SEP) or "") .. (m.title or "")}
     end
-    view_actions(track)
-    -- Says a result MENU was opened, as opposed to the four ways this returns
-    -- without one (no songrec, no sink, cancelled, no match, not on Spotify).
-    -- The --listen keybind reads it to decide whether to hand over to main() on
-    -- the way out: backing out of a menu should land somewhere, giving up on the
-    -- listener should not. The in-app caller ignores it -- it is already inside
-    -- main's loop.
+    Util.listen_track = track
+    return {state = "match", name = track.name or "",
+            artist = (track.artists and track.artists[1] and track.artists[1].name) or ""}
+end
+
+-- THE BLOCKING ONE, for the two entry points that have no event loop to poll
+-- from: the System menu's "Listen..." row and `lua spoot.lua --listen`. Both are
+-- rofi-era paths, and rofi is what a wait like this was ever acceptable in.
+--
+-- Built on the three pieces above rather than being a second copy of the
+-- recorder, so there is one description of how a listen works and the front end
+-- with an event loop simply declines to sit in this loop.
+function Util.view_listen()
+    Util.listen_start()
+    if not Util.listen then return end
+    local r
+    repeat
+        os.execute("sleep " .. tostring(P.listen_poll))
+        r = Util.listen_poll()
+    until r.state ~= "listening"
+    if r.state == "none" then rofi_message("No match"); return end
+    if r.state == "notfound" then
+        rofi_message("Not on Spotify" .. SEP .. (r.label or "")); return
+    end
+    if not Util.listen_track then return end
+    view_actions(Util.listen_track)
+    -- Says a result MENU was opened, as opposed to the ways this returns without
+    -- one. The --listen keybind reads it to decide whether to hand over to main()
+    -- on the way out: backing out of a menu should land somewhere, giving up on
+    -- the listener should not.
     return true
 end
 
@@ -9139,20 +9348,25 @@ local function view_playback()
     -- not run (Alt+r/Alt+s toggle shuffle and repeat from this very menu).
     -- keys[i] names row i for the life of this menu, whatever that row currently
     -- reads. Every label here is volatile (Pause/Resume, Shuffle ON/OFF, Repeat
-    -- OFF/TRACK/CONTEXT, and Seek dims when nothing is playing), so remembering
-    -- the cursor by label lost it the instant you used the row -- see Util.pos_row.
+    -- OFF/TRACK/CONTEXT), so remembering the cursor by label lost it the instant
+    -- you used the row -- see Util.pos_row. Seek is not merely volatile: it is
+    -- absent whenever there is nothing loaded to seek through.
     local items, keys = {}, {}
     local function build_items()
         items, keys = {}, {}
         local function add(label, key) items[#items+1] = label; keys[#keys+1] = key end
         local play_label = current_track and (is_playing and "Pause" or "Resume") or nil
         if play_label then add(play_label, "play") end
-        add(current_track and "Seek" or Util.dim("Seek"), "seek")
+        -- Not drawn at all with nothing loaded. There is one playhead and it is
+        -- in the current track; with no current track the row has nothing to
+        -- move, and a dead row is worse than a shorter menu.
+        if current_track then add("Seek", "seek") end
         -- The playing track's own action menu, from the one menu that is about
         -- the playing track. Everything the row offers -- like it, queue it, go
         -- to its album, its lyrics -- was reachable only by first FINDING the
-        -- track in some list. Dimmed rather than absent with nothing playing, so
-        -- the menu keeps its shape, exactly as Seek above it does.
+        -- track in some list. Dimmed rather than absent, unlike Seek above it:
+        -- Seek needs a playhead and there is none, while this row is about a
+        -- TRACK, and naming the gap reads better than closing it.
         add(current_track and "Track Actions" or Util.dim("Track Actions"), "actions")
         add("Next Track", "next")
         add("Previous Track", "prev")
@@ -9241,7 +9455,13 @@ local function view_playback()
             view_recently_played()
             if jump_to_track_pending then break end
         elseif si == "Listen\u{2026}" then
-            Util.view_listen()
+            -- NON-BLOCKING UNDER THE QT FRONT END, which is the whole point of
+            -- the split: listen_start hands the card over and returns, and the UI
+            -- polls it. Calling the blocking wrapper here would have re-locked the
+            -- engine for thirty seconds from the one route still using it -- the
+            -- System menu -- and undone the fix for anyone who reaches the
+            -- listener that way rather than by the keybind.
+            if Util.serving then Util.listen_start() else Util.view_listen() end
         elseif si == "Open Web Link" then
             local url = Util.get_clipboard()
             if url and url ~= "" then open_url(url)
@@ -9427,9 +9647,8 @@ Util.KEYBINDS = {
     {key = "backspace", desc = "clear filter, then back one level"},
     {key = "alt = / -", desc = "quick seek + / - 10s"},
     {key = "shift return", desc = "hovered item's action menu"},
-    {key = "alt return", desc = "jump to current track's action menu"},
     {key = "alt delete", desc = "clear session"},
-    {key = "alt space", desc = "jump to main menu"},
+    {key = "alt return", desc = "jump to main menu"},
     {key = "alt e", desc = "jump to seek menu"},
     {key = "alt l", desc = "jump to liked tracks"},
     {key = "alt p", desc = "jump to recently played"},
@@ -9449,8 +9668,8 @@ Util.KEYBINDS = {
     {key = "alt left / right", desc = "walk back and forth along the trail"},
     {key = nil, desc = "non-destructive -- the trail stays whole"},
     {key = "ctrl left / right", desc = "previous / next track"},
-    {key = "alt 1-9", desc = "jump to a step in the trail"},
-    {key = nil, desc = "or click the step itself"}
+    {key = "tab", desc = "the trail menu -- every step of the whole path"},
+    {key = nil, desc = "or click a step in the breadcrumb itself"}
 }
 
 local function view_system()
@@ -9807,7 +10026,16 @@ function Util.menu_hist_rows(live)
     return rows, entries
 end
 
-function Util.view_trail_jump(stack)
+-- tip/tip_roots are the UI's own breadcrumb: the WHOLE path, across every root,
+-- including the part ahead of the cursor. `stack` is one segment of it -- the
+-- last one -- which is all this menu ever listed, so a trail reading
+--
+--     Main > Liked Tracks  ⟐  Top Tracks  ⟐  Top Tracks
+--
+-- offered two rows out of four and no way to reach the first half of the walk at
+-- all. Only the UI holds the hop list that spans roots, so only the UI can say
+-- what the whole path is -- and, below, only the UI can walk back into it.
+function Util.view_trail_jump(stack, tip, tip_roots)
     local SEP = "  \u{F17B7}  "
     local opts = {}
     local function push(prefix, name, ostack, depth)
@@ -9848,7 +10076,23 @@ function Util.view_trail_jump(stack)
     for _, t in ipairs(Util.trail_history) do
         if type(t) == "table" and type(t.stack) == "table" then add_trail(t.stack) end
     end
-    add_trail(stack, true)
+    -- THE WHOLE PATH when the UI has told us what it is, and the single segment
+    -- the engine can see when it has not (an older UI, or a call from somewhere
+    -- that has no breadcrumb to offer). Rows carry a crumb INDEX rather than a
+    -- stack: a jump across roots is a move along the hop list, which lives in the
+    -- UI, so picking one of these answers with an event instead of a menu.
+    if type(tip) == "table" and #tip > 0 then
+        local seams = {}
+        for _, r in ipairs(tip_roots or {}) do seams[r] = true end
+        for i = 1, #tip do
+            local pre = (i == 1) and (first and "" or SEP)
+                     or (seams[i - 1] and SEP or Util.crumb_arrow("> "))
+            opts[#opts+1] = {label = pre .. tostring(tip[i]), crumb = i - 1}
+        end
+        first = false
+    else
+        add_trail(stack, true)
+    end
     -- Two modes, Tab cycling between them: the trail you are on, and the menus
     -- you closed and left behind. tab_select is what keeps Tab here instead of
     -- letting it bubble up and close this menu, the same opt-in shape
@@ -9944,6 +10188,16 @@ function Util.view_trail_jump(stack)
                 local e = chosen[idx]
                 if e then Util.session_set(json.decode(json.encode(e.stack))) end
                 break
+            end
+            if idx >= 1 and idx <= #opts and opts[idx].crumb then
+                -- ACROSS ROOTS, so the UI walks it. The hop list is the only
+                -- description of a path that spans segments, and the engine does
+                -- not have one -- it is handed a trail per request and answers a
+                -- menu. So this says WHICH step was picked and draws nothing; the
+                -- UI moves its cursor there and asks again, which replays the
+                -- right stack on the way.
+                Util.serve_write({ev = "jump", crumb = opts[idx].crumb})
+                return
             end
             if idx >= 1 and idx <= #opts then
                 local o = opts[idx]
@@ -11417,7 +11671,7 @@ end
 --
 -- The markup was never decoration. It is how a menu says an action is not
 -- available to you -- Play and Seek on an unavailable track, Lyrics on one with
--- none, all dimmed rather than absent so the menu keeps its shape -- and how a
+-- none, dimmed rather than absent where the row still explains itself -- and how a
 -- settings list marks the value you are on, in green with a check. rofi drew all
 -- of it and Util.strip_markup was throwing every bit of it away, so a greyed-out
 -- action was indistinguishable from a live one.
@@ -11540,11 +11794,41 @@ Util.SERVE_VIEWS = {
     -- build had when it called this from inside a live menu.
     ["trail-jump"]   = function(a)
         if a and type(a.stack) == "table" then Util.session_set(a.stack) end
-        Util.view_trail_jump(Util.session_stack())
+        Util.view_trail_jump(Util.session_stack(), a and a.tip, a and a.tipRoots)
     end,
     -- What is playing in the ROOM, via songrec. Blocks while it listens, which
     -- is why the view announces itself with a `listening` event first.
-    listen           = function() Util.view_listen() end,
+    -- WHERE THE MUSIC CAME FROM, and nothing else. One scope entry, opened the
+    -- way replay_session opens any restored stack -- so what you get is that list
+    -- as a root of its own, not the walk that first led to it. Alt+c falls here
+    -- when the list is no longer anywhere on the trail.
+    origin           = function()
+        local o = Util.play_origin()
+        if not o then
+            rofi_message("Nothing has played from a list yet")
+            return
+        end
+        Util.session_set({json.decode(json.encode(o))})
+        replay_session()
+    end,
+    listen           = function() Util.listen_start() end,
+    -- The track the last listen identified, as its own action menu. Opened by
+    -- the UI as a context hop, so it is a card over whatever you were on and
+    -- costs no trail step -- which is what "jump to the identified track" has to
+    -- mean now that an action menu is an overlay.
+    ["listen-result"] = function()
+        if not Util.listen_track then rofi_message("Nothing identified"); return end
+        -- THE ONE ACTION MENU THAT KEEPS ITS BACKDROP. Every other one is a card
+        -- over the list it came from, and that list is already showing what the
+        -- menu is about -- so a cover behind it would be a second answer to a
+        -- question nobody asked. This one arrives out of nowhere: the cover of the
+        -- track spoot just identified is the only thing on screen saying WHAT it
+        -- identified. Cleared however the menu exits.
+        Util.action_art = true
+        local ok, err = pcall(view_actions, Util.listen_track)
+        Util.action_art = nil
+        if not ok then error(err, 0) end
+    end,
     -- WHATEVER SPOTIFY LINK IS ON THE CLIPBOARD. This is what Alt+g has always
     -- been for -- Util.KEYBINDS says "open spotify web link" -- and the UI had it
     -- wired to the opposite thing, copying the playing track's URL, which is
@@ -11595,12 +11879,13 @@ Util.SERVE_VIEWS = {
     -- where a track was actually played from (see the `played` event) and falls
     -- back to Playback rather than to an album nobody visited.
 
-    -- Alt+Return in the rofi build: the playing track's own action menu.
-    ["actions-current"] = function()
-        if not Util.fast_now_track() then last_playback = 0; get_playback() end
-        if current_track then view_actions(current_track)
-        else rofi_message("No track playing") end
-    end
+    -- AN "actions-current" VIEW LIVED HERE: Alt+Return, the playing track's own
+    -- action menu, summoned from wherever you happened to be. It made sense while
+    -- an action menu was a full menu that replaced whatever was on screen. It does
+    -- not now: an action menu is a card drawn over the list it belongs to, and
+    -- this one had no list to belong to -- it was the single case that had to fall
+    -- back to the full-panel path. Alt+Return is Main now, which is the key Alt+
+    -- Space used to be.
 }
 
 -- Runs a view for its DRAW and nothing else.
@@ -11709,6 +11994,23 @@ function Util.serve_draw(name, d, raw)
         -- can keep it current from the playback poll it already runs -- autoplay
         -- moving to the next track fades the next cover in without the menu
         -- being built again. See Util.serve_shelf.
+        -- WHETHER THIS MENU IS ABOUT THE ROW BEHIND IT. An action menu is a list
+        -- of verbs concerning the thing you were standing on, not a place -- the
+        -- engine has said so in comments for as long as they have existed (see
+        -- Util.open_playlist_actions and view_artist: "A CONTEXT MENU, so no
+        -- Util.scope and no trail step"). Saying it in the DRAW lets the UI draw
+        -- it over the list it came from instead of replacing it.
+        --
+        -- Declared per menu rather than inferred: theme=THEME_SUB is nearly this
+        -- signal, and is wrong -- twenty-five menus use that theme and only these
+        -- eight are action menus. Same `and true or nil` shape as `del` and `tab`
+        -- above, so the key stays absent everywhere else.
+        --
+        -- Every one of them pairs it with `art=false`: a card floating over the
+        -- list it came from is not a thing with a picture, and the list behind
+        -- it is still wearing whatever backdrop it had. See `art` below -- this
+        -- adds no second mechanism for saying "no cover here".
+        context = o.context and true or nil,
         artLive = Util.serve_shelf(d) or nil
     }
 end
@@ -11798,18 +12100,42 @@ function Util.serve_nav(args)
     -- INTO -- truncating here instead would save the trail already trimmed.
     -- pos 0 is legal and means Main: an empty trail is not a missing one.
     if type(pos) ~= "number" or pos < 0 or pos > #hops then pos = #hops end
-    -- Fold the walked part back into segments. A step hop before any root hop is
-    -- meaningless and dropped rather than guessed at.
-    local segs = {}
-    for i = 1, pos do
-        local h = hops[i]
-        if type(h) == "table" and h.cmd then
-            segs[#segs + 1] = {cmd = h.cmd, key = h.key, path = {}}
-        elseif #segs > 0 then
-            local pth = segs[#segs].path
-            pth[#pth + 1] = (type(h) == "table" and h.step ~= nil) and h.step or h
+    -- Fold a hop list back into segments. A step hop before any root hop is
+    -- meaningless and dropped rather than guessed at. Written once because it is
+    -- now run twice -- see `tail` below, which folds in exactly the same way and
+    -- differs only in what happens to the result.
+    local function fold(segs, list, upto)
+        for i = 1, upto do
+            local h = list[i]
+            if type(h) == "table" and h.cmd then
+                segs[#segs + 1] = {cmd = h.cmd, key = h.key, path = {}}
+            elseif #segs > 0 then
+                local pth = segs[#segs].path
+                pth[#pth + 1] = (type(h) == "table" and h.step ~= nil) and h.step or h
+            end
         end
     end
+    local segs = {}
+    fold(segs, hops, pos)
+    -- HOPS THAT ARE NOT PLACES. An action menu is produced by ANSWERING a row,
+    -- and that answer has to reach the view or there is no menu -- but a list of
+    -- verbs about a track is not somewhere you have been. The engine has said so
+    -- in comments since before the Qt port; this is where it stops being only a
+    -- comment.
+    --
+    -- So the UI sends those hops BESIDE the trail rather than in it. They are
+    -- walked exactly like the rest, and then: not saved to nav.json, not echoed
+    -- back as the trail, and not allowed to name a crumb. Closing the menu is
+    -- the UI dropping them, which costs no request at all -- the list underneath
+    -- never went anywhere.
+    local tail = (args and type(args.tail) == "table") and args.tail or nil
+    -- Where the tail's own segments begin, so the chain below can skip them. A
+    -- tail of plain steps creates none and this is simply never reached; a tail
+    -- that starts with a root hop -- Alt+Return, the playing track's menu from
+    -- wherever you are -- creates one, and it must not draw a seam for a place
+    -- that does not exist.
+    local tail_from = #segs + 1
+    if tail then fold(segs, tail, #tail) end
     local draw
     -- THE DAISY CHAIN. Each segment runs on its OWN stack and reports its own
     -- crumb; the chain is assembled here. That is what makes a root visible as a
@@ -11818,6 +12144,12 @@ function Util.serve_nav(args)
     -- one shared stack instead would have hidden the seam -- and a Main root,
     -- whose whole crumb is the word "Main", would have vanished entirely.
     local chain, roots = {}, {}
+    -- The session stack the tail was opened OVER, put back once it has drawn.
+    -- Util.serve_run ends by writing the stack its segment finished on, so a tail
+    -- with a segment of its own -- Alt+Return, the playing track's menu from
+    -- wherever you happen to be -- would leave session.json describing the
+    -- overlay. Nothing a cold start resumes into may be an overlay.
+    local pre_tail = nil
     -- No segments at all IS Main -- the trail before you have taken a step.
     if #segs == 0 then
         draw = Util.serve_main({})
@@ -11851,6 +12183,7 @@ function Util.serve_nav(args)
         -- trail menu is the exception, since what it lists is the trail it was
         -- opened over.
         local from = Util.session_stack()
+        if i == tail_from then pre_tail = from end
         -- Everything but the last segment is walked through: no art, no cost.
         Util.serve_art_skip = not last
         local ok, res = pcall(function()
@@ -11858,13 +12191,16 @@ function Util.serve_nav(args)
                 return Util.serve_open({tile = sg.key, path = sg.path, raw = args.raw})
             elseif sg.cmd == "view" then
                 return Util.serve_view({name = sg.key, path = sg.path, raw = args.raw,
-                                        stack = from})
+                                        stack = from, tip = tip, tipRoots = tip_roots})
             end
             return Util.serve_main({})
         end)
         Util.serve_art_skip = false
         if not ok then error(res, 0) end
         draw = res
+        -- A tail segment RUNS -- it is what produced the menu -- but contributes
+        -- nothing to the crumb, because it is not a step you took.
+        if i >= tail_from then goto next_seg end
         local c = (type(res) == "table" and type(res.crumb) == "table") and res.crumb or {"Main"}
         local part1 = 1
         -- WHETHER ANYTHING IS ALREADY ON THE CHAIN, not whether this is the first
@@ -11885,7 +12221,10 @@ function Util.serve_nav(args)
         ::next_seg::
     end
     if type(draw) == "table" then draw.crumb, draw.roots = chain, roots end
-    -- Only a trail that actually drew is worth resuming from.
+    if pre_tail then Util.session_set(pre_tail) end
+    -- Only a trail that actually drew is worth resuming from -- and `hops` here
+    -- is the trail alone. The tail was never in it, so nothing has to remember to
+    -- strip it out.
     Util.serve_nav_save(hops, pos, tip, tip_roots)
     -- Echoed so a resuming UI adopts the trail it just replayed rather than
     -- holding a crumb it cannot walk.
@@ -11920,17 +12259,74 @@ function Util.serve_nav_save(hops, pos, tip, tip_roots)
           and hops[n].cmd == "view" and hops[n].key == "listen" do
         n = n - 1
     end
+    -- ...AND THE SYSTEM MENU, for the opposite reason. Listening is too expensive
+    -- to resume into; System is simply not somewhere you were going. Quit is a ROW
+    -- in it, so the last thing the trail records before every deliberate shutdown
+    -- is "System" -- and the next cold start dutifully reopened the settings menu,
+    -- because session replay is faithful and this is the one step where being
+    -- faithful is wrong.
+    --
+    -- The whole SEGMENT, not just the root hop: System's submenus are steps inside
+    -- it, and leaving those behind would resume a path standing on no root. Found
+    -- by walking back to the last root rather than by counting, because how many
+    -- steps deep you were is not knowable from here.
+    --
+    -- On disk only. The live trail is untouched, so within a session System walks
+    -- and Alt+left leaves it exactly as before; this is what a COLD start reads.
+    local r = n
+    while r > 0 and not (type(hops[r]) == "table" and hops[r].cmd) do r = r - 1 end
+    if r > 0 and hops[r].cmd == "open" and hops[r].key == "system" then n = r - 1 end
     if n < #hops then
         local cut = {}
         for i = 1, n do cut[i] = hops[i] end
         hops = cut
         if type(pos) ~= "number" or pos > n then pos = n end
     end
+    -- The play origin is not ours to write -- Util.play_origin_save owns it --
+    -- and every trail write after it has to carry it through rather than drop it.
+    -- Recovered from disk when this is the first write of the process, which is
+    -- the cold start Alt+c most needs it for.
+    local origin = Util.play_origin()
     Util.serve_nav_state = {
         hops = hops or {}, pos = pos,
         tip = (type(tip) == "table" and #tip > 0) and tip or nil,
-        tipRoots = (type(tip_roots) == "table" and #tip_roots > 0) and tip_roots or nil
+        tipRoots = (type(tip_roots) == "table" and #tip_roots > 0) and tip_roots or nil,
+        origin = (type(origin) == "table" and origin.view) and origin or nil
     }
+    local f = io.open(P.nav, "w")
+    if not f then return end
+    f:write(json.encode(Util.serve_nav_state))
+    f:close()
+end
+
+-- THE LIST A TRACK WAS PLAYED FROM, as a single scope entry.
+--
+-- The deepest entry on the stack IS the menu that was on screen, and every
+-- registered view knows how to reopen itself from one (see reg and
+-- replay_session) -- so one entry is a complete way back with no journey
+-- attached to it. Kept beside the trail, because "where you were" already lives
+-- there and a second file for one object would be a second thing to keep in step.
+--
+-- An action menu takes no scope entry of its own, so playing from one records the
+-- list underneath it, which is exactly right.
+-- ...and reading it back, from memory or from disk. Both callers need the same
+-- recovery: a process that has not navigated yet still has an origin on disk from
+-- the last one, and a cold start is exactly when Alt+c has nothing else to go on.
+function Util.play_origin()
+    local o = type(Util.serve_nav_state) == "table" and Util.serve_nav_state.origin or nil
+    if o == nil then
+        local disk = Util.serve_nav_load()
+        o = disk and disk.origin or nil
+    end
+    return (type(o) == "table" and o.view) and o or nil
+end
+
+function Util.play_origin_save()
+    local st = Util.session_stack()
+    local leaf = (type(st) == "table" and #st > 0) and st[#st] or nil
+    if type(leaf) ~= "table" or not leaf.view then return end
+    if type(Util.serve_nav_state) ~= "table" then return end
+    Util.serve_nav_state.origin = json.decode(json.encode(leaf))
     local f = io.open(P.nav, "w")
     if not f then return end
     f:write(json.encode(Util.serve_nav_state))
@@ -11979,18 +12375,18 @@ function Util.serve_shelf(d)
     local t = it[1]
     if type(t) ~= "table" then return false end
     if not (t.type == "track" or t.type == "episode" or t.album ~= nil) then return false end
-    -- AN ALBUM IS THE EXCEPTION, and the only one. Every other container merely
-    -- COLLECTS tracks -- a playlist's cover has nothing to do with any track in
-    -- it -- but an album's cover IS its tracks' cover, so naming the container
-    -- and naming what is playing out of it are the same answer whenever you are
-    -- playing from here, and the album's own picture is the better answer when
-    -- you are not. Opening an album and being shown some unrelated track's
-    -- artwork is the version of this that reads as a bug.
+    -- A CONTAINER WITH A PICTURE OF ITS OWN IS THE EXCEPTION, and `own_art` is
+    -- that question asked directly. An album's sleeve, a playlist's tile and a
+    -- podcast's art are all pictures OF THE LIST YOU ARE IN, which is the thing
+    -- worth showing beside it -- being shown whatever happens to be playing tells
+    -- you nothing about where you are, and opening an album to find an unrelated
+    -- track's artwork reads as a bug.
     --
-    -- ctx_type/ctx_id rather than a view name: they are what view_browse was
-    -- already handed to build a context_uri from, and "these tracks are that one
-    -- album's" is exactly what they say.
-    if o.ctx_type == "album" and o.ctx_id then return false end
+    -- This used to test ctx_type == "album", then "album or playlist": a list of
+    -- kinds that could only grow, and that had already missed podcasts -- a show's
+    -- episode list passes no ctx_type at all, deliberately (see Util.open_show),
+    -- so it could never have matched however long the list got.
+    if o.own_art then return false end
     return true
 end
 
@@ -12134,7 +12530,35 @@ function Util.serve_art_after(name, d)
         -- ...and "none" is an answer a menu may give for itself: opts.art=false
         -- means this one is about nothing you can picture. Still sent, for the
         -- reason above -- the UI is told there is no cover, not left to guess.
+        -- ...but a CONTEXT MENU SAYS NOTHING AT ALL, which is different from
+        -- saying "none". It is a card drawn OVER a list that is still on screen
+        -- wearing its own backdrop, so a cover -- or the absence of one -- is an
+        -- answer about a menu that is not the one the backdrop belongs to. The UI
+        -- has no way to tell those apart from an event, so it applied this to the
+        -- list underneath: opening a track's action menu inside an album wiped the
+        -- album's sleeve and fell back to whatever happened to be playing.
+        --
+        -- ...unless it HAS one, which is the listener's result menu and nothing
+        -- else (see SERVE_VIEWS["listen-result"]). That one arrives out of nowhere
+        -- with no list behind it to be about, so its cover is the only thing on
+        -- screen saying what spoot identified -- and staying silent left the
+        -- backdrop showing whatever was playing, which is precisely the track it
+        -- is NOT. So: silent when a context menu declares it has no subject, and
+        -- otherwise it speaks like any other menu.
+        if d and d.opts and d.opts.context and not wants then return end
+        -- ...and NEITHER DOES A VIEW THAT DREW NO MENU. The listener is the case:
+        -- it answers empty -- its whole output is a card the UI draws itself --
+        -- and then this fired anyway and pushed the PLAYING track's cover into the
+        -- backdrop of the menu still sitting underneath. Spawning a picture behind
+        -- the listening card, and leaving it there after the listen was cancelled,
+        -- replacing whatever the list had been wearing.
+        if not (d.entries and #d.entries > 0) then return end
         Util.serve_write({ev = "context-art", view = name,
+                          -- ...and says the cover is ITS OWN, so the UI stops
+                          -- following playback for it. A card over a shelf would
+                          -- otherwise lose to artLive, which is the shelf's answer
+                          -- to a question this menu is not asking.
+                          own = (d and d.opts and d.opts.context) or nil,
                           path = (wants and Util.serve_ctx_art(d) or nil) or ""})
     end
 end
@@ -12173,6 +12597,12 @@ function Util.serve_playback()
     local t = current_track
     return {
         playing  = is_playing or false,
+        -- WHETHER THERE IS A PLAYER BEHIND ANY OF THIS. `id` below names the last
+        -- track Spotify remembers, which on a cold start is one from hours ago
+        -- with nothing loaded anywhere -- the difference between "paused" and
+        -- "over", and nothing in this payload could tell them apart. The UI drew
+        -- the transport marker on it either way. See Util.played_here.
+        live     = (is_playing or Util.played_here) or nil,
         shuffle  = is_shuffle or false,
         repeat_  = repeat_state or "off",
         id       = t and t.id or nil,
@@ -12206,7 +12636,26 @@ function Util.serve_playback()
                         and t.album.images[1].url or nil
             if not u then return nil end
             local p = Util.ensure_art_med(u, true)
-            return p ~= "" and p or nil
+            if p ~= "" then return p end
+            -- NOT ON DISK, AND NOTHING ELSE WAS EVER GOING TO PUT IT THERE.
+            -- Cache-only is right for this poll and wrong as the whole story: a
+            -- track played from a menu that never drew its cover -- the queue,
+            -- a shelf, autoplay moving on -- had no warm entry and no one to
+            -- make one, so the backdrop stayed empty until some other view
+            -- happened to fetch the same picture. Reopening a menu or pausing
+            -- and playing "fixed" it because those go through a path that does.
+            --
+            -- Fetched AFTER the reply has gone out (see the serve loop's
+            -- Util.serve_after), so the poll still never waits on a download,
+            -- and picked up by the next poll a second later -- which is a fade,
+            -- not a stall. Once per track: a cover Spotify does not have must
+            -- not be re-requested every second forever.
+            if Util.serving and Util.art_warm_for ~= (t and t.id) then
+                Util.art_warm_for = t and t.id
+                local url = u
+                Util.serve_after = function() Util.ensure_art_med(url) end
+            end
+            return nil
         end)()
     }
 end
@@ -12419,6 +12868,10 @@ Util.SERVE = {
     view = Util.serve_view,
     open = Util.serve_open,
     playback = Util.serve_playback,
+    -- Asked repeatedly while the listening card is up, and always answered on
+    -- the spot. See Util.listen_poll.
+    ["listen-poll"] = function() return Util.listen_poll() end,
+    ["listen-stop"] = function() return Util.listen_stop() end,
     views = function()
         local ks = {}
         for k in pairs(Util.SERVE_VIEWS) do ks[#ks+1] = k end

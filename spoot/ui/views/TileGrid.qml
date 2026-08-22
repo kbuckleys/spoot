@@ -35,17 +35,83 @@ GridView {
     property string playingId: ""
     property string playingAlbumId: ""
     property bool paused: false
+    // ...and where you left off, which is not the same thing. See RowList.lastId:
+    // on a cold start the poll names a track that is over rather than paused, and
+    // the tile holding it used to go green as though it were running.
+    property string lastId: ""
+    property string lastAlbumId: ""
 
     clip: true
     cellWidth: Math.floor(width / Math.max(1, columns))
     cellHeight: theme.cellHeight
     keyNavigationWraps: false
     highlightMoveDuration: 0
+    // HOW FAR A SHOVE CARRIES. Qt's defaults are tuned for a phone list you drag
+    // with a thumb; a wall of covers you are flicking through with a wheel wants
+    // to move further per gesture and settle sooner.
+    //
+    maximumFlickVelocity: 6000
+    flickDeceleration: 2200
+    // ...and the spring back off the end. The default rebound is slow enough to
+    // read as the grid recovering from something; this is a bounce.
+    rebound: Transition {
+        NumberAnimation { properties: "y"; duration: 190; easing.type: Easing.OutCubic }
+    }
 
     // The list's snap, for the same reason -- see RowList.
     function snap(i) {
         if (i < 0 || i >= count) return
         positionViewAtIndex(i, GridView.Contain)
+    }
+
+    // THE WHEEL, made to travel. A Flickable moves a fixed, small amount per
+    // notch and this Qt exposes no property for it (wheelDeceleration is not on
+    // GridView here), so the wheel is answered directly: one notch is a whole ROW
+    // of tiles rather than a fraction of one.
+    //
+    // Mouse only. A touchpad sends a continuous stream of small deltas and the
+    // Flickable's own handling is already right for that -- taking it over here
+    // would turn a smooth two-finger drag into a staircase.
+    WheelHandler {
+        acceptedDevices: PointerDevice.Mouse
+        onWheel: function (e) {
+            var max = Math.max(0, grid.contentHeight - grid.height)
+            var dy = (e.angleDelta.y > 0 ? -1 : 1) * grid.theme.cellHeight
+            grid.contentY = Math.max(0, Math.min(max, grid.contentY + dy))
+        }
+    }
+
+    // THE EDGES OF A SCROLLING GRID, faded rather than cut. A row of covers
+    // sliced mid-tile at the top of the viewport reads as damage; fading them
+    // into the panel says the grid continues. Drawn in the panel's own ground
+    // colour, so what a tile fades INTO is the surface it is sitting on.
+    //
+    // Only when there is something past the edge to fade -- at the top of the
+    // grid there is nothing above it, and a permanent shadow there would just be
+    // a dark band. Two plain gradients rather than a masked layer: a layer would
+    // render the whole grid to a texture on every frame of a scroll, which is
+    // the one moment it must not.
+    Rectangle {
+        z: 2
+        anchors { left: parent.left; right: parent.right; top: parent.top }
+        height: grid.theme.cellHeight / 2
+        opacity: grid.atYBeginning ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: grid.theme.ground }
+            GradientStop { position: 1.0; color: grid.theme.fade(grid.theme.ground, 0) }
+        }
+    }
+    Rectangle {
+        z: 2
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        height: grid.theme.cellHeight / 2
+        opacity: grid.atYEnd ? 0 : 1
+        Behavior on opacity { NumberAnimation { duration: 140 } }
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: grid.theme.fade(grid.theme.ground, 0) }
+            GradientStop { position: 1.0; color: grid.theme.ground }
+        }
     }
 
     delegate: Item {
@@ -86,6 +152,29 @@ GridView {
         // to whether the tile is current -- an animation writing to a bound
         // property breaks the binding, and the selection would then be stuck
         // wherever the last flash left it.
+        readonly property bool lastPick:
+            (grid.lastId.length > 0 && model.id === grid.lastId)
+            || (grid.lastAlbumId.length > 0 && model.id === grid.lastAlbumId)
+        // THE GLOW, the grid's half of the list's. A tile is artwork, so light
+        // UNDER it would be invisible -- the outline carries it here, the same
+        // way the pick flash does, breathing rather than sweeping because this is
+        // a state and not an event.
+        Rectangle {
+            anchors.fill: sel
+            radius: sel.radius
+            color: "transparent"
+            visible: cell.lastPick
+            border.width: grid.theme.tileBorder
+            border.color: grid.theme.fade(grid.theme.playing, 0.55)
+            SequentialAnimation on opacity {
+                loops: Animation.Infinite
+                running: cell.lastPick
+                NumberAnimation { from: 0.3; to: 1.0; duration: 1100
+                                  easing.type: Easing.InOutSine }
+                NumberAnimation { from: 1.0; to: 0.3; duration: 1100
+                                  easing.type: Easing.InOutSine }
+            }
+        }
         Rectangle {
             id: pick
             anchors.fill: sel

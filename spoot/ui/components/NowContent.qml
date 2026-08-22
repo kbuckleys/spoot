@@ -48,7 +48,11 @@ Item {
             Behavior on opacity { NumberAnimation { duration: 140 } }
             Behavior on color { ColorAnimation { duration: 140 } }
             font.family: content.theme.fontFamily
-            font.pointSize: content.theme.fontSize - 2
+            // The SAME size as the liked/explicit/lyrics marks riding in the
+            // title beside them -- they are all icons on one bar, and these two
+            // were a step smaller for no reason anyone could see except that
+            // they read as an afterthought.
+            font.pointSize: content.theme.fontSize - 1
             font.bold: true
         }
         Text {
@@ -58,7 +62,11 @@ Item {
             opacity: content.shuffle ? 1 : 0.3
             Behavior on opacity { NumberAnimation { duration: 140 } }
             font.family: content.theme.fontFamily
-            font.pointSize: content.theme.fontSize - 2
+            // The SAME size as the liked/explicit/lyrics marks riding in the
+            // title beside them -- they are all icons on one bar, and these two
+            // were a step smaller for no reason anyone could see except that
+            // they read as an afterthought.
+            font.pointSize: content.theme.fontSize - 1
             font.bold: true
         }
     }

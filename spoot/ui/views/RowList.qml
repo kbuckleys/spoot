@@ -45,6 +45,14 @@ GridView {
     // into the row's text by whoever built the menu.
     property string playingId: ""
     property bool paused: false
+    // WHERE YOU LEFT OFF, which is not the same thing as what is playing. On a
+    // cold start the poll still names the last track Spotify remembers -- hours
+    // old, with no player behind it -- and it used to arrive here as playingId and
+    // wear the transport marker, claiming a track was paused when it was simply
+    // over. It comes in separately now and is drawn as a CURSOR rather than as
+    // playback: this is where you were, not what is running. See main.qml's
+    // lastId, which is empty the moment anything is picked.
+    property string lastId: ""
     // WHAT NARROWED THIS LIST. Every row here matched it, and the characters
     // that did are marked so the list can be scanned rather than re-read. See
     // Mark.js -- the tiles do the same with the same code.
@@ -119,6 +127,28 @@ GridView {
 
         readonly property bool playing:
             list.playingId.length > 0 && model.id === list.playingId
+        readonly property bool lastPick:
+            list.lastId.length > 0 && model.id === list.lastId
+        // THE GLOW. Behind the row and behind the selection bar, breathing, in the
+        // playing green at an alpha that could never be mistaken for the bar
+        // itself -- it says "this is where you were" without saying "this is
+        // playing", which is the whole distinction the marker was getting wrong.
+        //
+        // No border: an outline reads as a second cursor competing with the real
+        // one, and there is nothing here to frame. Just light under the words.
+        Rectangle {
+            anchors.fill: parent
+            visible: cell.lastPick
+            color: list.theme.fade(list.theme.playing, 0.16)
+            SequentialAnimation on opacity {
+                loops: Animation.Infinite
+                running: cell.lastPick
+                NumberAnimation { from: 0.35; to: 1.0; duration: 1100
+                                  easing.type: Easing.InOutSine }
+                NumberAnimation { from: 1.0; to: 0.35; duration: 1100
+                                  easing.type: Easing.InOutSine }
+            }
+        }
         // AFTER THE TRACK NUMBER, not in front of it. A numbered row reads
         // "3. <track>", and the marker belongs to the track rather than to the
         // ordinal -- putting it first shoved every number right by a glyph the

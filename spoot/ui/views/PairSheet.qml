@@ -49,8 +49,12 @@ Column {
     readonly property int colGap: 48
     // A ceiling for the value column, past which a long value wraps rather than
     // pushing the window wider than the screen. A Spotify URL is the case that
-    // needs it.
-    property int maxValueWidth: 640
+    // needs it -- and 640 was too tight for the very thing it was chosen for: a
+    // track URL is 53 characters, which lands just over the cap at this font
+    // size and wrapped the one row nobody wants wrapped. Roomy now; the real
+    // ceiling is the panel's own clamp to the screen (see main.qml), which is
+    // what actually stops a pathological value.
+    property int maxValueWidth: 900
 
     readonly property int valueWidth: {
         var w = 0

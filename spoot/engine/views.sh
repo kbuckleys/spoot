@@ -51,6 +51,27 @@ PROBES = [
     ("library>liked",          "open",  {"tile": "library", "path": [1]}),
     ("track-actions",          "view",  {"name": "liked", "path": [{"i": 1, "alt": True}]}),
     ("trail-jump",             "view",  {"name": "trail-jump"}),
+    # THE CONTEXT-MENU ROUTE, which is how every action menu is actually reached
+    # now. The three probes above open one as a PATH STEP -- a real hop -- which
+    # is the fallback the UI takes only when there is nothing to draw the card
+    # over. These send it the way the UI does: as `tail`, walked but never
+    # entered on the trail.
+    #
+    # What is being pinned is the absence. `crumb` must not grow and `scope` must
+    # stay the parent's, because an action menu is not a place -- if either
+    # starts moving again, a track's verbs are back on the breadcrumb and in
+    # nav.json, which is exactly the regression this route exists to prevent.
+    ("ctx:track",              "nav",   {"hops": [{"cmd": "view", "key": "liked"}], "pos": 1,
+                                         "tail": [{"step": {"i": 1, "alt": True}}]}),
+    ("ctx:album",              "nav",   {"hops": [{"cmd": "view", "key": "saved-albums"}], "pos": 1,
+                                         "tail": [{"step": {"i": 1, "alt": True}}]}),
+    ("ctx:artist",             "nav",   {"hops": [{"cmd": "view", "key": "followed-artists"}], "pos": 1,
+                                         "tail": [{"step": {"i": 1, "alt": True}}]}),
+    # A tail that is a ROOT hop rather than a step -- the trail menu, which is
+    # also not a place. It creates a segment of its own and still must not reach
+    # the chain.
+    ("ctx:trail",              "nav",   {"hops": [{"cmd": "view", "key": "liked"}], "pos": 1,
+                                         "tail": [{"cmd": "view", "key": "trail-jump"}]}),
 ]
 
 # ANSWERED, BUT NOT DESCRIBED. Ten views the engine serves were probed by
@@ -86,10 +107,14 @@ STATE_PROBES = [
     ("show-list",              "view",  {"name": "show-list"}),
     ("latest-episodes",        "view",  {"name": "latest-episodes"}),
     ("saved-episodes",         "view",  {"name": "saved-episodes"}),
+    # WHERE THE MUSIC CAME FROM, as one step rather than the walk that led there.
+    # Recorded by whether it ANSWERS and nothing else: what it points at is the
+    # last list you played from, so its layout, its rows and its scope all change
+    # as you listen -- pinning any of them describes this afternoon, not the code.
+    ("origin",                 "view",  {"name": "origin"}),
     ("lyrics-current",         "view",  {"name": "lyrics-current"}),
     ("art-current",            "view",  {"name": "art-current"}),
     ("seek-current",           "view",  {"name": "seek-current"}),
-    ("actions-current",        "view",  {"name": "actions-current"}),
 ]
 
 p = subprocess.Popen(["lua", "spoot.lua", "--serve"], stdin=subprocess.PIPE,
@@ -128,8 +153,13 @@ for i, (label, cmd, args) in enumerate(PROBES, 1):
     n = len(rows)
     bucket = "0" if n == 0 else "1-9" if n < 10 else "10-99" if n < 100 else "100+"
     icons = "some" if (art or any(r.get("icon") for r in rows)) else "none"
+    # `ctx` says whether the menu declared itself a context menu. Recorded for
+    # every probe, not just the ctx: ones: a view that starts claiming it would
+    # be drawn as a floating card over whatever was on screen, and nothing else
+    # here would notice.
     out.append(f"{label:<22} layout={str(dd.get('layout')):<5} rows={bucket:<5} "
                f"icons={icons:<4} scope={str(dd.get('scope')):<16} "
+               f"ctx={'yes' if dd.get('context') else 'no ':<3} "
                f"crumb={len(dd.get('crumb') or [])}")
 
 for j, (label, cmd, args) in enumerate(STATE_PROBES, len(PROBES) + 1):

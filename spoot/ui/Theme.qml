@@ -71,7 +71,9 @@ QtObject {
     // Breathing room between a sheet's content and its frame, on every side. Was
     // 10, which read as text pressed against the edges of a box rather than as a
     // page with a margin.
-    readonly property int    sheetPad: 20
+    // The gap between a sheet's content and the panel edge. 20 read as text
+    // pressed against the frame once the sheets grew past a handful of rows.
+    readonly property int    sheetPad: 32
     // spoot.lua's SEP, the glyph it puts between a title and its subtitle in
     // every message bar. Defined once here so the now-playing strip separates
     // its fields with the same mark the rest of the app does, rather than a
@@ -105,6 +107,38 @@ QtObject {
     // --- window (ZENON `window`, main.rasi `window`) -------------------------
     readonly property int  radius:      10      // border-radius: 10px 10px 0 0
     readonly property int  borderWidth: 1
+    // THE DROP SHADOW, spoot's own. Compositor shadows are a per-user Hyprland
+    // setting and apply to a whole surface anyway -- spoot is one surface, so a
+    // compositor could never put a shadow under the card that floats INSIDE it.
+    // Drawn in the scene instead, which also means it looks the same on every
+    // setup rather than on whichever ones happen to have shadows switched on.
+    //
+    // spread is how far the blur reaches past the edge, drop is how far the light
+    // is above the object. Both small: this is a panel lifted off a desktop, not
+    // a card thrown across a room.
+    // A DROP SHADOW IS THREE SEPARATE THINGS, and folding them into one number
+    // is why asking for a bigger one made it fainter: a blur REDISTRIBUTES what
+    // it is given, so widening it alone spreads the same ink thinner until there
+    // is nothing left to see. Measured: at a 28px blur the shadow peaked at 43/255
+    // just outside the panel; at 64px, 8.
+    //
+    //   grow  -- how far the shape is inflated BEFORE blurring. This is what
+    //            makes a shadow big and PRESENT rather than merely soft, and it
+    //            is the piece that was missing. CSS calls it spread.
+    //   blur  -- the softness of the edge. MultiEffect's useful ceiling is 64.
+    //   drop  -- how far below the object it sits, because the light is above.
+    // Softer and further out: the blur is now wide RELATIVE to the grow, which is
+    // what makes a shadow read as gentle rather than as a dark edge -- a big grow
+    // with a small blur is just a bigger hard shape. 64 is MultiEffect's useful
+    // ceiling for blurMax, so the softness comes from spending less on grow.
+    readonly property int  shadowGrow:  20
+    readonly property int  shadowBlur:  64
+    readonly property int  shadowDrop:  18
+    readonly property real shadowAlpha: 0.5
+    // What the capture has to be padded by for none of it to be clipped: the blur
+    // cannot paint outside the texture it is given, and a clipped blur comes out
+    // as a hard rectangle -- which is exactly how this first went wrong.
+    readonly property int  shadowPad:   shadowGrow + shadowBlur + shadowDrop
     readonly property int  mainWidth:   1000    // main.rasi width: 1000px
 
     // --- message bar (ZENON `message`) --------------------------------------
@@ -128,6 +162,17 @@ QtObject {
     // other message bar; listen.rasi alone says Bold 13, and it was being drawn
     // at 12 with the rest.
     readonly property int listenCapSize: 13
+    // How far the listening card floats above the bottom edge. It is not docked
+    // like a menu -- it is a small thing working away while you wait -- so it sits
+    // clear of the edge rather than growing out of it.
+    readonly property int listenLift: 90
+    // FIXED, and deliberately not derived from anything. The listener is the same
+    // small card whatever it is drawn over and whichever output it lands on --
+    // it used to take its size from the theme table through root.g, which falls
+    // back to the MENU's geometry the moment the overlay theme clears, and from
+    // the surface, which is recreated per monitor. Between them the card changed
+    // shape on the way out and again on the way to a differently-shaped screen.
+    readonly property int listenIcon: 200
     // textbox-prompt-colon padding: 6px 10px 6px 20px -- the glyph sits well in
     // from the edge, close to what you type.
     readonly property int promptPadL: 20
@@ -163,8 +208,8 @@ QtObject {
         // for every shelf in the app.
         "menu":      {width: 1000, columns: 1, lines: 14},
         "thumbs":    {width: 1000, columns: 5, lines: 3,  icon: 150},
-        "album":     {width: 1000, columns: 1, lines: 13, icon: 364},
-        "action":    {width: 1000, columns: 1, lines: 13, icon: 364, center: true},
+        "album":     {width: 1000, columns: 1, lines: 14, icon: 364},
+        "action":    {width: 1000, columns: 1, lines: 14, icon: 364, center: true},
         // CENTRED. These are menus of choices rather than shelves of content:
         // a handful of verbs or settings, read as a group. A shelf of hundreds
         // of tracks stays left-aligned, because a ragged left edge is what makes
@@ -180,10 +225,10 @@ QtObject {
         // here.
         "lyrics":    {width: 1000, columns: 1, lines: 14,
                       center: true, rowSize: 14, rowWeight: Font.DemiBold},
-        "pods":      {width: 1000, columns: 1, lines: 13},
-        "meta":      {width: 800,  columns: 1, lines: 13},
-        "binds":     {width: 680,  columns: 1, lines: 13},
-        "message":   {width: 700,  columns: 1, lines: 13},
+        "pods":      {width: 1100, columns: 1, lines: 14},
+        "meta":      {width: 900,  columns: 1, lines: 14},
+        "binds":     {width: 680,  columns: 1, lines: 14},
+        "message":   {width: 700,  columns: 1, lines: 14},
         "art":       {width: 1000, columns: 1, lines: 1,  icon: 1000},
         "imp":       {width: 640,  columns: 1, lines: 1,  icon: 640},
         "listen":    {width: 304,  columns: 1, lines: 1,  icon: 300}

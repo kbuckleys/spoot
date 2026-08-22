@@ -27,7 +27,13 @@ Item {
         // A sheet is modal while it is up: anything dismisses it, and nothing
         // behind it moves. Checked before every other binding for that reason.
         if (app.sheet.length || app.sheetRows.length || app.artPath.length) {
+            // GIVING UP ON THE LISTENER IS GIVING UP. You did not open spoot to
+            // browse -- you asked it to name a song -- so cancelling before it
+            // has an answer leaves, rather than revealing a menu you never went
+            // looking for. Every other overlay just closes onto what is behind it.
+            var wasListen = app.listenMode
             app.closeOverlay()
+            if (wasListen) app.dismiss()
             e.accepted = true
             return
         }
@@ -46,7 +52,6 @@ Item {
         // not swallow Alt+L.
         if (alt && !ctrl) {
             switch (e.key) {
-            case Qt.Key_Space:    app.openMain();                     break
             case Qt.Key_L:        app.openView("liked");              break
             case Qt.Key_P:        app.openView("recently-played");    break
             case Qt.Key_T:        app.openView("top-tracks");         break
@@ -74,17 +79,21 @@ Item {
             // opposite -- copying the playing track's URL -- which every
             // action menu already offers as a row.
             case Qt.Key_G:        app.openView("open-link");          break
+            // HOME. It was Alt+Space, which is a chord your thumb has to leave
+            // the row for; Alt+Return is the same reach as everything else here.
+            // What used to be on this key -- the playing track's action menu --
+            // is gone: every action menu is a card over the list it belongs to
+            // now, and one summoned over an unrelated menu was the one that had
+            // nothing underneath it to sit on.
             case Qt.Key_Return:
-            case Qt.Key_Enter:    app.openView("actions-current");    break
+            case Qt.Key_Enter:    app.openMain();                     break
             case Qt.Key_Delete:   app.goHome();                       break
-            // Alt+1..9 jumps to a step in the trail. rofi allowed nineteen
-            // custom bindings in total, so spending nine on the breadcrumb was
-            // never on the table; here they cost nothing.
-            case Qt.Key_1: case Qt.Key_2: case Qt.Key_3:
-            case Qt.Key_4: case Qt.Key_5: case Qt.Key_6:
-            case Qt.Key_7: case Qt.Key_8: case Qt.Key_9:
-                app.jumpToCrumb(e.key - Qt.Key_1 + 1)
-                break
+            // ALT+1..9 STOOD HERE, one key per breadcrumb step. Nine bindings
+            // to reach nine places, none of them labelled with its own number,
+            // and all of them a worse version of the two that already do this:
+            // Tab lists the whole path by name, and a crumb step is clickable.
+            // The steps are still reachable -- see app.jumpToCrumb, which both
+            // of those call.
             default: return
             }
             e.accepted = true
@@ -103,8 +112,12 @@ Item {
         // greater than a space, so it was swallowed too: Delete appeared to do
         // nothing, and what it actually did was append a control character to
         // the filter. Backspace never had the problem -- its "\b" is below space.
+        // app.liveFilter, not app.filter: with a context menu up the typing
+        // narrows ITS verbs, and setFilter routes to whichever list is in front.
+        // Reading the base filter here appended to the wrong string and then
+        // filtered the wrong list.
         if (!ctrl && e.text.length === 1 && e.text > " " && e.text !== "\u007F") {
-            app.setFilter(app.filter + e.text)
+            app.setFilter(app.liveFilter + e.text)
             e.accepted = true
             return
         }
@@ -114,8 +127,14 @@ Item {
             // Double duty: clear what you typed, and only leave when there is
             // nothing left to clear. A pending prompt is abandoned first --
             // Escape out of "New Playlist" must not also close spoot.
+            //
+            // A CONTEXT MENU CLOSES BEFORE SPOOT DOES. The card is a real trail
+            // step, so leaving it is goBack -- the same thing Backspace does
+            // below. Without this Escape out of an action menu hid the whole app
+            // and left the step on the trail to reopen it on the next summon.
             if (app.promptFor.length) app.cancelPrompt()
-            else if (app.filter.length) app.setFilter("")
+            else if (app.liveFilter.length) app.setFilter("")
+            else if (app.ctxUp) app.goBack()
             else app.dismiss()
             break
         case Qt.Key_Backspace:
@@ -129,8 +148,8 @@ Item {
             // string being built, so one press clears it whole and the next goes
             // back a level. Search RESULTS follow this rule, not the one above:
             // once the query is answered they are an ordinary list.
-            if (app.composing && app.filter.length) app.setFilter(app.filter.slice(0, -1))
-            else if (app.filter.length) app.setFilter("")
+            if (app.composing && app.liveFilter.length) app.setFilter(app.liveFilter.slice(0, -1))
+            else if (app.liveFilter.length) app.setFilter("")
             else app.goBack()
             break
         case Qt.Key_Return:
@@ -144,7 +163,7 @@ Item {
             // A leading space is not something anyone means to type, so an empty
             // field leaves the key free to be what it is everywhere else. Once
             // there is a word to separate, it separates it.
-            if (app.filter.length) app.setFilter(app.filter + " ")
+            if (app.liveFilter.length) app.setFilter(app.liveFilter + " ")
             else app.control("playpause")
             break
         // Tab is the menu's own when the menu claims it, and the trail menu
