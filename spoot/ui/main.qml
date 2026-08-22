@@ -594,6 +594,28 @@ Window {
             // before this Connections object exists and it is simply lost. The
             // first draw is PULLED in bootstrap() instead, which cannot race.
             if (name === "ready") { /* handshake seen; nothing to do */ }
+            // THE ENGINE CAME BACK. Everything in flight died with it, so the
+            // callbacks are dropped rather than left to leak, the loading glow is
+            // released, and the menu is asked for again -- which the engine
+            // answers from the session it restores on start. From the outside a
+            // crash is now a flicker and a line in the notice bar, instead of a
+            // window that stops answering and never says why.
+            else if (name === "engine-restarted") {
+                root.pending = ({})
+                root.drawIds = ({})
+                root.inFlight = 0
+                root.endDraw()
+                root.abortSwap()
+                root.notify("engine restarted")
+                root.refresh(0)
+            }
+            // ...and when it cannot start at all, say so rather than spinning.
+            else if (name === "engine-lost") {
+                root.inFlight = 0
+                root.endDraw()
+                root.abortSwap()
+                root.notify("engine keeps failing to start \u2014 try: spoot --doctor", true)
+            }
             // See Util.view_trail_jump: the engine cannot walk a path that spans
             // roots, so it names the step and this does the walking.
             else if (name === "jump") { root.jumpTrail(data.crumb || 0) }

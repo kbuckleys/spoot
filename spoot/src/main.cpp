@@ -33,6 +33,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QProcess>
+#include <QDateTime>
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
 
@@ -43,12 +44,20 @@ class Engine : public QObject {
     Q_OBJECT
 public:
     explicit Engine(const QString &lua, const QString &script, QObject *parent = nullptr)
-        : QObject(parent) {
+        : QObject(parent), m_lua(lua), m_script(script) {
         connect(&m_proc, &QProcess::readyReadStandardOutput, this, &Engine::drain);
+        connect(&m_proc, &QProcess::finished, this, &Engine::died);
+        // A deliberate shutdown must not look like a crash. aboutToQuit covers
+        // the ways the host ends; the `quit` event in drain() covers the engine
+        // asking to end, which arrives before it exits.
+        if (qApp) connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+            m_stopping = true;
+            m_proc.kill();
+        });
         // The engine's stderr is spoot's stderr: a Lua traceback has to reach
         // the terminal rather than vanish into a pipe nobody reads.
         m_proc.setProcessChannelMode(QProcess::ForwardedErrorChannel);
-        m_proc.start(lua, {script, "--serve"});
+        spawn();
     }
 
     // Returns the request id so a caller can match its own reply.
@@ -64,6 +73,36 @@ signals:
     void event(QString name, QVariant data);
 
 private slots:
+    // THE ENGINE DYING WAS SILENT. Nothing was connected to finished, so a crash
+    // left the window up holding a dead pipe: every request after it wrote into
+    // nothing and the UI waited forever for a reply that could not come. That is
+    // not crash isolation, it is a zombie -- and the fix is cheap, because spoot
+    // already restores its session and its trail on a cold start, so a respawn
+    // lands back where you were.
+    void died(int code, QProcess::ExitStatus status) {
+        Q_UNUSED(status)
+        if (m_stopping) return;
+        // A half-read line belongs to a process that no longer exists.
+        m_buf.clear();
+        // A CRASH LOOP MUST NOT BE ANSWERED WITH AN INFINITE ONE. Five deaths in
+        // ten seconds means the engine cannot start at all -- a syntax error, a
+        // missing dependency -- and retrying forever would bury the reason under
+        // a spinning window.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_firstDeath > 10000) { m_firstDeath = now; m_deaths = 0; }
+        if (++m_deaths > 5) {
+            emit event(QStringLiteral("engine-lost"),
+                       QVariantMap{{QStringLiteral("code"), code}});
+            return;
+        }
+        spawn();
+        // Announced AFTER the respawn, so whatever the UI does about it -- drop
+        // the replies it is still waiting on, ask for its menu again -- is said
+        // to a live engine.
+        emit event(QStringLiteral("engine-restarted"),
+                   QVariantMap{{QStringLiteral("code"), code}});
+    }
+
     void drain() {
         m_buf += m_proc.readAllStandardOutput();
         // Newline-delimited, so a partial line at the tail is normal and is
@@ -74,8 +113,11 @@ private slots:
             m_buf.remove(0, nl + 1);
             if (line.trimmed().isEmpty()) continue;
             const QJsonObject o = QJsonDocument::fromJson(line).object();
-            if (o.contains("ev"))
+            if (o.contains("ev")) {
+                // The engine asking to end is not the engine failing.
+                if (o.value("ev").toString() == QLatin1String("quit")) m_stopping = true;
                 emit event(o.value("ev").toString(), o.toVariantMap());
+            }
             else
                 emit response(o.value("id").toInt(), o.value("ok").toBool(),
                               o.value("data").toVariant(), o.value("err").toString());
@@ -83,9 +125,15 @@ private slots:
     }
 
 private:
+    void spawn() { m_proc.start(m_lua, {m_script, QStringLiteral("--serve")}); }
+
     QProcess m_proc;
     QByteArray m_buf;
     int m_id = 0;
+    QString m_lua, m_script;
+    bool m_stopping = false;
+    int m_deaths = 0;
+    qint64 m_firstDeath = 0;
 };
 
 // Keeps spoot resident. Escape hides the surface instead of ending the process,
