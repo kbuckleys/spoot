@@ -4,7 +4,7 @@
 </picture></p>
 
 <h3><p align="center">
-A keyboard-centric Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
+A keyboard-first Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
 <br>
 
 # The philosophy behind spoot
