@@ -154,6 +154,12 @@ P.eresume_max     = 200
 -- often the loop asks whether a match landed or the user closed the window, so
 -- it wants to be short enough to feel instant and long enough not to spin.
 P.listen_timeout = 30
+-- EVERYTHING THE LISTENER HAS EVER IDENTIFIED. A recognition is a small piece of
+-- work with a real cost -- thirty seconds of held microphone -- and until now its
+-- result lived exactly as long as the card that showed it. Kept newest-first and
+-- capped, the way the search history is.
+P.listen_hist    = P.cache .. "/listen_history.json"
+P.listen_hist_max = 60
 P.listen_poll    = 0.3
 
 -- When each tile grid's artwork was last warmed, one timestamp per art kind.
@@ -325,6 +331,12 @@ P.lib_kinds = {
 -- repeated at each use, same as every other path in this table.
 P.assets     = P.dir .. "/style/assets"
 local SEP = " \u{F01D8} "
+-- A ROW THAT DOES SOMETHING ELSE ON SHIFT+RETURN, marked. One glyph, defined
+-- here beside SEP because it is punctuation rather than content: a row wearing
+-- it is making a promise about a key, and every row that makes that promise has
+-- to make it the same way. A local, not a Util field -- Util is not declared
+-- until further down, and smoke.sh checks exactly that.
+local ALT_MARK = "\u{F0BAB}"
 local CACHE_TTL_SHORT = 300
 local CACHE_TTL_MED = 3600
 local CACHE_TTL_LONG = 86400
@@ -2400,6 +2412,19 @@ function Util.copied_link()
     ui_say("Copied web link")
 end
 
+-- ASKING FOR TEXT, and the answer may not exist yet.
+--
+-- nil means NOT ANSWERED: the field has only just been put on screen and this
+-- pass of the view is over -- exactly what a nil from ui_menu means, and every
+-- caller must stop on it. "" means answered with nothing, which is also a stop.
+-- So the test is `if not x or x == "" then`, and it has to be that way round.
+--
+-- Worth spelling out because all three callers had it wrong, and wrong in the
+-- way that WRITES: rofi's input box could only ever answer with a string, so ""
+-- was cancel and `x ~= ""` was a complete test. Under Qt the first pass answers
+-- nil, `nil ~= ""` is true, and each of them went on to send its request --
+-- creating a nameless playlist the moment the field appeared, and renaming one
+-- to nothing. See view_playlists, view_add_pl and Util.open_playlist_actions.
 local function ui_ask(prompt, preset, theme)
     -- Replaced by Util.serve_mode with a prompt event answered from the path.
     -- What stood here spawned a rofi input box and read its stdout.
@@ -4212,11 +4237,33 @@ end
 -- that matches nothing and force a re-page on the next run.
 function Util.lib_probe(kind)
     if kind == "artists" then
-        local d = api_get("me/following", "type=artist&limit=1")
+        -- A WHOLE PAGE, not one row. Liked tracks and saved albums carry
+        -- `added_at`, so their newest item moves the moment anything changes;
+        -- me/following has no such field and no snapshot id, so the only signals
+        -- are the count and the ids themselves. `total .. first_id` -- which is
+        -- what this asked for -- is blind to every change that keeps both: one
+        -- follow paired with one unfollow, or re-following someone who does not
+        -- sort to the top. The shelf then stays as it was until ttl_lib_max
+        -- forces a full rebuild hours later, which is exactly "followed artists
+        -- don't update".
+        --
+        -- Fifty ids in one request instead of one, summed into a fingerprint.
+        -- The same single call, a response measured in kilobytes, and it now
+        -- catches any change inside the first page rather than only the two that
+        -- happen to move the count or the head.
+        local d = api_get("me/following", "type=artist&limit=50")
         local a = d and d.artists
         if not a then return nil end
-        local first = a.items and a.items[1]
-        return (a.total or -1) .. ":" .. ((first and first.id) or "")
+        -- Order-sensitive on purpose: a swap that preserves the set is still a
+        -- change to the list this fingerprint stands for. Positional weights, so
+        -- two ids trading places do not cancel out.
+        local sum = 0
+        for i, it in ipairs(a.items or {}) do
+            for c in tostring(it.id or ""):gmatch(".") do
+                sum = (sum * 31 + c:byte() + i) % 0x7FFFFFFF
+            end
+        end
+        return (a.total or -1) .. ":" .. sum
     end
     local d = api_get(kind == "liked" and "me/tracks" or "me/albums", "limit=1")
     if not d or not d.items then return nil end
@@ -7558,11 +7605,16 @@ function Util.go_to_artist(arts, subject, want_hub)
     local ae = {}
     for i, a in ipairs(arts) do ae[i] = display_artist(a) end
     while true do
-        -- No backdrop: a list of NAMES is not about a track, and the cover of
-        -- whatever is playing beside it is decoration.
+        -- A CARD. This is the same kind of thing every action menu is -- a short
+        -- question about the row you are already standing on, raised by a verb
+        -- and gone as soon as it is answered -- and it was the last one still
+        -- replacing the whole menu to ask it. `art=false` for the reason they all
+        -- set it: the list behind is still wearing its own backdrop, and a list
+        -- of NAMES is not about a picture anyway.
         local aidx = ui_menu(ae, {prompt="Artists",
             mesg=(subject or "") .. SEP .. #arts .. " artists",
-            by_index=true, theme=THEME_SUB, alt_select=true, art=false})
+            by_index=true, theme=THEME_SUB, alt_select=true,
+            context=true, art=false})
         local pick_alt = Util.alt_pressed
         Util.alt_pressed = false
         if not aidx then return false end
@@ -8136,7 +8188,9 @@ function Util.open_playlist_actions(pl, on_change)
             if not token then ui_say("No auth")
             else
                 local nn = ui_ask("New Name", pl.name or "", P.THEME_SEARCH)
-                if nn ~= "" and nn ~= (pl.name or "") then
+                -- `not nn` FIRST: see ui_ask. Without it the field going up was
+                -- itself a rename, to nothing.
+                if nn and nn ~= "" and nn ~= (pl.name or "") then
                     local url = "https://api.spotify.com/v1/playlists/" .. pl.id
                     local r = Util.api_write("PUT", url, token, {body={name=nn}})
                     if Util.is2xx(r) then
@@ -8657,7 +8711,11 @@ view_add_pl = function(track_id, track_name)
     local target_id, target_name
     if ids[idx] == "__create__" then
         local pl_name = ui_ask("New Playlist", "", P.THEME_SEARCH)
-        if pl_name == "" then return end
+        -- Nothing yet, or nothing at all: either way there is no playlist to
+        -- make. See ui_ask -- this tested `== ""` alone, so the pass that merely
+        -- RAISED the field fell straight through and posted a playlist with no
+        -- name, before the user had typed a character.
+        if not pl_name or pl_name == "" then return end
         local url = "https://api.spotify.com/v1/users/" .. my_id .. "/playlists"
         local r = Util.api_write("POST", url, token, {body={name=pl_name}, raw=true})
         local cr = safe_decode(r)
@@ -8720,7 +8778,8 @@ local function view_playlists()
         if not idx then return end
         if idx == 1 then
             local pl_name = ui_ask("New Playlist", "", P.THEME_SEARCH)
-            if pl_name == "" then goto pl_loop end
+            -- See ui_ask. `not pl_name` is the pass that only put the field up.
+            if not pl_name or pl_name == "" then goto pl_loop end
             local me = api_get_me()
             if me and me.id then
                 local url = "https://api.spotify.com/v1/users/" .. me.id .. "/playlists"
@@ -8813,7 +8872,13 @@ local function view_top_tracks()
     if not tracks then ui_say("No top tracks"); return end
     Util.scope({view="top-tracks"}, function()
     local entries = format_entries(tracks)
-    view_browse(entries, tracks, "Top Tracks" .. SEP .. #tracks .. " tracks", "top-tracks", nil, nil)
+    -- THE NAME IS THE WINDOW IT DESCRIBES. Spotify's me/top/tracks is
+    -- medium_term -- roughly the last four weeks -- and "Top Tracks" said
+    -- nothing about that, which made a shelf that visibly changes week to week
+    -- look like it was simply wrong. The view key, the cache file and the trail
+    -- id are all still `top-tracks`: this is a label, and renaming any of the
+    -- others would strand every saved trail that names it.
+    view_browse(entries, tracks, "This Month's Top" .. SEP .. #tracks .. " tracks", "top-tracks", nil, nil)
     if jump_to_track_pending then return end
 end)
 end
@@ -9068,7 +9133,7 @@ end
 Util.LIBRARY_ROWS = {
     {key = "liked",     label = "Liked Tracks",     open = function() view_liked_tracks() end,
      art = function() return Util.shelf_head(load_liked_tracks) end},
-    {key = "top",       label = "Top Tracks",       open = function() view_top_tracks() end,
+    {key = "top",       label = "This Month's Top",  open = function() view_top_tracks() end,
      art = function() return Util.shelf_head(api_get_top_tracks) end},
     {key = "albums",    label = "Saved Albums",     open = function() view_saved_albums() end,
      art = function() return Util.shelf_head(load_saved_albums) end},
@@ -9713,6 +9778,45 @@ end
 
 -- HOW IS IT GOING. Answers immediately, every time -- that is the whole point.
 -- The UI asks while its card is up and acts on the state it gets back.
+-- NEWEST FIRST, and one entry per track: recognising the same song twice moves
+-- it back to the top rather than filling the list with it. `at` is what the rows
+-- are labelled with, so it is stored rather than derived -- a recognition is a
+-- moment, and the list is a record of moments.
+function Util.listen_hist_add(track)
+    if not (track and track.id) then return end
+    local hist = disk_get(P.listen_hist) or {}
+    if type(hist) ~= "table" then hist = {} end
+    for i = #hist, 1, -1 do
+        local e = hist[i]
+        if type(e) ~= "table" or not e.track or e.track.id == track.id then
+            table.remove(hist, i)
+        end
+    end
+    table.insert(hist, 1, {at = os.time(), track = track})
+    while #hist > P.listen_hist_max do table.remove(hist) end
+    disk_set(P.listen_hist, hist)
+end
+
+function Util.listen_hist()
+    local hist = disk_get(P.listen_hist)
+    return type(hist) == "table" and hist or {}
+end
+
+-- HOW LONG AGO, in the coarsest unit that still says something. A recognition is
+-- remembered as the moment it happened, and "3d" answers the question the list
+-- is actually asking better than a timestamp does. Falls back to a date once the
+-- relative form stops being useful.
+function Util.ago(t)
+    t = tonumber(t)
+    if not t or t <= 0 then return "" end
+    local d = os.time() - t
+    if d < 60 then return "just now" end
+    if d < 3600 then return math.floor(d / 60) .. "m ago" end
+    if d < 86400 then return math.floor(d / 3600) .. "h ago" end
+    if d < 86400 * 7 then return math.floor(d / 86400) .. "d ago" end
+    return os.date("%d %b", t)
+end
+
 function Util.listen_poll()
     local st = Util.listen
     if not st then return {state = "idle"} end
@@ -9730,6 +9834,7 @@ function Util.listen_poll()
                 label = (m.artist and (m.artist .. SEP) or "") .. (m.title or "")}
     end
     Util.listen_track = track
+    Util.listen_hist_add(track)
     return {state = "match", name = track.name or "",
             artist = (track.artists and track.artists[1] and track.artists[1].name) or ""}
 end
@@ -9819,7 +9924,14 @@ local function view_playback()
         Util.recent_reload()
         add(#recent_tracks > 0 and "Recently Played" or Util.dim("Recently Played"), "recent")
         add("Open Web Link", "openurl")
-        add("Listen\u{2026}", "listen")
+        -- THE MARK FOR A ROW WITH A SECOND GESTURE, and it goes FIRST. Shift+Return
+        -- here opens what the listener has already found rather than starting
+        -- another thirty seconds of listening, and there is no other way to know
+        -- that from looking at the menu. Leading, because it is a property of the
+        -- row rather than part of its name -- the same column every marked row
+        -- would use, read before the words instead of found after them. ALT_MARK
+        -- is the glyph, defined once.
+        add(ALT_MARK .. " Listen\u{2026}", "listen")
         return items
     end
     build_items()
@@ -9835,21 +9947,44 @@ local function view_playback()
     Util.serve_cover(Util.ensure_art_med(pb_art, true), pb_art)
     while true do
         build_items()
-        local si = ui_menu(items, {prompt="Playback",
-            theme=THEME_SUB, refresh=build_items})
+        local si = ui_menu(items, {prompt="Playback", theme=THEME_SUB,
+            refresh=build_items, alt_select=true})
+        local alt = Util.alt_pressed
+        Util.alt_pressed = false
         if not si then break end
-        -- Compared plain from here down. A dimmed row echoes back carrying its
-        -- markup, so `si == "Recently Played"` would silently stop matching the
-        -- moment the row went grey -- the branch would vanish exactly when the
-        -- user most needs to be told why. Stripping once keeps every branch
-        -- below written in the label it displays. Rows that must stay inert when
-        -- dimmed already guard themselves (Seek checks current_track).
-        si = Util.strip_markup(si)
-        if si == "Pause" then
-            if not Util.transport(false) then ui_say("Failed to pause") end
-        elseif si == "Resume" then
-            if not Util.transport(true) then ui_say("Failed to resume") end
-        elseif si == "Next Track" then
+        -- ON THE KEY, not the words. `keys` has named every row here since the
+        -- menu was written and was read by nothing: the branches below compared
+        -- the LABEL, and every label in this menu is state -- Pause becomes
+        -- Resume, Shuffle carries its own ON/OFF, and two rows are dimmed into
+        -- markup when they have nothing to act on. Each of those needed a rule
+        -- here to undo it (a strip_markup pass, two `find("^Shuffle")` prefix
+        -- matches), and adding so much as a glyph to a row -- see the Listen
+        -- row's alternate mark -- silently unmatched its branch.
+        --
+        -- Resolved against `items` AS DRAWN: the next pass's build_items has not
+        -- run yet, so the label that came back still names the row it came from.
+        local label = Util.strip_markup(si)
+        local key
+        for i, it in ipairs(items) do
+            if Util.strip_markup(it) == label then key = keys[i]; break end
+        end
+        if not key then goto pb_next end
+        -- SHIFT+RETURN, where a row offers something else. Only Listen does, and
+        -- it says so on its face; anything else falls through to its plain verb,
+        -- which is what makes the key harmless everywhere it means nothing.
+        if alt then
+            if key == "listen" then Util.view_listen_history() end
+            goto pb_next
+        end
+        if key == "play" then
+            -- ONE ROW, ONE KEY, and which way it goes comes from the state the
+            -- row was DRAWN from rather than from reading its word back.
+            if is_playing then
+                if not Util.transport(false) then ui_say("Failed to pause") end
+            else
+                if not Util.transport(true) then ui_say("Failed to resume") end
+            end
+        elseif key == "next" then
             local prev_id = current_id
             local r = do_playback_cmd("next")
             if Util.is2xx(r) then
@@ -9860,7 +9995,7 @@ local function view_playback()
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
             end
-        elseif si == "Previous Track" then
+        elseif key == "prev" then
             local prev_id = current_id
             local r = do_playback_cmd("previous")
             if Util.is2xx(r) then
@@ -9871,19 +10006,19 @@ local function view_playback()
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
             end
-        elseif si:find("^Shuffle") then toggle_shuffle()
-        elseif si:find("^Repeat") then toggle_repeat()
-        elseif si == "Seek" then
+        elseif key == "shuffle" then toggle_shuffle()
+        elseif key == "repeat" then toggle_repeat()
+        elseif key == "seek" then
             if current_track then view_seek(current_track) end
-        elseif si == "Track Actions" then
+        elseif key == "actions" then
             if current_track then view_actions(current_track) end
-        elseif si == "Your Queue" then
+        elseif key == "queue" then
             view_your_queue()
             if jump_to_track_pending then break end
-        elseif si == "Recently Played" then
+        elseif key == "recent" then
             view_recently_played()
             if jump_to_track_pending then break end
-        elseif si == "Listen\u{2026}" then
+        elseif key == "listen" then
             -- NON-BLOCKING UNDER THE QT FRONT END, which is the whole point of
             -- the split: listen_start hands the card over and returns, and the UI
             -- polls it. Calling the blocking wrapper here would have re-locked the
@@ -9891,13 +10026,44 @@ local function view_playback()
             -- System menu -- and undone the fix for anyone who reaches the
             -- listener that way rather than by the keybind.
             if Util.serving then Util.listen_start() else Util.view_listen() end
-        elseif si == "Open Web Link" then
+        elseif key == "openurl" then
             local url = Util.get_clipboard()
             if url and url ~= "" then open_url(url)
             else ui_say("Clipboard is empty") end
         end
+        ::pb_next::
     end
 end)
+end
+
+-- WHAT THE LISTENER HAS FOUND, as a place you can go back to. Reached by
+-- Shift+Return on the Listen row, which wears ALT_MARK to say so.
+--
+-- A real scoped view rather than a card: it is a list of tracks you can browse,
+-- scroll and act on, which is a place -- and the same shape every other track
+-- list in the app has, so Return plays and Shift+Return opens the action menu
+-- without any of that being written again here.
+function Util.view_listen_history()
+    local hist = Util.listen_hist()
+    if #hist == 0 then
+        ui_say("Nothing identified yet" .. SEP .. "Listen finds tracks by ear")
+        return
+    end
+    local tracks, entries = {}, {}
+    for _, e in ipairs(hist) do
+        if type(e) == "table" and type(e.track) == "table" then
+            tracks[#tracks+1] = e.track
+            -- The track as every other list draws it, then WHEN -- which is the
+            -- one fact this list has that no other one does.
+            entries[#entries+1] = display_track(e.track) .. SEP .. Util.ago(e.at)
+        end
+    end
+    if #tracks == 0 then ui_say("Nothing identified yet"); return end
+    Util.scope({view = "listen-history"}, function()
+        view_browse(entries, tracks,
+                    "Heard" .. SEP .. #tracks .. (#tracks == 1 and " track" or " tracks"),
+                    "listen-history", nil, nil)
+    end)
 end
 
 -- VIEW: SYSTEM
@@ -10420,7 +10586,7 @@ reg("related", "Related", function(s)
 end, nil, true)
 reg("search", "Search", function() view_search() end)
 reg("liked",            "Liked Tracks",     function() view_liked_tracks() end)
-reg("top-tracks",       "Top Tracks",       function() view_top_tracks() end)
+reg("top-tracks",       "This Month's Top", function() view_top_tracks() end)
 reg("your-queue",       "Your Queue",       function() view_your_queue() end)
 reg("recently-played",  "Recently Played",  function() view_recently_played() end)
 reg("saved-albums",     "Saved Albums",     function() view_saved_albums() end)
@@ -10457,6 +10623,7 @@ reg("ui-setting", "UI Settings", function(sc)
     if spec then Util.ui_pick(spec) end
 end)
 reg("playback",         "Playback",         function() view_playback() end)
+reg("listen-history",   "Heard",            function() Util.view_listen_history() end)
 reg("system",           "System",           function() view_system() end)
 
 local function replay_session(prefer_current)
@@ -12103,6 +12270,21 @@ Util.SERVE_VIEWS = {
         replay_session()
     end,
     listen           = function() Util.listen_start() end,
+    -- What it has already found. Its own entry point, so a warm start can land
+    -- back on it and views.sh can probe it like any other list.
+    ["listen-history"] = function() Util.view_listen_history() end,
+    -- THE PLAYING TRACK'S OWN ACTION MENU, as an entry point.
+    --
+    -- Shift+Return on Main's Playback tile has always meant this, and the branch
+    -- that does it lives in main() -- the interactive loop, which serve mode
+    -- never runs: Util.serve_main builds the grid and answers, and reads no path
+    -- at all. So the key reached the engine, walked into a function that ignores
+    -- steps, and came back with Main. The tile behaves like the track row it is
+    -- standing in for again, and by the same route every other card takes.
+    ["track-actions"] = function()
+        if not current_track then ui_say("Nothing playing"); return end
+        view_actions(current_track)
+    end,
     -- The track the last listen identified, as its own action menu. Opened by
     -- the UI as a context hop, so it is a card over whatever you were on and
     -- costs no trail step -- which is what "jump to the identified track" has to

@@ -635,13 +635,24 @@ Window {
             else if (name === "prompt") {
                 root.promptFor = data.prompt || ""
                 root.setFilter(data.preset || "")
-                // The step that opened the prompt is not a place either -- the
-                // engine answered nil and stayed put -- so it comes off the path
-                // and is re-sent with the text appended when you submit. Here
-                // rather than with the empty draw below, because a prompt is the
-                // one transient the user then TYPES into: the next thing sent has
-                // to be built on a trail that no longer holds this step.
-                root.popTransient()
+                // THE STEP THAT RAISED THE FIELD STAYS ON THE PATH, and this is
+                // the whole of "create new playlist doesn't work".
+                //
+                // It used to come off here, on the reasoning that the engine
+                // answered nil and stayed put so the step was not a place. It is
+                // not -- and it is still an ANSWER. `Create New Playlist` is row
+                // one of a real menu, and the text is the answer to the field
+                // that row opened: the engine reads them in that order (see
+                // ui_ask, which takes the step AFTER the one its menu consumed).
+                // Dropping the row put the typed name where the row answer
+                // belonged, so the playlists grid -- a by_index menu -- was handed
+                // a string and the engine raised "attempt to compare number with
+                // string". Nothing was ever created.
+                //
+                // Not a place is handled where every other step's is: `keep`
+                // says so on the next draw and applyWhere trims it, so this
+                // leaves no crumb behind either way. Giving up on the field is
+                // the one case that has to drop it by hand -- see cancelPrompt.
             }
             // HOW TO LOOK, from the engine. Sent before the first draw and again
             // whenever a setting changes, so a change lands live rather than at
@@ -970,7 +981,19 @@ Window {
         // menu was opened from, not to the menu.
         // `keep` counts steps INSIDE the current root, so it lands after that
         // root's own hop -- the segment boundary the engine measured against.
-        if (d && d.keep !== undefined) {
+        // ...BUT A STEP THAT RAISED A FIELD IS NOT SPENT. It is half of an answer
+        // waiting for the other half, and `keep` cannot know that: the view took
+        // the step, put a prompt up and stayed exactly where it was, which is
+        // indistinguishable from a verb that acted -- so the trim below drops it,
+        // and the typed name then lands where the ROW answer belonged. That is
+        // the second half of "create new playlist doesn't work", and the reason
+        // taking popTransient out of the prompt handler was not enough on its own:
+        // this was doing the same thing one step later.
+        //
+        // The prompt event is written before the response, so promptFor is
+        // already set by the time this draw is applied. Cancelling drops the step
+        // by hand -- see cancelPrompt -- and submitting appends the text to it.
+        if (d && d.keep !== undefined && !root.promptFor.length) {
             var want = root.rootAt(root.trailPos) + 1 + d.keep
             if (want < root.trailPos) {
                 // ...and if that lands exactly where we stood BEFORE the step,
@@ -1067,6 +1090,28 @@ Window {
         // this card are not on it, so there is no `keep` arithmetic to do and no
         // position to move. Only the stale-viewer sweep is shared.
         root.dropStaleOverlay()
+        // A STEP THAT ANSWERED WITH A CARD WAS NEVER A PLACE -- the mirror of the
+        // adoption applyWhere does in the other direction, and the last route by
+        // which a card could still land on the trail.
+        //
+        // Shift+Return and openCard both put their step on ctxHops before asking,
+        // because the UI knows in advance that those open a card. A plain Return
+        // cannot know: `Seek` is row two of the Playback menu and looks like any
+        // other row until the answer comes back saying `context`. So that step
+        // went on the trail, and everything downstream followed it -- backing out
+        // of the card had to take a trail step off, and taking a step off the
+        // trail means a round trip, so closing Seek fetched and redrew Playback
+        // although it had never gone anywhere.
+        //
+        // Moved here, the card is a card however it was reached: ctxShown gets a
+        // tail to revert to when a verb is used, and goBack closes it for nothing.
+        if (!root.ctxHops.length && root.hops.length
+                && root.trailPos === root.hops.length) {
+            root.ctxHops = [root.hops[root.hops.length - 1]]
+            root.hops = root.hops.slice(0, root.hops.length - 1)
+            root.trailPos = root.hops.length
+            root.fullCrumb = []; root.fullRoots = []
+        }
         // A CONTEXT MENU DOES NOT SURVIVE BEING USED. `keep` is the engine saying
         // which of the steps behind this draw described a place; when the last
         // provisional one did not, the verb ACTED -- Play, Like, Albumart, Copy
@@ -1139,7 +1184,21 @@ Window {
             root.ctxFilter = ""
             root.applyCtxFilter()
         }
-        root.applyIdentity(d)
+        // ONLY WHAT THE CARD OWNS. applyIdentity is the BODY's identity -- its
+        // scope, its crumb, the trail map, the lyric cues -- and a card is not
+        // the body: it is drawn over a list that has not moved.
+        //
+        // Calling it here is the whole of "the seek menu redraws the list after
+        // you pick another track". The Seek card answers with scope `seek`, which
+        // was written over the list's own; the card then closes without a draw,
+        // so nothing put it back; and the next real draw compared `liked` against
+        // a remembered `seek`, decided it was a different menu, and played the
+        // whole swap animation over rows that were already correct. See sameMenu.
+        //
+        // Delete and Tab are the exception: those two keys act on the CARD while
+        // it has the keyboard, so it has to say whether they mean anything.
+        root.canDelete = d.del === true
+        root.canTab = d.tab === true
         root.applyOrigin()
         // The card places its own cursor, and only when it is new -- a patched
         // redraw leaves every row where it was, so moving the cursor would be the
@@ -1826,8 +1885,22 @@ Window {
         // Main's tiles are OPENED, not stepped into -- but only Main's own. A card
         // in front of them is a list of verbs, and its rows carry no tile key at
         // all, so this branch would have opened `undefined`.
-        if (root.entryCmd === "main" && !alt && !root.ctxUp) {
-            if (rows.count) root.openTile(rows.get(i).key)
+        if (root.entryCmd === "main" && !root.ctxUp) {
+            var tile = rows.count ? rows.get(i).key : ""
+            // SHIFT+RETURN ON PLAYBACK IS THE PLAYING TRACK'S ACTION MENU -- the
+            // same destination the key reaches from any track row, so the tile
+            // behaves like the row it stands in for.
+            //
+            // Sent as a CARD rather than as a step, because Main is not a menu
+            // the engine walks: Util.serve_main builds the grid and answers,
+            // reading no path, so a step aimed at it did nothing at all and Main
+            // simply redrew. `track-actions` is the same view by name.
+            if (alt) {
+                if (tile === "playback") { root.openCard("track-actions"); return }
+                // No other tile offers a second gesture; treat the key as plain
+                // rather than dropping the press.
+            }
+            if (tile.length) root.openTile(tile)
             return
         }
         var m = root.focusModel
@@ -1882,7 +1955,14 @@ Window {
     // Leaving it on was a loop: the path is replayed on every refresh, so the
     // viewer reopened itself the moment anything else happened -- and closing it
     // only dismissed the overlay, never the step that kept summoning it.
-    function cancelPrompt() { root.promptFor = ""; root.setFilter("") }
+    function cancelPrompt() {
+        root.promptFor = ""
+        root.setFilter("")
+        // AND THE STEP GOES WITH IT. While the field is up that step is still an
+        // answer waiting for its second half (see the prompt event); abandoned,
+        // it is a row that would open the field again on the next refresh.
+        root.popTransient()
+    }
 
     function closeOverlay() {
         // GIVING UP STOPS THE RECORDER. Nothing used to: the card went away and
@@ -2557,7 +2637,25 @@ Window {
     }
 
     Timer {
-        interval: 1000; running: true; repeat: true; triggeredOnStart: true
+        // ONCE A SECOND, AND FIVE TIMES A SECOND OVER THE CHANGEOVER.
+        //
+        // This is the pop at the start of a track. A track ending is something
+        // only the poll can see, so between the last note and the next answer the
+        // interpolator goes on advancing a position that has run past the old
+        // duration -- the bar sits pinned at 100% for up to a whole second and
+        // then teleports back to nothing when the truth arrives. That is the jump,
+        // and it lands a second or so INTO the new track rather than at its start,
+        // which is exactly how it reads.
+        //
+        // Nothing here can know sooner, so it asks oftener, and only where it
+        // matters: inside the last four seconds of a track the answer is worth
+        // five times as much and costs nothing extra to get -- Util.serve_playback
+        // reads the local player over D-Bus and touches the network on no path
+        // this takes. The gap collapses from ~1000ms to ~200ms, which reads as the
+        // bar simply starting again.
+        interval: (root.playback.duration > 0
+                   && root.playback.duration - root.positionMs < 4000) ? 200 : 1000
+        running: true; repeat: true; triggeredOnStart: true
         onTriggered: root.call("playback", {}, function (p) {
             root.playback = p || ({})
             root.syncPos(p)
@@ -2672,6 +2770,16 @@ Window {
             // With the panel hidden there is no shape to be outside OF, so any
             // click is a click away from the listener -- which is a cancel.
             if (root.listenMode) { root.closeOverlay(); return }
+            // A FIELD IS ITS OWN EDGE TOO, and clicking away from one abandons
+            // it rather than the app -- the same thing Escape does. Checked
+            // before the panel test below, which would otherwise read a click on
+            // the blurred list as a click on the panel and leave the field up.
+            if (root.promptFor.length) {
+                var q = outside.mapToItem(promptCard, m.x, m.y)
+                if (q.x < 0 || q.y < 0 || q.x > promptCard.width || q.y > promptCard.height)
+                    root.cancelPrompt()
+                return
+            }
             if (root.ctxUp) {
                 var c = outside.mapToItem(ctxCard, m.x, m.y)
                 if (c.x < 0 || c.y < 0 || c.x > ctxCard.width || c.y > ctxCard.height)
@@ -2978,12 +3086,13 @@ Window {
                     // query has a home of its own, and echoing it here as well --
                     // with a match count against rows it does not even filter --
                     // was the message bar standing in for a widget that was missing.
-                    text: inputBar.visible
+                    // The prompt is a CARD now (see promptCard), so the bar goes
+                    // back to describing the menu underneath rather than echoing
+                    // a field that is drawn somewhere else.
+                    text: (inputBar.visible || root.promptFor.length)
                           ? root.viewMesg
-                          : root.promptFor.length
-                            ? (root.promptFor + "  \u203a  " + root.filter)
-                            : (root.filter.length ? (root.filter + "  \u2500  " + rows.count)
-                                                  : root.viewMesg)
+                          : (root.filter.length ? (root.filter + "  \u2500  " + rows.count)
+                                                : root.viewMesg)
                     color: zenon.playing
                     font.family: zenon.fontFamily
                     font.pointSize: zenon.fontSize
@@ -3290,7 +3399,13 @@ Window {
             Item {
                 id: ctxLayer
                 anchors.fill: parent
-                opacity: root.ctxUp ? 1 : 0
+                // TWO THINGS FLOAT OVER THE BODY: a menu of verbs, and a field
+                // asking for a name. They want exactly the same treatment -- the
+                // list behind blurred and pushed back, a card with the panel's own
+                // ground, a shadow under it -- so they share this layer rather
+                // than the prompt growing a second one that would have to be kept
+                // in agreement with it.
+                opacity: (root.ctxUp || root.promptFor.length > 0) ? 1 : 0
                 visible: opacity > 0
                 Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
@@ -3357,8 +3472,92 @@ Window {
                     // transform of its own.
                     scaleFactor: ctxCard.scale
                 }
+                // A FIELD, FLOATING. It used to be a line in the message bar --
+                // "New Playlist  ›  what you have typed so far" -- which is the
+                // bar standing in for a widget that was not there: no shape, no
+                // caret, and it read as a caption about the menu rather than as
+                // something waiting for you. It is the same card the verbs get,
+                // because it is the same kind of interruption.
+                Shadow {
+                    theme: zenon
+                    target: promptCard
+                    scaleFactor: promptCard.scale
+                }
+                Rectangle {
+                    id: promptCard
+                    visible: root.promptFor.length > 0
+                    anchors.centerIn: parent
+                    // As wide as what is being typed, within reason: wide enough
+                    // to look like a field on an empty one, and never wider than
+                    // the body it floats over.
+                    width: Math.max(420, Math.min(parent.width - zenon.rowPadH * 4,
+                                                  promptText.implicitWidth
+                                                  + zenon.rowPadH * 3 + caretW))
+                    height: promptLabel.implicitHeight + promptText.implicitHeight
+                            + zenon.messagePadV * 8
+                    readonly property int caretW: 2
+                    radius: zenon.radius
+                    color: zenon.ground
+                    border.width: zenon.borderWidth
+                    border.color: zenon.borderCol
+                    // The panel's gesture at the size of a card, exactly as
+                    // ctxCard takes it.
+                    scale: root.promptFor.length ? 1 : 0.955
+                    Behavior on scale {
+                        NumberAnimation { duration: zenon.popCard
+                                          easing.type: Easing.OutBack
+                                          easing.overshoot: zenon.popBack }
+                    }
+                    // WHAT IS BEING ASKED, in the caption's own colour and place --
+                    // the same green bold line a card carries at its top.
+                    Text {
+                        id: promptLabel
+                        anchors { top: parent.top; left: parent.left; right: parent.right
+                                  topMargin: zenon.messagePadV * 2
+                                  leftMargin: zenon.rowPadH; rightMargin: zenon.rowPadH }
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                        text: root.promptFor
+                        color: zenon.playing
+                        font { family: zenon.fontFamily; pointSize: zenon.fontSize; bold: true }
+                    }
+                    // ...AND WHAT YOU HAVE TYPED, with a caret against its end.
+                    // Sized to the text rather than anchored across the card, so
+                    // the caret sits where the words stop -- the same shape the
+                    // search box's entry has, for the same reason.
+                    Text {
+                        id: promptText
+                        anchors { top: promptLabel.bottom
+                                  topMargin: zenon.messagePadV * 3
+                                  horizontalCenter: parent.horizontalCenter
+                                  horizontalCenterOffset: -promptCard.caretW }
+                        width: Math.min(implicitWidth,
+                                        promptCard.width - zenon.rowPadH * 2 - promptCard.caretW)
+                        text: root.filter
+                        color: zenon.foreground
+                        elide: Text.ElideLeft
+                        font { family: zenon.fontFamily; pointSize: zenon.entrySize
+                               weight: Font.DemiBold }
+                    }
+                    Rectangle {
+                        anchors { left: promptText.right; leftMargin: 2
+                                  verticalCenter: promptText.verticalCenter }
+                        width: promptCard.caretW
+                        height: promptText.implicitHeight - 2
+                        color: zenon.playing
+                        SequentialAnimation on opacity {
+                            loops: Animation.Infinite
+                            running: promptCard.visible
+                            NumberAnimation { from: 1; to: 0; duration: 500
+                                              easing.type: Easing.InOutQuad }
+                            NumberAnimation { from: 0; to: 1; duration: 500
+                                              easing.type: Easing.InOutQuad }
+                        }
+                    }
+                }
                 Rectangle {
                     id: ctxCard
+                    visible: root.ctxUp
                     // CENTRED, on the body and everything in it -- the backdrop
                     // included. Shifting the card off-center to clear the cover
                     // was tried and is worse: a context menu belongs in the middle
@@ -3534,6 +3733,21 @@ Window {
                     width > 0 ? Math.max(0, head - Math.min(head, 130 / width)) : 0
                 readonly property real bloomPeak:
                     width > 0 ? Math.max(bloomFrom, head - Math.min(head, 34 / width)) : 0
+                // HOW FAR THE BAR'S CORNER HAS COME IN at the height the rule
+                // sits at. The corner is an arc of radius r whose centre is r up
+                // from the bottom, so at a height y below that centre the edge is
+                // r - sqrt(r^2 - (r-y)^2) in from the corner.
+                //
+                // Measured at the rule's LOWEST edge, which is where the curve has
+                // come furthest in -- taking its top edge instead would leave the
+                // bottom row of the line poking out, which is the whole artifact
+                // this exists to avoid. Rounded up for the same reason.
+                readonly property int ruleLift: nowBar.corner > 1 ? 1 : 0
+                readonly property int ruleInset: {
+                    var r = nowBar.corner, y = nowBar.ruleLift
+                    if (r <= 0 || y >= r) return 0
+                    return Math.ceil(r - Math.sqrt(r * r - (r - y) * (r - y)))
+                }
 
                 // The unplayed remainder.
                 Rectangle {
@@ -3582,6 +3796,12 @@ Window {
                 // read as a smear rather than a light.
                 Rectangle {
                     anchors.fill: parent
+                    // THE SAME CORNERS THE WASH TURNS. Without them this painted a
+                    // square bottom-left over the rounded bar and stuck out past
+                    // the panel's own curve -- nowBar clips, but a clip is a
+                    // rectangle and cannot round anything.
+                    bottomLeftRadius: nowBar.corner
+                    bottomRightRadius: nowBar.corner
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
                         GradientStop { position: 0.0; color: zenon.fade(zenon.playing, 0) }
@@ -3615,7 +3835,15 @@ Window {
                 // The unplayed half of it first, dim, the full width.
                 Rectangle {
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                    anchors.bottomMargin: nowBar.corner > 1 ? 1 : 0
+                    // INSIDE THE CURVE. A radius cannot help here -- Qt clamps a
+                    // rectangle's corner to half its height, and this is 2px tall
+                    // -- so the rule is held clear of the corner instead. `inset`
+                    // is how far in the bar's own curve has come by the height
+                    // this line sits at, and both rules take it so their gradients
+                    // still measure the same span.
+                    anchors.leftMargin: nowBar.ruleInset
+                    anchors.rightMargin: nowBar.ruleInset
+                    anchors.bottomMargin: nowBar.ruleLift
                     height: 2
                     color: zenon.fade(zenon.playing, 0.10)
                 }
@@ -3624,7 +3852,9 @@ Window {
                 // end together.
                 Rectangle {
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                    anchors.bottomMargin: nowBar.corner > 1 ? 1 : 0
+                    anchors.leftMargin: nowBar.ruleInset
+                    anchors.rightMargin: nowBar.ruleInset
+                    anchors.bottomMargin: nowBar.ruleLift
                     height: 2
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
@@ -3804,7 +4034,16 @@ Window {
             // enough to take every continuation line that had one. The card has
             // been sized 0x0 ever since, which is why neither the image viewer
             // nor the listener drew anything at all.
-            width: artImage.width + pad * 2
+            // WIDE ENOUGH FOR WHAT IT SAYS. The picture decides for the viewer --
+            // a cover is the thing you came to look at -- but the listener's
+            // picture is a 200px glyph and its CAPTION is the content: one of a
+            // dozen lines, a different one each time, and every one of them
+            // longer than 200px. They were being elided to "spoot is consulting
+            // t…", which is the joke cut off before the punchline.
+            width: root.artIsListen
+                   ? Math.max(artImage.width + pad * 2,
+                              artCap.implicitWidth + zenon.messagePadH * 2)
+                   : artImage.width + pad * 2
             // The bar sits flush on the picture, so there is no gap between them
             // to account for -- pad, bar, picture, pad.
             height: root.artIsListen
@@ -3859,36 +4098,15 @@ Window {
                 topRightRadius: zenon.radius - zenon.artBorder
             }
 
-            // LISTENING rings. Only while songrec is running -- the same card
-            // otherwise shows a still cover, which should not pulse. Three
-            // circles expanding and fading on a stagger, so the window says
-            // "receiving" rather than "frozen" during a thirty-second wait.
-            Repeater {
-                model: root.overlayTheme === "listen" ? 3 : 0
-                delegate: Rectangle {
-                    anchors.centerIn: parent
-                    property real phase: 0
-                    // root.artIcon, not root.g.icon: g falls back to the MENU's
-                    // geometry the moment overlayTheme clears, so the rings were
-                    // sized off a different picture than the one they ring.
-                    width: root.artIcon * (0.55 + phase * 0.85)
-                    height: width
-                    radius: width / 2
-                    color: "transparent"
-                    border.width: 2
-                    border.color: zenon.playing
-                    opacity: (1 - phase) * 0.45
-                    SequentialAnimation on phase {
-                        loops: Animation.Infinite
-                        running: root.overlayTheme === "listen"
-                        // Staggered so the rings chase each other outward
-                        // instead of pulsing as one thick band.
-                        PauseAnimation { duration: index * 600 }
-                        NumberAnimation { from: 0; to: 1; duration: 1800
-                                          easing.type: Easing.OutCubic }
-                    }
-                }
-            }
+            // THREE EXPANDING RINGS STOOD HERE, chasing each other outward on a
+            // stagger to say "receiving" during the thirty-second wait. They said
+            // it over the top of the thing that was already saying it -- the line
+            // underneath, which changes every time and is the part with any
+            // personality -- and they said it loudest: a ring sweeping past the
+            // words is what the eye follows, so the one-liner was furniture
+            // behind an animation. The glyph still breathes and the caption still
+            // pulses on the same beat; that is enough for a card that is asking
+            // you to wait.
 
             // THE CAPTION SITS ABOVE THE PICTURE, as it did in rofi: art.rasi
             // and imp.rasi both order their mainbox [message, listview].
