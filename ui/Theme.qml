@@ -138,6 +138,11 @@ QtObject {
     readonly property string glyphPrev:  "\uF048"
     readonly property string glyphNext:  "\uF051"
     readonly property string glyphSpoot: "\u{F1BC}"
+    // The liked heart, filled and hollow. The filled one is the same codepoint
+    // Util.status_icons puts on a saved row -- one value for the whole app, so a
+    // row and the dock cannot end up drawing different hearts.
+    readonly property string glyphLiked:  "\u{f05d}"
+    readonly property string glyphUnliked: "\u{f08a}"
     readonly property string glyphShuffleOn:   "\u{F074}"
     readonly property string glyphShuffleOff:  "\u{F049D}"
     // No statusOff colour: an unlit control is the same green turned down, not

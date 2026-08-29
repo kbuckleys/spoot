@@ -946,11 +946,7 @@ Window {
     // else below it: opening a card retires a stale viewer, and moves the trail
     // not at all.
     function dropStaleOverlay() {
-        if (!root.overlayFresh
-            && (root.sheet.length || root.sheetRows.length || root.artPath.length
-                || root.listenMode)) {
-            root.closeOverlay()
-        }
+        if (!root.overlayFresh && root.overlayAsked) root.closeOverlay()
         root.overlayFresh = false
     }
 
@@ -1186,10 +1182,7 @@ Window {
                 // earlier menu, and close it on sight. It is not left over: the
                 // pick that opened it is still in flight. Re-armed rather than
                 // never cleared, so an overlay that genuinely IS stale still goes.
-                if (root.sheet.length || root.sheetRows.length || root.artPath.length
-                    || root.listenMode) {
-                    root.overlayFresh = true
-                }
+                if (root.overlayAsked) root.overlayFresh = true
                 // ...and the list behind is asked again, because the verb may
                 // well have changed it -- Like moves a heart on the very row the
                 // card was about. Same menu, so applyDraw patches the rows in
@@ -1585,7 +1578,6 @@ Window {
     // in on autoplay with no redraw and nothing asked of the engine. Off a
     // shelf -- an action menu, an album's own page -- the draw named a subject
     // and that wins.
-    readonly property int selIndex: body.item ? body.item.currentIndex : -1
     // Set by the draw. See Util.serve_draw's artLive.
     property bool artLive: false
     // THIS SHELF IS A COPY THE ENGINE KNOWS IS OLD, and the real one is already
@@ -1617,6 +1609,31 @@ Window {
         // there is another one.
         onTriggered: { root.drawStale = false; root.staleTries++; root.refresh(0) }
     }
+    // IS AN OVERLAY IN FLIGHT -- one that has been ASKED for, whether or not it
+    // has finished appearing. `artPath` is the request and `artShown` below is the
+    // latch; the difference matters, and it used to be decided by whichever
+    // spelling each of five copies of this expression happened to use.
+    //
+    // This is the one a DRAW asks: should this new menu retire the overlay in
+    // front of it, and does the keymap belong to that overlay rather than to the
+    // rows. See dropStaleOverlay, applyContext and Keymap's modal branch.
+    readonly property bool overlayAsked:
+        root.sheet.length > 0 || root.sheetRows.length > 0
+        || root.artPath.length > 0 || root.listenMode
+
+    // ...AND IS ONE ON SCREEN, which is what a CLICK asks. Off the latch, so it
+    // is still true through the fade out -- a picture you can still see is a
+    // picture a click should close. Excludes the listener, which every caller
+    // handles ahead of this because leaving it means leaving spoot.
+    readonly property bool viewerUp:
+        root.artShown.length > 0 || root.sheet.length > 0 || root.sheetRows.length > 0
+
+    // ...AND IS ANYTHING AT ALL IN FRONT OF THE ROWS. What makes a click on the
+    // list a dismissal rather than a pick -- see RowList.inert and dismissTop,
+    // which are the two halves of the same rule and had a copy each.
+    readonly property bool anythingUp:
+        root.viewerUp || root.promptFor.length > 0 || root.ctxUp
+
     // WHICH OVERLAYS MOVE THE PANEL. The image viewer does: albumart and an
     // artist's impression are things you look AT, so the panel leaves the bottom
     // edge and centers on the output.
@@ -1680,6 +1697,29 @@ Window {
     readonly property bool artBehind:
         root.contextArtFor.length > 0 && root.playback.id !== undefined
         && root.contextArtFor !== root.playback.id
+    // ...AND IT EXPIRES.
+    //
+    // The rule above is "the draw is ahead of the poll, so the draw wins until
+    // they agree" -- and they only ever agree if the poll catches up to the track
+    // the DRAW named. Let the music move on by itself and it never does: the poll
+    // goes to a third track, contextArtFor still names the first, artBehind stays
+    // true, and the backdrop is pinned to a cover from two tracks ago. With spoot
+    // closed there is no new draw to correct it, so it sits there for the rest of
+    // the session -- the whole of "the backdrop never changes when spoot is
+    // closed".
+    //
+    // A DEADLINE, not an identity. What the draw's answer is worth is one poll
+    // interval of being right; past that the poll is the better witness whatever
+    // the two say. So the name is dropped shortly after it is set and playback
+    // takes back over -- which is also exactly what autoplay needs.
+    onContextArtForChanged: if (root.contextArtFor.length) artForLife.restart()
+    Timer {
+        id: artForLife
+        // Comfortably over the 1s poll and well under a track, so it covers the
+        // gap it exists for and nothing else.
+        interval: 1600
+        onTriggered: root.contextArtFor = ""
+    }
     readonly property string coverArt:
         root.artLive
             ? (root.artBehind ? (root.contextArt || root.playback.art || "")
@@ -1745,17 +1785,29 @@ Window {
             out += root.crumbSpan(col, root.esc(root.crumb[i]), last ? undefined : i)
         }
         // What you stepped back OUT of, held at the arrow's own grey so it reads
-        // as a path not taken rather than another destination. Inert on purpose:
-        // one path step can spend two crumb parts, so a click here could not say
-        // honestly where it would land. Alt+right walks them.
+        // as a path not taken rather than another destination.
+        //
+        // ...AND CLICKABLE NOW, which it was not. It was inert on the grounds that
+        // one path step can spend two crumb parts, so a click could not say
+        // honestly where it would land -- true, and it was equally true of the
+        // steps BEHIND you, which were clickable all along and quietly did nothing
+        // for exactly that reason. jumpToCrumb answers it for both directions now:
+        // the nearest depth at or before the part you clicked, which for a
+        // qualified step is the one place both of its parts describe.
+        //
+        // Walking back and then forward again by clicking is the same gesture
+        // twice, and having only one half of it work read as the trail being
+        // half a control.
         for (var j = 0; j < root.crumbAhead.length; j++) {
             var k = root.crumb.length + j
             // Arrow and step in ONE span, so the two share a colour here for the
-            // same reason they do above -- these are simply all at the walked-out
-            // grey rather than at the step's own.
-            out += root.crumbSpan(zenon.crumbArrow,
+            // same reason they do above -- these are all at the walked-out grey
+            // rather than at the step's own, and brighten under the pointer
+            // exactly as a step behind you does.
+            out += root.crumbSpan(root.crumbHover === k ? zenon.foreground
+                                                        : zenon.crumbArrow,
                                   root.crumbSep((root.fullRoots || []).indexOf(k) >= 0)
-                                  + root.esc(root.crumbAhead[j]))
+                                  + root.esc(root.crumbAhead[j]), k)
         }
         return out
     }
@@ -2367,6 +2419,7 @@ Window {
             positionMs: root.positionMs
             art: root.playback.art || ""
             icons: root.playback.icons || ""
+            liked: root.playback.liked === true
             anchorV: root.anchorV
             anchorH: root.anchorH
             screenName: modelData.name
@@ -2377,9 +2430,14 @@ Window {
             tracked: root.cursorTracked
             curX: root.cursorX
             curY: root.cursorY
-            // Not while spoot itself is up. The host unmaps every dock on reveal
-            // for the same reason -- both are overlay surfaces on the same edge.
-            armed: !root.opened
+            // Not while spoot itself is up -- the host unmaps every dock on reveal
+            // for the same reason, since both are overlay surfaces on the same
+            // edge -- and not at all when it is switched off. Unarmed means no
+            // surface is mapped rather than one mapped and hidden, so turning it
+            // off costs nothing at all. Defaults to on: `!== false` rather than a
+            // truth test, so a settings payload that predates the key still gets
+            // the dock rather than silently losing it.
+            armed: !root.opened && root.settings.dock !== false
             onOpenRequested: if (typeof Shell !== "undefined") Shell.reveal()
             onActionsRequested: {
                 if (typeof Shell !== "undefined") Shell.reveal()
@@ -2513,9 +2571,7 @@ Window {
     function dismissTop() {
         if (root.listenMode) { root.closeOverlay(); return true }
         // Albumart, an artist's impression, a details sheet: the thing in front.
-        if (root.artShown.length || root.sheet.length || root.sheetRows.length) {
-            root.closeOverlay(); return true
-        }
+        if (root.viewerUp) { root.closeOverlay(); return true }
         if (root.promptFor.length) { root.cancelPrompt(); return true }
         if (root.ctxUp) { root.goBack(); return true }
         return false
@@ -2565,6 +2621,13 @@ Window {
         // A cursor, not a destination -- so this behaves exactly like holding
         // Alt+left (or Alt+right) that many times, trail and all.
         if (pos === undefined || pos > root.hops.length) { if (n <= 1) root.goHome(); return }
+        // A CLICK AHEAD MUST NOT WALK YOU BACK. The fallback above resolves to the
+        // nearest depth at or BEFORE the part you clicked, which is right for a
+        // step behind you and can land behind you for a step ahead -- so a click
+        // on the ghosted part would have moved the cursor the wrong way. Rather
+        // than guess at a depth nobody stood at, this does nothing: the part is
+        // there to be walked to, and Alt+right still walks it one step at a time.
+        if (n > root.crumb.length && pos <= root.trailPos) return
         // FORWARD IS A JUMP TOO. The guard used to refuse anything at or beyond
         // the current depth, which was right while the only way here was clicking
         // a step BEHIND you -- the trail menu lists the whole path, the ghosted
@@ -3147,9 +3210,7 @@ Window {
             // front, the rows behind are what you click to DISMISS it -- and the
             // cursor was moving to whichever row you happened to dismiss it over,
             // so you came back to a list looking at somewhere you never chose.
-            inert: root.ctxUp || root.promptFor.length > 0
-                   || root.artShown.length > 0 || root.sheet.length > 0
-                   || root.sheetRows.length > 0
+            inert: root.anythingUp
         }
     }
     Component {
@@ -3179,9 +3240,7 @@ Window {
             onRowClicked: root.dismissTop()
             onRowQueued: function (i) { if (!root.ctxUp) root.queueRow(i) }
             // See gridView: a click that dismisses something must not also pick.
-            inert: root.ctxUp || root.promptFor.length > 0
-                   || root.artShown.length > 0 || root.sheet.length > 0
-                   || root.sheetRows.length > 0
+            inert: root.anythingUp
         }
     }
 
@@ -3226,8 +3285,7 @@ Window {
             // nothing in the way does the press reach the trail. Forward has
             // nothing to close, so it is trailForward and nothing else.
             if (m.button === Qt.BackButton || m.button === Qt.ExtraButton3) {
-                if (root.artShown.length || root.sheet.length || root.sheetRows.length)
-                    root.closeOverlay()
+                if (root.viewerUp) root.closeOverlay()
                 else if (root.promptFor.length) root.cancelPrompt()
                 else root.goBack()
                 return
@@ -3246,10 +3304,7 @@ Window {
             // "away", including the panel, so there is no geometry to test. The
             // two below ARE shapes you can be inside of, which is why they stay
             // here rather than joining dismissTop.
-            if (root.listenMode
-                || root.artShown.length || root.sheet.length || root.sheetRows.length) {
-                root.dismissTop(); return
-            }
+            if (root.listenMode || root.viewerUp) { root.dismissTop(); return }
             // A FIELD IS ITS OWN EDGE TOO, and clicking away from one abandons
             // it rather than the app -- the same thing Escape does. Checked
             // before the panel test below, which would otherwise read a click on

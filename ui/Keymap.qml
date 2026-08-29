@@ -29,8 +29,7 @@ Item {
         // ...and the listener, which no longer has a picture to be recognised by:
         // it is a pill now (see main.qml's listenPill), so `artPath` is empty
         // while it is up and this branch stopped covering it.
-        if (app.sheet.length || app.sheetRows.length || app.artPath.length
-            || app.listenMode) {
+        if (app.overlayAsked) {
             // GIVING UP ON THE LISTENER IS GIVING UP. You did not open spoot to
             // browse -- you asked it to name a song -- so cancelling before it
             // has an answer leaves, rather than revealing a menu you never went

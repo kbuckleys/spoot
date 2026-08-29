@@ -727,6 +727,46 @@ Util.mpris_fmt = "{{title}}\x1f{{artist}}\x1f{{album}}\x1f{{mpris:artUrl}}"
 -- icon.
 --
 -- `urgency` is the spec's: 0 low, 1 normal, 2 critical.
+-- WHAT THE DAEMON ON THIS MACHINE CAN DO, asked once.
+--
+-- Every toast was shaped for a daemon that parses markup, draws action buttons
+-- and shows a body. Two of those three are knowable and neither was asked.
+function Util.notify_caps()
+    if Util._ncaps then return Util._ncaps end
+    local c = nil
+    if Util.host and Util.host.notify_caps then
+        local ok, got = pcall(Util.host.notify_caps)
+        if ok and type(got) == "table" then c = got end
+    end
+    local has = {}
+    for _, k in ipairs((c and c.caps) or {}) do has[k] = true end
+    -- NO ANSWER IS NOT "NO CAPABILITIES". With no host there is no bus to ask on
+    -- and notify-send is the transport; assume what that path has always assumed
+    -- rather than degrading a working setup on the strength of silence.
+    if not next(has) then
+        has.body = true; has["body-markup"] = true; has.actions = true
+    end
+    Util._ncaps = {has = has, server = (c and c.server) or ""}
+    return Util._ncaps
+end
+
+-- HOW THIS DAEMON WANTS A LINE BREAK.
+--
+-- A newline is what the spec says a body carries, and dunst, mako and swaync all
+-- honour it. A daemon that renders the body as Qt or HTML rich text collapses it
+-- into a space instead -- HTML does that to a literal newline -- so anything the
+-- sender put on its own row runs into the end of the line above it.
+--
+-- NO TABLE OF GUESSES. There is no capability that tells Pango from HTML, and no
+-- honest way to derive it: naming daemons here would be asserting things about
+-- programs this has never seen, and guessing wrong sends five literal characters
+-- to a daemon that was already right. So the spec's answer is the default and
+-- there is a way out for the one who finds otherwise. SPOOT_NOTIFY_BR=1.
+function Util.notify_break()
+    if trim(os.getenv("SPOOT_NOTIFY_BR") or "") == "1" then return "<br/>" end
+    return "\n"
+end
+
 function Util.notify(o)
     if Util.host and Util.host.notify then
         if Util.host.notify(o) then return true end
@@ -735,19 +775,19 @@ function Util.notify(o)
     local c = {"notify-send --app-name=spoot"}
     if o.urgency == 2 then c[#c+1] = " -u critical" end
     if o.icon and #o.icon > 0 then c[#c+1] = " --icon=" .. shell_quote(o.icon) end
-    -- The fallback carries them too, in notify-send's own spelling. `-A key=label`
-    -- makes notify-send WAIT for a press and print the key, which is the opposite
-    -- of what a background notifier wants -- so this path names the actions and
-    -- lets the daemon draw them, and the press is answered by the host's own
-    -- listener (see ToastActions). With no host there is nothing to answer it and
-    -- the buttons are inert, which is still better than a toast that cannot say
-    -- what it offers.
-    for i = 1, #(o.actions or {}) - 1, 2 do
-        c[#c+1] = " -A " .. shell_quote(o.actions[i] .. "=" .. o.actions[i + 1])
-    end
+    -- NO ACTIONS ON THIS PATH, and it was a mistake to try. `notify-send -A` does
+    -- not merely declare an action: it BLOCKS until one is pressed or the toast
+    -- closes, then prints the key on stdout. Backgrounded to keep from hanging the
+    -- caller, that is a process per notification sitting there for the life of the
+    -- toast with nobody reading the pipe -- so the press could never be dispatched
+    -- either. Buttons that do nothing, bought with a leak.
+    --
+    -- The host path is the one that can answer a press (see ToastActions in
+    -- src/main.cpp, which listens for ActionInvoked on the bus), and it is the
+    -- path spoot actually runs on. This is the fallback for having no host at all.
     c[#c+1] = " " .. shell_quote(o.title or "")
     c[#c+1] = " " .. shell_quote(o.body or "")
-    os.execute(table.concat(c) .. " 2>/dev/null &")
+    os.execute(table.concat(c) .. " 2>/dev/null")
     return true
 end
 
@@ -1309,6 +1349,13 @@ Util.UI_SETTINGS = {
      -- wants it.
     {key = "opacity", default = 100, kind = "range", min = 50, max = 100, step = 5,
      label = "Opacity", unit = "%", why = "how solid the panel's ground is"},
+    -- THE EDGE, and whether it is there at all. On by default: it is the only
+    -- part of spoot you can use without opening spoot, and someone who has never
+    -- noticed the hot spot has lost nothing. Off, no dock surface is ever mapped
+    -- -- see main.qml's Instantiator, which stops arming them -- so it costs
+    -- exactly nothing to have turned off rather than being drawn and hidden.
+    {key = "dock", default = true, kind = "bool", label = "Control Panel",
+     why = "hover the screen edge spoot opens from for playback controls"},
     {key = "shadows", default = true, kind = "bool", label = "Shadows",
      why = "the drop shadow under the cards that float over a menu"},
     {key = "maxWidth", default = 1000, kind = "range", min = 700, max = 1600,
@@ -6146,6 +6193,18 @@ function Util.detail_sheet(theme, title)
         end
         if #names > 0 then s.add("Artists", table.concat(names, ", ")) end
     end
+    -- WHERE IT LIVES AND WHAT THE API CALLS IT. The last two rows of every one of
+    -- the four sheets, written out four times -- so a change to how a link is
+    -- read, or a decision to stop printing raw ids, had four places to reach and
+    -- would have been found in three of them.
+    --
+    -- Any code the item carries goes with them, because a UPC, an ISRC and an id
+    -- are the same kind of row: the thing's names in other people's systems.
+    function s.link(d, codeLabel, code)
+        s.add(codeLabel, code)
+        s.add("URL", d.external_urls and d.external_urls.spotify)
+        s.add("ID", d.id)
+    end
     function s.show()
         if #pairs_ == 0 then
             ui_say("No details available", theme or THEME_META)
@@ -6178,9 +6237,7 @@ Util.view_album_details = function(album)
     s.add("Label", d.label)
     if d.genres and #d.genres > 0 then s.add("Genres", table.concat(d.genres, ", ")) end
     s.add("Popularity", d.popularity)
-    s.add("URL", d.external_urls and d.external_urls.spotify)
-    s.add("UPC", d.external_ids and d.external_ids.upc)
-    s.add("ID", d.id)
+    s.link(d, "UPC", d.external_ids and d.external_ids.upc)
     s.show()
 end
 
@@ -6219,9 +6276,7 @@ Util.view_track_details = function(item)
     end
     if d.explicit then s.add("Explicit", "yes") end
     s.add("Popularity", d.popularity)
-    s.add("URL", d.external_urls and d.external_urls.spotify)
-    s.add("ISRC", d.external_ids and d.external_ids.isrc)
-    s.add("ID", d.id)
+    s.link(d, "ISRC", d.external_ids and d.external_ids.isrc)
     s.show()
 end
 
@@ -6243,10 +6298,11 @@ Util.view_show_details = function(show)
     -- tells you, and absent entirely on an audio-only show (s.add drops a nil).
     s.add("Video", d.media_type == "mixed" and "some episodes" or nil)
     s.add("Languages", d.languages and #d.languages > 0 and table.concat(d.languages, ", ") or nil)
-    if d.explicit then s.add("Explicit", "yes") end
+    -- s.add drops a nil, which is what every other line here relies on -- so the
+    -- `if` this used to be was the one row testing for itself.
+    s.add("Explicit", d.explicit and "yes" or nil)
     s.add("Description", d.description)
-    s.add("URL", d.external_urls and d.external_urls.spotify)
-    s.add("ID", d.id)
+    s.link(d)
     s.show()
 end
 
@@ -6285,10 +6341,11 @@ Util.view_episode_details = function(item)
     local pos, done = Util.episode_progress(d)
     if done then s.add("Progress", "played")
     elseif pos > 0 then s.add("Progress", Util.dur_short(pos) .. " in") end
-    if d.explicit then s.add("Explicit", "yes") end
+    -- s.add drops a nil, which is what every other line here relies on -- so the
+    -- `if` this used to be was the one row testing for itself.
+    s.add("Explicit", d.explicit and "yes" or nil)
     s.add("Description", d.description)
-    s.add("URL", d.external_urls and d.external_urls.spotify)
-    s.add("ID", d.id)
+    s.link(d)
     s.show()
 end
 
@@ -9810,6 +9867,25 @@ end
 -- VIEW: PLAYBACK CONTROLS
 
 view_seek = function(item)
+    -- THE TRACK IT IS SEEKING IN, named for the card's own backdrop -- the same
+    -- line view_actions carries, for the same reason.
+    --
+    -- It named nothing before, which was harmless while a tail segment started
+    -- with no subject at all: the card simply had no picture. Tails inherit what
+    -- the trail was standing on now (see Util.serve_run's keepCtx, which is what
+    -- lets a double-clicked backdrop know it is in an album) -- so a Seek card
+    -- opened by keybind inside an album would have inherited the ALBUM and shown
+    -- its sleeve, which is a picture of the wrong thing: seeking is about the
+    -- track that is playing, and that track need not be from this album at all.
+    --
+    -- Cache-only. This is a card about what is already playing, so its cover has
+    -- been on disk since the row that started it was drawn; a miss just means no
+    -- picture, which is what the card had before.
+    do
+        local u = item and item.album and item.album.images
+                  and item.album.images[1] and item.album.images[1].url or nil
+        if u then Util.serve_cover(Util.ensure_art_med(u, true), u) end
+    end
     Util.scope({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0}, function()
     local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "+1:00", "-1:00", "0:00"}
     while true do
@@ -10344,14 +10420,40 @@ end
 --
 -- The checkmark is drawn the same green the bitrate picker uses, so a setting
 -- reads the same wherever you meet one.
+-- WHAT PICKING A SETTING'S ROW DOES.
+--
+-- A SETTING WITH TWO STATES HAS NOWHERE TO GO. Every setting opened a picker,
+-- which for a range or the window position is the whole point -- there are values
+-- to look at and choose between. For an on/off it was a card with two rows, one
+-- of them already ticked, to answer a question the row you just pressed had
+-- already asked: two keystrokes and a card to say the opposite of what it says.
+--
+-- So a bool flips where it stands and the menu redraws with the new value. The
+-- step spends itself on the toggle and describes no place, so Util.serve_keep
+-- takes it back off the trail -- the same shape Delete and Queue have.
+--
+-- Here rather than in the menu, so the rule is one function rather than a test at
+-- each caller. It also means a bool never pushes a `ui-setting` scope, so no
+-- warm start can restore a picker that no longer exists.
+function Util.ui_activate(spec)
+    if not spec then return end
+    if spec.kind == "bool" then
+        Util.ui_set(spec.key, not Util.ui_get()[spec.key])
+        return
+    end
+    Util.ui_pick(spec)
+end
+
 function Util.ui_pick(spec)
     Util.scope({view = "ui-setting", setting = spec.key}, function()
     while true do
         local cur = Util.ui_get()[spec.key]
         local values = {}
-        if spec.kind == "bool" then
-            values = {true, false}
-        elseif spec.kind == "anchor" then
+        -- A `bool` BRANCH STOOD HERE offering {true, false}. Nothing can reach it
+        -- any more: an on/off toggles in place (see Util.ui_activate) and never
+        -- gets this far, and it was the one picker whose two rows told you
+        -- strictly less than the row that opened it.
+        if spec.kind == "anchor" then
             for _, p in ipairs(Util.UI_POSITIONS) do values[#values + 1] = p.key end
         else
             for v = spec.min, spec.max, spec.step do values[#values + 1] = v end
@@ -10406,8 +10508,7 @@ Util.view_ui_settings = function()
             mesg = "How spoot looks and where it opens",
             theme = THEME_SUB, art = false, by_index = true})
         if not sel then return end
-        local spec = Util.UI_SETTINGS[sel]
-        if spec then Util.ui_pick(spec) end
+        Util.ui_activate(Util.UI_SETTINGS[sel])
     end
     end)
 end
@@ -12073,12 +12174,24 @@ function Util.run_notify()
     -- kept even when empty, which is what makes the second line the SAME line in
     -- both cases.
     --
-    -- Newline rather than markup: it is what the freedesktop spec says a body
-    -- takes, and it is the one separator every daemon honours. A <br/> would show
-    -- as those five characters wherever markup is off.
+    -- Separator per Util.notify_break, which is a newline unless this machine's
+    -- daemon is one of the ones that eats them.
     local icons = trim(Util.status_icons({id = id, explicit = track and track.explicit}))
-    local body = Util.pango_escape(artist or "")
-    if icons ~= "" then body = body .. "\n" .. icons end
+    local caps = Util.notify_caps()
+    -- ESCAPED ONLY WHERE IT IS PARSED. This was unconditional, so on a daemon
+    -- that advertises no `body-markup` an ampersand in an artist's name arrived
+    -- as `&amp;` -- escaping is only ever correct against something that is going
+    -- to unescape it.
+    local body = caps.has["body-markup"] and Util.pango_escape(artist or "")
+                 or (artist or "")
+    if icons ~= "" then body = body .. Util.notify_break() .. icons end
+    -- ...AND NOWHERE TO PUT IT AT ALL. A daemon with no `body` shows the summary
+    -- and nothing else, so the marks ride the title rather than being dropped --
+    -- the one place left that is certain to be seen.
+    if not caps.has.body then
+        if icons ~= "" then title = title .. "  " .. icons end
+        body = ""
+    end
 
     -- ...AND THE TRANSPORT, as actions on the toast. Namespaced `spoot:` so the
     -- host can tell a press of ours from any other notification's without keeping
@@ -12088,10 +12201,14 @@ function Util.run_notify()
     -- Whether they are drawn as buttons, revealed on hover, or hidden behind a
     -- context menu is the daemon's decision and the protocol gives the sender no
     -- say in it. What is ours is that they are there.
+    -- ONLY WHERE THEY CAN BE DRAWN. Attached to a daemon that does not advertise
+    -- `actions` they are three keys nobody will ever see or press, and some
+    -- daemons log a complaint about each one.
     Util.notify{title = title, body = body, icon = art_path,
-                actions = {"spoot:prev", "Previous",
-                           "spoot:playpause", "Play/Pause",
-                           "spoot:next", "Next"}}
+                actions = caps.has.actions
+                          and {"spoot:prev", "Previous",
+                               "spoot:playpause", "Play/Pause",
+                               "spoot:next", "Next"} or nil}
     os.exit(0)
 end
 
@@ -12923,6 +13040,10 @@ function Util.serve_run(name, fn, args)
     -- own wore whichever one the last menu that did had named.
     Util.serve_ctx_path = nil
     Util.serve_ctx_url = nil
+    -- ...UNLESS THIS IS A TAIL, which is about where the trail already stands and
+    -- so inherits what that place was about. See the segment loop, which is the
+    -- only caller that ever passes this.
+    if args and args.keepCtx ~= nil then Util.serve_ctx_item = args.keepCtx end
     Util.serve_answered_depth = nil
     -- FROM EMPTY, every time. The replay pushes a scope per step as it walks the
     -- path, so a stack left over from the previous request would be pushed on top
@@ -13033,6 +13154,13 @@ function Util.serve_nav(args)
     local tail_from = #segs + 1
     if tail then fold(segs, tail, #tail) end
     local draw
+    -- WHAT THE TRAIL WAS ABOUT when the tail begins, carried into every tail
+    -- segment -- see the read below and Util.serve_run's keepCtx. Declared out
+    -- here rather than in the loop: written as a fresh `local` per iteration its
+    -- own initialiser could only read an OUTER variable that does not exist, so
+    -- it evaluated to nil on every pass but the first tail one, and a card opened
+    -- over a card lost the album it was about.
+    local keep_ctx = nil
     -- THE DAISY CHAIN. Each segment runs on its OWN stack and reports its own
     -- crumb; the chain is assembled here. That is what makes a root visible as a
     -- root: joined by the trail glyph rather than the step arrow, exactly as the
@@ -13080,14 +13208,31 @@ function Util.serve_nav(args)
         -- opened over.
         local from = Util.session_stack()
         if i == tail_from then pre_tail = from end
+        -- ...AND WHAT THE PREVIOUS SEGMENT WAS ABOUT, for the same reason and read
+        -- at the same moment.
+        --
+        -- Util.serve_run clears the capture per SEGMENT, not per request -- which
+        -- is right for a root hop, since a new root is somewhere new and owes
+        -- nothing to what came before it. A TAIL is the exception: it is beside
+        -- the trail rather than after it, so it is about exactly where you already
+        -- are. Cleared, `art-here` could never see the album or the artist it was
+        -- opened over and fell through to whatever was playing -- which is the
+        -- whole of "clicking a backdrop only shows the current track".
+        --
+        -- Carried rather than re-derived: only the step that picked the container
+        -- knows which row it was, and the tail runs long after that step has been
+        -- replayed. Same precedent as `stack = from` above.
+        if i == tail_from then keep_ctx = Util.serve_ctx_item end
         -- Everything but the last segment is walked through: no art, no cost.
         Util.serve_art_skip = not last
         local ok, res = pcall(function()
             if sg.cmd == "open" then
-                return Util.serve_open({tile = sg.key, path = sg.path, raw = args.raw})
+                return Util.serve_open({tile = sg.key, path = sg.path, raw = args.raw,
+                                        keepCtx = (i >= tail_from) and keep_ctx or nil})
             elseif sg.cmd == "view" then
                 return Util.serve_view({name = sg.key, path = sg.path, raw = args.raw,
                                         mode = sg.mode,
+                                        keepCtx = (i >= tail_from) and keep_ctx or nil,
                                         stack = from, tip = tip, tipRoots = tip_roots})
             end
             return Util.serve_main({})
@@ -13357,18 +13502,9 @@ end
 function Util.serve_ctx_art(d)
     -- The view already told us, if it is one of the two that names a cover.
     -- ...or it told us where to get it. This is the fetch the menu used to wait
-    -- on: nothing warms the med-res pool ahead of an action menu, so the first
-    -- one opened on any album paid a live download before it could draw a single
-    -- row. Here it costs nothing anyone is looking at -- the rows are already on
-    -- screen and the cover fades in beside them when it lands.
-    local function named()
-        if Util.serve_ctx_path then return Util.serve_ctx_path end
-        if Util.serve_ctx_url then
-            local p = Util.ensure_art_med(Util.serve_ctx_url)
-            if p ~= "" then return p end
-        end
-        return nil
-    end
+    -- on -- see Util.serve_named_cover, which both this and the card's resolver
+    -- read, and which explains why the URL branch is allowed to fetch.
+    local named = Util.serve_named_cover
     -- A SHELF WEARS WHAT IS PLAYING, never what contains it. Both of the answers
     -- above are about the CONTAINER -- the playlist you opened, the album you
     -- stepped into -- and beside a list of its tracks that says only "you are in
@@ -13407,6 +13543,27 @@ function Util.serve_ctx_art(d)
     -- being enlarged past its own size and every list wore a soft cover. The
     -- action menu never had the problem because it asks for med-res directly.
     return Util.item_cover(item)
+end
+
+-- THE COVER THIS DRAW NAMED FOR ITSELF, if it named one.
+--
+-- A view that has a picture of its own records it on the way in through
+-- Util.serve_cover -- as a path when it is already on disk, as a URL when it is
+-- not. Two callers ask the same two questions in the same order: the list's
+-- resolver and the card's. They had a copy each.
+--
+-- The URL branch FETCHES, and that is on purpose: nothing warms the med-res pool
+-- ahead of an action menu, so the first one opened on any album used to pay a
+-- live download before it could draw a single row. Here it costs nothing anyone
+-- is looking at -- the rows are already on screen and the cover fades in beside
+-- them when it lands.
+function Util.serve_named_cover()
+    if Util.serve_ctx_path then return Util.serve_ctx_path end
+    if Util.serve_ctx_url then
+        local p = Util.ensure_art_med(Util.serve_ctx_url)
+        if p ~= "" then return p end
+    end
+    return nil
 end
 
 -- ONE ITEM, ONE COVER. Lifted out of Util.serve_ctx_art so the card's own
@@ -13451,11 +13608,8 @@ end
 function Util.serve_card_art(d)
     -- The view named one itself. The listener's result does exactly this, which
     -- is how its card comes to wear the track it just recognised.
-    if Util.serve_ctx_path then return Util.serve_ctx_path end
-    if Util.serve_ctx_url then
-        local p = Util.ensure_art_med(Util.serve_ctx_url)
-        if p ~= "" then return p end
-    end
+    local named = Util.serve_named_cover()
+    if named then return named end
     -- ...or the step that opened the card picked one. An action menu is opened
     -- BY picking a row, and ui_menu records that row as the subject of whatever
     -- menu comes next -- so this is the selected item, by construction.
@@ -13627,6 +13781,11 @@ function Util.serve_playback()
         -- a poll running once a second costs one read of that cache and no bus
         -- traffic. The UI needs it to show what a nudge did.
         volume   = get_playerctl_volume(),
+        -- ...AND WHETHER IT IS SAVED. `icons` below carries this too, as a glyph
+        -- among others -- but that string is the engine's finished answer about
+        -- how a status LOOKS, and a front end picking the heart back out of it
+        -- would be a second copy of that knowledge. A boolean is the fact.
+        liked    = (t and t.id and Util.is_liked(t.id)) or false,
         id       = t and t.id or nil,
         name     = t and t.name or nil,
         artists  = t and artist_names(t) or nil,
@@ -13688,7 +13847,19 @@ end
 -- the reply instead of waiting for the next poll to notice.
 function Util.serve_control(args)
     local a = args and args.action
-    if a == "shuffle" then toggle_shuffle()
+    if a == "like" then
+        -- THE PLAYING TRACK, and the same two functions the action menu's own
+        -- Like row uses -- see the `like` branch of view_actions, including its
+        -- note about taking the toggle's direction from state rather than from a
+        -- label. Resolved the way art-current resolves it: the fast path first,
+        -- the request only if there is no snapshot to read.
+        if not Util.fast_now_track() then last_playback = 0; get_playback() end
+        if current_track and current_track.id then
+            do_like(current_track, Util.is_liked(current_track.id))
+        else
+            ui_say("Nothing playing")
+        end
+    elseif a == "shuffle" then toggle_shuffle()
     elseif a == "repeat" then toggle_repeat()
     elseif a == "playpause" then Util.mpris{op = "play-pause", player = "spotifyd"}
     elseif a == "next" then Util.mpris{op = "next", player = "spotifyd"}
@@ -13708,28 +13879,16 @@ function Util.serve_control(args)
     return Util.serve_playback()
 end
 
--- THE TRAIL. The live crumb plus the archived ones, each rebuilt from its saved
--- STACK rather than its saved label -- exactly as breadcrumb() does it, and for
--- the same reason: presentation stays out of persisted data, so a naming fix
--- reaches old trails too.
---
--- Parts, not a rendered string: the arrows are ZENON's styling and belong to the
--- front end. The rofi build had to bake them in because rofi takes one string.
 -- The live stack. A reader rather than exposing the local, so nothing outside
 -- Util.session_set can rebind it.
 function Util.session_stack() return _session_stack end
 
-function Util.serve_trail()
-    local prev = {}
-    for _, t in ipairs(Util.trail_history or {}) do
-        if type(t) == "table" and type(t.stack) == "table" and #t.stack > 0 then
-            prev[#prev+1] = Util.parts_from_stack(t.stack)
-        elseif type(t) == "table" and t.label then
-            prev[#prev+1] = {t.label}
-        end
-    end
-    return {crumb = Util.breadcrumb_parts(), previous = prev}
-end
+-- A `trail` COMMAND AND Util.serve_trail STOOD HERE. It answered with the live
+-- crumb plus the archived ones, for a front end that wanted the whole history in
+-- one payload -- and nothing ever asked: not the UI, not the host's watchers, not
+-- smoke.sh or views.sh. The trail the UI draws comes with every draw (see
+-- serve_draw's `crumb`), and the archived ones are a MENU (Util.view_trail_jump),
+-- not a payload.
 
 -- LYRICS, with their timing. spoot already caches lrclib's synced form as
 -- parallel `times` and `lines` arrays, so live sync needs no new fetching and no
@@ -13832,7 +13991,6 @@ end
 Util.SERVE = {
     setup = Util.serve_setup,
     nav = Util.serve_nav,
-    trail = Util.serve_trail,
     restore = Util.serve_restore,
     lyrics = Util.serve_lyrics,
     ping = function() return {pong = true, pid = Util.get_own_pid()} end,

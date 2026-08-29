@@ -72,6 +72,10 @@ Window {
     // re-derived here. The strip inside spoot rides them on the title for the same
     // reason: the glyphs and their order are the engine's to decide.
     property string icons: ""
+    // Whether the playing track is saved. From the playback payload as a fact of
+    // its own -- not picked back out of `icons`, which is the engine's finished
+    // answer about how a status looks.
+    property bool liked: false
     // "top" / "middle" / "bottom" and "left" / "center" / "right", exactly as the
     // panel reads them out of UI Settings.
     property string anchorV: "bottom"
@@ -485,6 +489,15 @@ Window {
                          : dock.theme.glyphRepeatOff
                     lit: (dock.playback.repeat_ || "off") !== "off"
                     onTapped: dock.controlRequested("repeat", 0)
+                }
+                // THE ONE VERB THE PILL WAS MISSING. Everything else on it drives
+                // the music; this is the only thing that changes what you keep,
+                // and it was the reach-for-the-menu case the dock exists to avoid.
+                GlyphKey {
+                    theme: dock.theme
+                    glyph: dock.liked ? dock.theme.glyphLiked : dock.theme.glyphUnliked
+                    lit: dock.liked
+                    onTapped: dock.controlRequested("like", 0)
                 }
                 GlyphKey {
                     theme: dock.theme

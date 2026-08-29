@@ -191,6 +191,9 @@ public:
         lua_pushlightuserdata(L, this);
         lua_pushcclosure(L, &Natives::l_notify, 1);
         lua_setfield(L, -2, "notify");
+        lua_pushlightuserdata(L, this);
+        lua_pushcclosure(L, &Natives::l_notify_caps, 1);
+        lua_setfield(L, -2, "notify_caps");
         lua_pushcclosure(L, &Natives::l_sleep, 0);
         lua_setfield(L, -2, "sleep");
         // THE LOGIN CALLBACK. Two calls rather than one so the socket is bound
@@ -506,6 +509,50 @@ private:
     // call and exits. This is the method call. It runs on job states as well as
     // the request state, which matters because the one notification spoot raises
     // in normal use -- the track change -- is raised by a job.
+    // WHAT THE DAEMON ON THIS MACHINE CAN ACTUALLY DO.
+    //
+    // Every toast spoot sends is shaped for a daemon that parses markup, draws
+    // action buttons and shows a body -- assumed, never asked. On one that
+    // advertises no `body-markup` the escaping shows through as `&amp;`; on one
+    // with no `actions` the three verbs are dead weight. The spec has had a call
+    // for this since the beginning and nothing here used it.
+    //
+    // GetServerInformation comes back with it because the capability list cannot
+    // answer everything -- see Util.notify_break, which needs to know WHICH
+    // daemon and not just what it can do.
+    //
+    // Cached per Natives, which is per thread: the notify path is a job with a
+    // Natives of its own, so this is one round trip per notification rather than
+    // per track's worth of drawing. A daemon does not change its capabilities
+    // inside the life of one toast.
+    static int l_notify_caps(lua_State *L) {
+        Natives *w = self(L);
+        Q_ASSERT(QThread::currentThread() == w->m_owner);
+        if (!w->m_capsAsked) {
+            w->m_capsAsked = true;
+            QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"),
+                             QStringLiteral("/org/freedesktop/Notifications"),
+                             QStringLiteral("org.freedesktop.Notifications"), w->bus());
+            const QDBusReply<QStringList> caps = n.call(QStringLiteral("GetCapabilities"));
+            if (caps.isValid()) w->m_caps = caps.value();
+            const QDBusMessage si = n.call(QStringLiteral("GetServerInformation"));
+            if (si.type() != QDBusMessage::ErrorMessage && !si.arguments().isEmpty())
+                w->m_server = si.arguments().at(0).toString();
+        }
+        lua_newtable(L);
+        lua_newtable(L);
+        for (int i = 0; i < w->m_caps.size(); ++i) {
+            const QByteArray c = w->m_caps.at(i).toUtf8();
+            lua_pushlstring(L, c.constData(), size_t(c.size()));
+            lua_rawseti(L, -2, i + 1);
+        }
+        lua_setfield(L, -2, "caps");
+        const QByteArray sv = w->m_server.toUtf8();
+        lua_pushlstring(L, sv.constData(), size_t(sv.size()));
+        lua_setfield(L, -2, "server");
+        return 1;
+    }
+
     static int l_notify(lua_State *L) {
         Natives *w = self(L);
         Q_ASSERT(QThread::currentThread() == w->m_owner);
@@ -822,6 +869,9 @@ private:
     QDBusConnection *m_bus = nullptr;
     QString m_player;
     QByteArray m_busName;
+    bool m_capsAsked = false;
+    QStringList m_caps;
+    QString m_server;
     QThread *m_owner = nullptr;
     MprisWatch *m_watch = nullptr;
     // Held between oauth_listen and oauth_wait, and only then: the wait closes it
