@@ -12738,7 +12738,20 @@ Util.SERVE_VIEWS = {
         Util.session_set({json.decode(json.encode(o))})
         replay_session()
     end,
-    listen           = function() Util.listen_start() end,
+    -- A `listen` VIEW STOOD HERE and it was the wrong shape for what it does.
+    --
+    -- It draws no menu -- the pill is the UI's, raised by the `listening` event --
+    -- so its draw came back EMPTY, and an empty draw means applyWhere never runs
+    -- and the hop that asked for it is never adopted or trimmed. It simply stayed
+    -- on the trail. Every navigation after that replayed it: songrec spawned
+    -- again, the `listening` event fired again, the pill came back and the panel
+    -- dimmed -- so the app answered every keypress by starting another recording.
+    -- Cold `spoot --listen` then Escape landed you there with nothing drawable
+    -- underneath, which is "stuck on the now-playing bar and nothing else".
+    --
+    -- It is `listen-start` in Util.SERVE now, beside listen-poll and listen-stop,
+    -- which is where the other two thirds of this always lived. A command has no
+    -- hop, so there is nothing to replay and nothing to clean up.
     -- What it has already found. Its own entry point, so a warm start can land
     -- back on it and views.sh can probe it like any other list.
     ["listen-history"] = function() Util.view_listen_history() end,
@@ -13103,7 +13116,19 @@ function Util.serve_nav(args)
     -- would be, which is the whole reason it is stored as hops rather than as a
     -- restored leaf. A warm start is therefore not a special path.
     if given == nil then
-        local saved = Util.serve_nav_load()
+        -- ...UNLESS REPLAY IS OFF, which is what that setting is FOR. It was read
+        -- in exactly one place -- Util.serve_saved, feeding the `restore` command
+        -- and the `ready` event's restore flag -- and the UI reaches neither on a
+        -- warm path: bootstrap sends a bare nav, which is this, and `ready` is
+        -- handled with "nothing to do". So the toggle moved, said On or Off, and
+        -- changed nothing anyone could see.
+        --
+        -- Here rather than in the UI, so the UI goes on not knowing the setting
+        -- exists. The trail is still LOADED and still SAVED either way -- turning
+        -- replay back on resumes from wherever you have since been -- so this is a
+        -- switch on one question: does a bare nav answer with the saved trail, or
+        -- with Main.
+        local saved = Util.ui_get().replay and Util.serve_nav_load() or nil
         if saved then hops, pos, tip, tip_roots = saved.hops, saved.pos, saved.tip, saved.tipRoots end
     end
     -- The WHOLE trail is stored; only the part up to the cursor is walked. That
@@ -14025,6 +14050,10 @@ Util.SERVE = {
         if Util.rate_cool() > 0 then return {skipped = true} end
         return {recorded = Util.recent_tick()}
     end,
+    -- THE THIRD OF THE THREE. Starting a listen is an act with no menu, so it is
+    -- a command like stopping and polling it -- see the note where the `listen`
+    -- view used to be in Util.SERVE_VIEWS.
+    ["listen-start"] = function() Util.listen_start(); return {ok = true} end,
     ["listen-poll"] = function() return Util.listen_poll() end,
     ["listen-stop"] = function() return Util.listen_stop() end,
     views = function()
@@ -14078,6 +14107,20 @@ function Util.serve_mode()
     -- previous journeys from.
     session_load()
     Util.trail_load()
+    -- ...AND NOT THE CURSORS, WITH REPLAY OFF.
+    --
+    -- Every menu's cursor is remembered by name and written to disk, so a list
+    -- reopens on the row you last picked -- which for a track list is the track
+    -- you last PLAYED. That is session memory as much as the trail is, and the
+    -- setting never reached it: replay off opened Main and then put the cursor
+    -- straight back on last night's track the moment you walked into Liked.
+    --
+    -- Primed empty rather than gated at the read: within a session the memory is
+    -- exactly right (step into a track's menu and come back and the cursor is
+    -- where you left it), and it is only carrying it ACROSS a start that replay
+    -- is about. Writing continues, so turning replay back on has something to
+    -- restore -- the same reason the trail is still saved either way.
+    if not Util.ui_get().replay then Util._pos = {} end
     -- THE LIKED SET. Nothing in serve mode read it: init_library is main()'s and
     -- main() never runs here, so `liked` stayed empty for the life of the
     -- process. Everything that asks "is this track liked" was therefore answered

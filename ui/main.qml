@@ -132,7 +132,10 @@ Window {
         // trail, so the journey you were on was silently thrown away, and there
         // was no menu underneath for the card to sit on. It resumes first now and
         // opens Listen on top of that, exactly as the keybind does on a warm one.
-        var wantListen = (typeof startView !== "undefined" && startView === "listen")
+        // Already known -- see listenWanted, which is armed from `startView` at
+        // construction so a cold `spoot --listen` never shows the panel at all.
+        // The host reveals the window and then spends a round trip resuming the
+        // trail; that stretch is what used to be the flash.
         // A bare nav means "resume": the engine replays the hop list it saved,
         // and hands it back so the restored trail is walkable rather than a line
         // of dead text. Falls back to the session restore for a first run with
@@ -148,17 +151,35 @@ Window {
                     root.fullRoots = root.toArray(d.tipRoots)
                 }
                 root.render(d)
-                if (wantListen) root.openListen()
                 return
             }
             var rid = root.call("restore", {}, function (r) {
                 root.drawReq = rid
                 if (r && r.rows && r.rows.length) root.render(r)
                 else root.goHome()
-                if (wantListen) root.openListen()
+                // NOTHING TO DO HERE. openListen used to be called beside
+                // goHome, which is a REQUEST rather than a redraw -- two navs in
+                // flight, and the listener's empty one arrived last and won, so no
+                // menu was ever drawn. It is handed to the draw instead, and
+                // listenWanted was set before either branch ran.
             })
         })
     }
+    // `spoot --listen` IS WAITING FOR A MENU TO EXIST.
+    //
+    // The listener is a card over wherever you are, and on a cold start there is
+    // no "wherever you are" until the first draw lands. A one-shot rather than a
+    // call at each of bootstrap's exits: two of the three are asynchronous, and
+    // the one that raced is the one nobody would notice until they tried it.
+    //
+    // TRUE AT CONSTRUCTION, not from bootstrap. `startView` is a context property
+    // set before the QML is loaded (see main.cpp), so this is already the right
+    // answer before the host reveals the window -- and it has to be: bootstrap
+    // runs a turn LATER, by which point showPanel has begun and the panel is
+    // already fading up. Setting the wish there left the dim easing down against
+    // an opening panel, which is a flicker rather than a flash but is still not
+    // nothing. Declared here, the panel never begins to appear at all.
+    property bool listenWanted: (typeof startView !== "undefined" && startView === "listen")
     ListModel { id: rows }
     // The card's rows. A second model rather than a second app: the engine hands
     // back ONE draw per round trip (see Util.serve_run), so the only way to have
@@ -826,10 +847,10 @@ Window {
     function isContext(d) { return d && d.context === true && rows.count > 0 }
 
     function render(d) {
-        // THE ANSWER IS IN, whatever it says. Either the `listening` event came
-        // with it and listenMode holds the dim from here, or the listen never
-        // started -- no songrec, no sink -- and the panel has to come back rather
-        // than stay dark waiting for a card that is not coming. See listenArming.
+        // ANY DRAW AT ALL RELEASES THE ARM. The listen's own answer is its reply
+        // rather than a draw (see openListen), so this is insurance: a menu
+        // arriving while the panel is armed dark means something other than a
+        // listen is happening, and the panel has to be visible for it.
         root.listenArming = false
         // The draw this was waiting on. Released FIRST, so bodyHeight is sizing
         // from the rows below rather than from the height it was holding.
@@ -1357,6 +1378,15 @@ Window {
         root.bodyFade = 0
         swapIn.restart()
         if (typeof SPOOT_DEBUG !== "undefined") {}
+        // A MENU EXISTS NOW, so a pending `--listen` has something to sit on. Spent
+        // on the way past, so a later draw cannot reopen it. See listenWanted.
+        // Arming BEFORE clearing the wish, so the dim never lapses between the two
+        // -- they are one condition read by one binding.
+        if (root.listenWanted) {
+            root.listenArming = true
+            root.listenWanted = false
+            Qt.callLater(root.openListen)
+        }
         console.log("render: rows=" + rows.count + " layout=" + root.layout
                     + " panel=" + panel.width + "x" + panel.height
                     + "@" + panel.x + "," + panel.y
@@ -2123,12 +2153,24 @@ Window {
     // keypress cannot be. Never reset: "selecting any track removes the cursor" is
     // about the selection, not about whether the track turned out to be playable.
     property bool picked: false
+    // ...AND WHETHER SPOOT IS ALLOWED TO REMEMBER ANY OF IT. Session Replay off
+    // means "do not carry last time into this one", and where you left off is
+    // exactly that -- the setting reached the trail and the cursors and stopped
+    // one short of the thing most visible: open any list and the track you last
+    // played wore a marker, put there by spoot on the strength of a session the
+    // setting had just been told to forget.
+    //
+    // `!== false` so a settings payload that predates the key still remembers,
+    // which is the default.
+    readonly property bool replaySession: root.settings.replay !== false
     // WHERE YOU LEFT OFF. Empty as soon as either of the above says the question
     // has been answered, which is why no view needs to know any of this.
     readonly property string lastId:
-        (root.playbackLive || root.picked) ? "" : (root.playback.id || "")
+        (root.playbackLive || root.picked || !root.replaySession)
+            ? "" : (root.playback.id || "")
     readonly property string lastAlbumId:
-        (root.playbackLive || root.picked) ? "" : (root.playback.albumId || "")
+        (root.playbackLive || root.picked || !root.replaySession)
+            ? "" : (root.playback.albumId || "")
     // ...and the marker's own id, which is now the one that has to be earned.
     readonly property string liveId: root.playbackLive ? (root.playback.id || "") : ""
     readonly property string liveAlbumId:
@@ -2299,7 +2341,8 @@ Window {
     // themselves -- see the panel's opacity.
     // Not readonly: a Behavior animates the property it is attached to, which a
     // read-only one forbids. The binding still drives it.
-    property real listenDim: (root.listenMode || root.listenArming || root.listenExit) ? 0 : 1
+    property real listenDim: (root.listenMode || root.listenArming || root.listenExit
+                              || root.listenWanted) ? 0 : 1
     // WHILE THE LISTENER IS ON ITS WAY, TOO. listenMode only flips when the
     // `listening` event lands, and that is a round trip behind the key: the host
     // reveals the window FIRST (see the socket handler in main.cpp), so the menu
@@ -2480,10 +2523,24 @@ Window {
     // already standing there, which is what makes pressing the keybind twice
     // harmless rather than a second thirty-second recording.
     function openListen() {
-        // Armed only if the view was actually opened: pressing the keybind while
-        // the listener is already up is a no-op there, and it must not leave the
-        // panel dimmed for a listen that never started. See listenArming.
-        if (root.openView("listen")) root.listenArming = true
+        // ALREADY LISTENING IS NOTHING TO DO. Pressing the keybind twice must not
+        // be a second thirty-second recording, and must not re-arm the dim for a
+        // listen that is already up.
+        if (root.listenMode) return
+        // A COMMAND, NOT A VIEW. It used to be openView("listen"), which put a hop
+        // on the trail for something that draws no menu -- and because the draw
+        // comes back empty, applyWhere never ran, so the hop was never adopted or
+        // trimmed and stayed there. Every navigation after that replayed it and
+        // started another recording. See the note in the engine where the `listen`
+        // view used to be.
+        root.listenArming = true
+        // CLEARED BY THE REPLY, which is the only answer there is now. As a view
+        // this was cleared by the draw -- but a command draws nothing, so a listen
+        // that cannot start (no songrec, no sink) would have left the panel dimmed
+        // to zero with nothing coming to undo it. Either the `listening` event
+        // arrived first and listenMode holds the dim from here, or it did not and
+        // the panel comes straight back.
+        root.call("listen-start", {}, function () { root.listenArming = false })
     }
 
     // THE VIEWER ARRIVES THE WAY THE PANEL DOES. A cover and an artist's
@@ -5289,10 +5346,16 @@ Window {
                 // widening to hold the picture and its frame (see root.width).
                 width: root.artIcon
                 height: width
+                // ...AND NOTHING AT ALL WHEN THE LATCH SAYS "listen". `artShown`
+                // is shared with the pill, which latches the word rather than a
+                // path -- so this Image was handed `file://listen` on every
+                // listen and said so in the log. `visible: false` does not stop a
+                // source binding from being evaluated; only the binding can.
                 // The LATCHED path, never root.artPath: the card has to keep
                 // something to shrink around while the close plays. See
                 // root.artShown.
-                source: zenon.fileUrl(root.artShown)
+                source: root.artShown === "listen" ? ""
+                                                   : zenon.fileUrl(root.artShown)
                 asynchronous: true
                 cache: false        // a viewer shows one image; caching wastes memory
                 // CROP, not fit. An album cover is square and either does the
