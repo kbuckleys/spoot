@@ -77,7 +77,7 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 
 | Keybind | Description | Context |
 | --- | --- | --- |
-| `r1` | view keybinds sheet | Universal |
+| `f1` | view keybinds sheet | Universal |
 | `tab` | trail menu / history | Universal |
 | `return` | select -- play/pause/resume selected item | Universal |
 | `delete` | delete entry in search or trail history | Search history, Trail history |
