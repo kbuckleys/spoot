@@ -1,0 +1,830 @@
+/****************************************************************************
+** Meta object code from reading C++ file 'main.cpp'
+**
+** Created by: The Qt Meta Object Compiler version 69 (Qt 6.11.2)
+**
+** WARNING! All changes made in this file will be lost!
+*****************************************************************************/
+
+#include <QtCore/qmetatype.h>
+
+#include <QtCore/qtmochelpers.h>
+
+#include <memory>
+
+
+#include <QtCore/qxptype_traits.h>
+#if !defined(Q_MOC_OUTPUT_REVISION)
+#error "The header file 'main.cpp' doesn't include <QObject>."
+#elif Q_MOC_OUTPUT_REVISION != 69
+#error "This file was generated using the moc from 6.11.2. It"
+#error "cannot be used with the include files from this version of Qt."
+#error "(The moc has changed too much.)"
+#endif
+
+#ifndef Q_CONSTINIT
+#define Q_CONSTINIT
+#endif
+
+QT_WARNING_PUSH
+QT_WARNING_DISABLE_DEPRECATED
+QT_WARNING_DISABLE_GCC("-Wuseless-cast")
+namespace {
+struct qt_meta_tag_ZN10MprisWatchE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto MprisWatch::qt_create_metaobjectdata<qt_meta_tag_ZN10MprisWatchE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "MprisWatch",
+        "onProps",
+        "",
+        "iface",
+        "QVariantMap",
+        "changed",
+        "onName",
+        "name",
+        "owner"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'onProps'
+        QtMocHelpers::SlotData<void(const QString &, const QVariantMap &, const QStringList &)>(1, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 3 }, { 0x80000000 | 4, 5 }, { QMetaType::QStringList, 2 },
+        }}),
+        // Slot 'onName'
+        QtMocHelpers::SlotData<void(const QString &, const QString &, const QString &)>(6, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 7 }, { QMetaType::QString, 2 }, { QMetaType::QString, 8 },
+        }}),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<MprisWatch, qt_meta_tag_ZN10MprisWatchE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject MprisWatch::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN10MprisWatchE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN10MprisWatchE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN10MprisWatchE_t>.metaTypes,
+    nullptr
+} };
+
+void MprisWatch::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<MprisWatch *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->onProps((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QVariantMap>>(_a[2])),(*reinterpret_cast<std::add_pointer_t<QStringList>>(_a[3]))); break;
+        case 1: _t->onName((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[2])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[3]))); break;
+        default: ;
+        }
+    }
+}
+
+const QMetaObject *MprisWatch::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *MprisWatch::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN10MprisWatchE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int MprisWatch::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 2)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 2;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 2)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 2;
+    }
+    return _id;
+}
+namespace {
+struct qt_meta_tag_ZN9JobRunnerE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto JobRunner::qt_create_metaobjectdata<qt_meta_tag_ZN9JobRunnerE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "JobRunner",
+        "finished",
+        "",
+        "run"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Signal 'finished'
+        QtMocHelpers::SignalData<void()>(1, 2, QMC::AccessPublic, QMetaType::Void),
+        // Slot 'run'
+        QtMocHelpers::SlotData<void()>(3, 2, QMC::AccessPublic, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<JobRunner, qt_meta_tag_ZN9JobRunnerE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject JobRunner::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9JobRunnerE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9JobRunnerE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN9JobRunnerE_t>.metaTypes,
+    nullptr
+} };
+
+void JobRunner::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<JobRunner *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->finished(); break;
+        case 1: _t->run(); break;
+        default: ;
+        }
+    }
+    if (_c == QMetaObject::IndexOfMethod) {
+        if (QtMocHelpers::indexOfMethod<void (JobRunner::*)()>(_a, &JobRunner::finished, 0))
+            return;
+    }
+}
+
+const QMetaObject *JobRunner::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *JobRunner::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9JobRunnerE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int JobRunner::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 2)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 2;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 2)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 2;
+    }
+    return _id;
+}
+
+// SIGNAL 0
+void JobRunner::finished()
+{
+    QMetaObject::activate(this, &staticMetaObject, 0, nullptr);
+}
+namespace {
+struct qt_meta_tag_ZN7JobPoolE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto JobPool::qt_create_metaobjectdata<qt_meta_tag_ZN7JobPoolE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "JobPool"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<JobPool, qt_meta_tag_ZN7JobPoolE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject JobPool::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN7JobPoolE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN7JobPoolE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN7JobPoolE_t>.metaTypes,
+    nullptr
+} };
+
+void JobPool::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<JobPool *>(_o);
+    (void)_t;
+    (void)_c;
+    (void)_id;
+    (void)_a;
+}
+
+const QMetaObject *JobPool::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *JobPool::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN7JobPoolE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int JobPool::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    return _id;
+}
+namespace {
+struct qt_meta_tag_ZN9LuaWorkerE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto LuaWorker::qt_create_metaobjectdata<qt_meta_tag_ZN9LuaWorkerE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "LuaWorker",
+        "line",
+        "",
+        "out",
+        "finished",
+        "err",
+        "run"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Signal 'line'
+        QtMocHelpers::SignalData<void(QByteArray)>(1, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QByteArray, 3 },
+        }}),
+        // Signal 'finished'
+        QtMocHelpers::SignalData<void(QString)>(4, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QString, 5 },
+        }}),
+        // Slot 'run'
+        QtMocHelpers::SlotData<void()>(6, 2, QMC::AccessPublic, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<LuaWorker, qt_meta_tag_ZN9LuaWorkerE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject LuaWorker::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9LuaWorkerE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9LuaWorkerE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN9LuaWorkerE_t>.metaTypes,
+    nullptr
+} };
+
+void LuaWorker::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<LuaWorker *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->line((*reinterpret_cast<std::add_pointer_t<QByteArray>>(_a[1]))); break;
+        case 1: _t->finished((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
+        case 2: _t->run(); break;
+        default: ;
+        }
+    }
+    if (_c == QMetaObject::IndexOfMethod) {
+        if (QtMocHelpers::indexOfMethod<void (LuaWorker::*)(QByteArray )>(_a, &LuaWorker::line, 0))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (LuaWorker::*)(QString )>(_a, &LuaWorker::finished, 1))
+            return;
+    }
+}
+
+const QMetaObject *LuaWorker::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *LuaWorker::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN9LuaWorkerE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int LuaWorker::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 3)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 3;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 3)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 3;
+    }
+    return _id;
+}
+
+// SIGNAL 0
+void LuaWorker::line(QByteArray _t1)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 0, nullptr, _t1);
+}
+
+// SIGNAL 1
+void LuaWorker::finished(QString _t1)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 1, nullptr, _t1);
+}
+namespace {
+struct qt_meta_tag_ZN6EngineE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto Engine::qt_create_metaobjectdata<qt_meta_tag_ZN6EngineE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "Engine",
+        "response",
+        "",
+        "id",
+        "ok",
+        "QVariant",
+        "data",
+        "err",
+        "event",
+        "name",
+        "onLine",
+        "line",
+        "died",
+        "request",
+        "cmd",
+        "QVariantMap",
+        "args"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Signal 'response'
+        QtMocHelpers::SignalData<void(int, bool, QVariant, QString)>(1, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Int, 3 }, { QMetaType::Bool, 4 }, { 0x80000000 | 5, 6 }, { QMetaType::QString, 7 },
+        }}),
+        // Signal 'event'
+        QtMocHelpers::SignalData<void(QString, QVariant)>(8, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QString, 9 }, { 0x80000000 | 5, 6 },
+        }}),
+        // Slot 'onLine'
+        QtMocHelpers::SlotData<void(const QByteArray &)>(10, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QByteArray, 11 },
+        }}),
+        // Slot 'died'
+        QtMocHelpers::SlotData<void(const QString &)>(12, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 7 },
+        }}),
+        // Method 'request'
+        QtMocHelpers::MethodData<int(const QString &, const QVariantMap &)>(13, 2, QMC::AccessPublic, QMetaType::Int, {{
+            { QMetaType::QString, 14 }, { 0x80000000 | 15, 16 },
+        }}),
+        // Method 'request'
+        QtMocHelpers::MethodData<int(const QString &)>(13, 2, QMC::AccessPublic | QMC::MethodCloned, QMetaType::Int, {{
+            { QMetaType::QString, 14 },
+        }}),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<Engine, qt_meta_tag_ZN6EngineE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject Engine::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN6EngineE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN6EngineE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN6EngineE_t>.metaTypes,
+    nullptr
+} };
+
+void Engine::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<Engine *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->response((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<bool>>(_a[2])),(*reinterpret_cast<std::add_pointer_t<QVariant>>(_a[3])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[4]))); break;
+        case 1: _t->event((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QVariant>>(_a[2]))); break;
+        case 2: _t->onLine((*reinterpret_cast<std::add_pointer_t<QByteArray>>(_a[1]))); break;
+        case 3: _t->died((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
+        case 4: { int _r = _t->request((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QVariantMap>>(_a[2])));
+            if (_a[0]) *reinterpret_cast<int*>(_a[0]) = std::move(_r); }  break;
+        case 5: { int _r = _t->request((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])));
+            if (_a[0]) *reinterpret_cast<int*>(_a[0]) = std::move(_r); }  break;
+        default: ;
+        }
+    }
+    if (_c == QMetaObject::IndexOfMethod) {
+        if (QtMocHelpers::indexOfMethod<void (Engine::*)(int , bool , QVariant , QString )>(_a, &Engine::response, 0))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (Engine::*)(QString , QVariant )>(_a, &Engine::event, 1))
+            return;
+    }
+}
+
+const QMetaObject *Engine::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *Engine::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN6EngineE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int Engine::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 6)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 6;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 6)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 6;
+    }
+    return _id;
+}
+
+// SIGNAL 0
+void Engine::response(int _t1, bool _t2, QVariant _t3, QString _t4)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 0, nullptr, _t1, _t2, _t3, _t4);
+}
+
+// SIGNAL 1
+void Engine::event(QString _t1, QVariant _t2)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 1, nullptr, _t1, _t2);
+}
+namespace {
+struct qt_meta_tag_ZN12ToastActionsE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto ToastActions::qt_create_metaobjectdata<qt_meta_tag_ZN12ToastActionsE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "ToastActions",
+        "invoked",
+        "",
+        "key"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'invoked'
+        QtMocHelpers::SlotData<void(uint, const QString &)>(1, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::UInt, 2 }, { QMetaType::QString, 3 },
+        }}),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<ToastActions, qt_meta_tag_ZN12ToastActionsE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject ToastActions::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12ToastActionsE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12ToastActionsE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN12ToastActionsE_t>.metaTypes,
+    nullptr
+} };
+
+void ToastActions::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<ToastActions *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->invoked((*reinterpret_cast<std::add_pointer_t<uint>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[2]))); break;
+        default: ;
+        }
+    }
+}
+
+const QMetaObject *ToastActions::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *ToastActions::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN12ToastActionsE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int ToastActions::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 1)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 1;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 1)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 1;
+    }
+    return _id;
+}
+namespace {
+struct qt_meta_tag_ZN5ShellE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto Shell::qt_create_metaobjectdata<qt_meta_tag_ZN5ShellE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "Shell",
+        "revealed",
+        "",
+        "listen",
+        "cursorMoved",
+        "x",
+        "y",
+        "watchCursor",
+        "on",
+        "cursorWatchable",
+        "registerProbe",
+        "o",
+        "screenName",
+        "registerDock",
+        "dockRegion",
+        "QVariantList",
+        "rects",
+        "reveal",
+        "conceal"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Signal 'revealed'
+        QtMocHelpers::SignalData<void()>(1, 2, QMC::AccessPublic, QMetaType::Void),
+        // Signal 'listen'
+        QtMocHelpers::SignalData<void()>(3, 2, QMC::AccessPublic, QMetaType::Void),
+        // Signal 'cursorMoved'
+        QtMocHelpers::SignalData<void(int, int)>(4, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Int, 5 }, { QMetaType::Int, 6 },
+        }}),
+        // Method 'watchCursor'
+        QtMocHelpers::MethodData<void(bool)>(7, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::Bool, 8 },
+        }}),
+        // Method 'cursorWatchable'
+        QtMocHelpers::MethodData<bool()>(9, 2, QMC::AccessPublic, QMetaType::Bool),
+        // Method 'registerProbe'
+        QtMocHelpers::MethodData<void(QObject *, const QString &)>(10, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QObjectStar, 11 }, { QMetaType::QString, 12 },
+        }}),
+        // Method 'registerDock'
+        QtMocHelpers::MethodData<void(QObject *, const QString &)>(13, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QObjectStar, 11 }, { QMetaType::QString, 12 },
+        }}),
+        // Method 'dockRegion'
+        QtMocHelpers::MethodData<void(QObject *, const QVariantList &)>(14, 2, QMC::AccessPublic, QMetaType::Void, {{
+            { QMetaType::QObjectStar, 11 }, { 0x80000000 | 15, 16 },
+        }}),
+        // Method 'reveal'
+        QtMocHelpers::MethodData<void()>(17, 2, QMC::AccessPublic, QMetaType::Void),
+        // Method 'conceal'
+        QtMocHelpers::MethodData<void()>(18, 2, QMC::AccessPublic, QMetaType::Void),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<Shell, qt_meta_tag_ZN5ShellE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject Shell::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN5ShellE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN5ShellE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN5ShellE_t>.metaTypes,
+    nullptr
+} };
+
+void Shell::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<Shell *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->revealed(); break;
+        case 1: _t->listen(); break;
+        case 2: _t->cursorMoved((*reinterpret_cast<std::add_pointer_t<int>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<int>>(_a[2]))); break;
+        case 3: _t->watchCursor((*reinterpret_cast<std::add_pointer_t<bool>>(_a[1]))); break;
+        case 4: { bool _r = _t->cursorWatchable();
+            if (_a[0]) *reinterpret_cast<bool*>(_a[0]) = std::move(_r); }  break;
+        case 5: _t->registerProbe((*reinterpret_cast<std::add_pointer_t<QObject*>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[2]))); break;
+        case 6: _t->registerDock((*reinterpret_cast<std::add_pointer_t<QObject*>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[2]))); break;
+        case 7: _t->dockRegion((*reinterpret_cast<std::add_pointer_t<QObject*>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QVariantList>>(_a[2]))); break;
+        case 8: _t->reveal(); break;
+        case 9: _t->conceal(); break;
+        default: ;
+        }
+    }
+    if (_c == QMetaObject::IndexOfMethod) {
+        if (QtMocHelpers::indexOfMethod<void (Shell::*)()>(_a, &Shell::revealed, 0))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (Shell::*)()>(_a, &Shell::listen, 1))
+            return;
+        if (QtMocHelpers::indexOfMethod<void (Shell::*)(int , int )>(_a, &Shell::cursorMoved, 2))
+            return;
+    }
+}
+
+const QMetaObject *Shell::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *Shell::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN5ShellE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int Shell::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 10)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 10;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 10)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 10;
+    }
+    return _id;
+}
+
+// SIGNAL 0
+void Shell::revealed()
+{
+    QMetaObject::activate(this, &staticMetaObject, 0, nullptr);
+}
+
+// SIGNAL 1
+void Shell::listen()
+{
+    QMetaObject::activate(this, &staticMetaObject, 1, nullptr);
+}
+
+// SIGNAL 2
+void Shell::cursorMoved(int _t1, int _t2)
+{
+    QMetaObject::activate<void>(this, &staticMetaObject, 2, nullptr, _t1, _t2);
+}
+namespace {
+struct qt_meta_tag_ZN8WatchersE_t {};
+} // unnamed namespace
+
+template <> constexpr inline auto Watchers::qt_create_metaobjectdata<qt_meta_tag_ZN8WatchersE_t>()
+{
+    namespace QMC = QtMocConstants;
+    QtMocHelpers::StringRefStorage qt_stringData {
+        "Watchers",
+        "onProps",
+        "",
+        "iface",
+        "QVariantMap",
+        "changed",
+        "onName",
+        "name",
+        "owner"
+    };
+
+    QtMocHelpers::UintData qt_methods {
+        // Slot 'onProps'
+        QtMocHelpers::SlotData<void(const QString &, const QVariantMap &, const QStringList &)>(1, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 3 }, { 0x80000000 | 4, 5 }, { QMetaType::QStringList, 2 },
+        }}),
+        // Slot 'onName'
+        QtMocHelpers::SlotData<void(const QString &, const QString &, const QString &)>(6, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 7 }, { QMetaType::QString, 2 }, { QMetaType::QString, 8 },
+        }}),
+    };
+    QtMocHelpers::UintData qt_properties {
+    };
+    QtMocHelpers::UintData qt_enums {
+    };
+    return QtMocHelpers::metaObjectData<Watchers, qt_meta_tag_ZN8WatchersE_t>(QMC::MetaObjectFlag{}, qt_stringData,
+            qt_methods, qt_properties, qt_enums);
+}
+Q_CONSTINIT const QMetaObject Watchers::staticMetaObject = { {
+    QMetaObject::SuperData::link<QObject::staticMetaObject>(),
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN8WatchersE_t>.stringdata,
+    qt_staticMetaObjectStaticContent<qt_meta_tag_ZN8WatchersE_t>.data,
+    qt_static_metacall,
+    nullptr,
+    qt_staticMetaObjectRelocatingContent<qt_meta_tag_ZN8WatchersE_t>.metaTypes,
+    nullptr
+} };
+
+void Watchers::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, void **_a)
+{
+    auto *_t = static_cast<Watchers *>(_o);
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        switch (_id) {
+        case 0: _t->onProps((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QVariantMap>>(_a[2])),(*reinterpret_cast<std::add_pointer_t<QStringList>>(_a[3]))); break;
+        case 1: _t->onName((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[2])),(*reinterpret_cast<std::add_pointer_t<QString>>(_a[3]))); break;
+        default: ;
+        }
+    }
+}
+
+const QMetaObject *Watchers::metaObject() const
+{
+    return QObject::d_ptr->metaObject ? QObject::d_ptr->dynamicMetaObject() : &staticMetaObject;
+}
+
+void *Watchers::qt_metacast(const char *_clname)
+{
+    if (!_clname) return nullptr;
+    if (!strcmp(_clname, qt_staticMetaObjectStaticContent<qt_meta_tag_ZN8WatchersE_t>.strings))
+        return static_cast<void*>(this);
+    return QObject::qt_metacast(_clname);
+}
+
+int Watchers::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
+{
+    _id = QObject::qt_metacall(_c, _id, _a);
+    if (_id < 0)
+        return _id;
+    if (_c == QMetaObject::InvokeMetaMethod) {
+        if (_id < 2)
+            qt_static_metacall(this, _c, _id, _a);
+        _id -= 2;
+    }
+    if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
+        if (_id < 2)
+            *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
+        _id -= 2;
+    }
+    return _id;
+}
+QT_WARNING_POP

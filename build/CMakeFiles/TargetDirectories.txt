@@ -1,0 +1,5 @@
+/home/buck/Projects/spoot/build/CMakeFiles/spoot.dir
+/home/buck/Projects/spoot/build/CMakeFiles/edit_cache.dir
+/home/buck/Projects/spoot/build/CMakeFiles/rebuild_cache.dir
+/home/buck/Projects/spoot/build/CMakeFiles/spoot_autogen_timestamp_deps.dir
+/home/buck/Projects/spoot/build/CMakeFiles/spoot_autogen.dir
