@@ -48,6 +48,8 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
 - Complete the Spotify authentication step
 - Have fun
 
+> The ```.desktop``` file will point to the binary inside the spoot dir where you extracted it
+
 **OPTIONAL:** If you want to set up keybinds for quicker access
 - For spoot -- Set a keybind pointing to ```/bin/spoot```
 - For listener -- Set a keybind pointing to ```/bin/spoot --listen```
