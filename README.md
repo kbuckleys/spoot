@@ -46,15 +46,16 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
 
 - Run ```bash setup```
 - Complete the Spotify authentication step
-- Set a keybind for ```/bin/spoot``` in your compositor's config
 - Have fun
 
-**OPTIONAL:** Set a second keybind if you want on-the-fly track detection
-- Set a keybind pointing to ```/bin/spoot --listen```
+**OPTIONAL:** If you want to set up keybinds for quicker access
+- For spoot -- Set a keybind pointing to ```/bin/spoot```
+- For listener -- Set a keybind pointing to ```/bin/spoot --listen```
   > You can still access this panel from ```main > playback```
 
 **Where spoot stores its files:**
-- Everything is stored in the spoot directory and in ```~/.cache/spoot/```
+- Everything is stored in the spoot directory where you extracted it and in ```~/.cache/spoot/```
+- spoot also generates a ```.desktop``` file that lives in ```~/.local/share/applications/```
 
 # Building it yourself
 If you prefer building spoot manually, although the install script does exactly the same thing
