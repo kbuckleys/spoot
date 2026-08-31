@@ -54,8 +54,18 @@ Window {
     }
     // What a bar has taken, on the axis the dock lives on. Zero where nothing
     // reserves anything, which is the ordinary case and changes nothing.
-    readonly property int edgeInset:
-        (probe.height > 0 && dock.outH > 0) ? Math.max(0, dock.outH - probe.height) : 0
+    readonly property int edgeInset: {
+        if (probe.height <= 0 || dock.outH <= 0) return 0
+        // CLAMPED, because a wrong answer here puts the hot spot somewhere the
+        // pointer cannot go. The probe is a second layer surface whose SIZE is the
+        // free area (see Shell::registerProbe), and how a compositor sizes it is
+        // the compositor's business -- one that answers oddly, or not at all,
+        // would otherwise push the band off the screen and the dock would simply
+        // never open. A quarter of the output is more than any bar reserves.
+        var reserved = dock.outH - probe.height
+        if (reserved <= 0) return 0
+        return Math.min(reserved, Math.round(dock.outH / 4))
+    }
     // WHERE THE EDGE EFFECTIVELY IS: the screen's, less whatever is parked on it.
     // Every placement below reads this rather than the output's own edge -- the
     // pill, the glow, and the line the pointer is measured against -- so a bar
@@ -139,7 +149,19 @@ Window {
     // out; shallow when it is not, because then the only way to know is to accept
     // input over that whole patch -- and a 44px band that swallows clicks is a
     // worse bargain than a glow that comes up late.
-    readonly property int hotDepth: dock.tracked ? 64 : 6
+    //
+    // Tracked, the region is one pixel and this is only how far the glow reaches:
+    // Hyprland answers `cursorpos`, so an approach can be FELT from 64px out
+    // without owning any ground, and trackedNear ramps across it.
+    //
+    // UNTRACKED THERE IS NO APPROACH, only an arrival. The region IS this depth --
+    // the only way to hear about the pointer is to accept input over it -- so
+    // twenty pixels is all that can be taken from the desktop without the dock
+    // becoming a strip that swallows clicks, and inside twenty pixels there is
+    // nothing to ramp: you are at the edge or you are not. Every other compositor
+    // gets that bargain, which is the difference between a dock that exists and
+    // one that does not.
+    readonly property int hotDepth: dock.tracked ? 64 : 20
     readonly property int hotPad: 60
     readonly property int hotW: Math.min(dock.outW, pill.width + dock.hotPad * 2)
     readonly property int hotX: Math.round(pill.x + pill.width / 2 - dock.hotW / 2)
@@ -188,7 +210,11 @@ Window {
     // pixel must not close it, or the buttons on its own border are unclickable.
     readonly property int slack: 10
 
-    readonly property bool active: !!(dock.playback && dock.playback.name)
+    // IS THERE A TRACK AT ALL. NOT `active`: that is a property of every QWindow
+    // -- whether this surface has keyboard focus -- and shadowing it here means
+    // any future reader of dock.active gets whichever of the two the resolver
+    // happens to pick.
+    readonly property bool hasTrack: !!(dock.playback && dock.playback.name)
     readonly property real progress: {
         var d = dock.playback && dock.playback.duration || 0
         if (d <= 0) return 0
@@ -230,7 +256,24 @@ Window {
         return [Qt.rect(pill.x - dock.slack, top,
                         pill.width + dock.slack * 2, bot - top)]
     }
-    onRegionChanged: if (typeof Shell !== "undefined") Shell.dockRegion(dock, dock.region)
+    onRegionChanged: {
+        if (typeof Shell !== "undefined") Shell.dockRegion(dock, dock.region)
+        // WHAT THIS COMPOSITOR ACTUALLY GAVE US. The dock is built against
+        // wlr-layer-shell, which KWin, sway, wayfire and Hyprland all implement --
+        // and only Hyprland can be asked where the pointer is, so everywhere else
+        // rides on the probe and the band being right. When it is not, this is the
+        // one line that says which of them was wrong.
+        if (dock.debug)
+            console.log("DOCK " + dock.screenName
+                + " probe=" + probe.width + "x" + probe.height
+                + " out=" + dock.outW + "x" + dock.outH
+                + " inset=" + dock.edgeInset + " edgeY=" + dock.edgeY
+                + " tracked=" + dock.tracked + " depth=" + dock.hotDepth
+                + " armed=" + dock.armed + " open=" + dock.open
+                + " region=" + JSON.stringify(dock.region))
+    }
+    readonly property bool debug: (typeof SPOOT_DOCK_DEBUG !== "undefined")
+                                  && SPOOT_DOCK_DEBUG === "1"
 
     // OPENS ON TOUCH, CLOSES ON A DELAY. The pointer crosses the band on its way
     // somewhere else all day long; a dock that appeared and vanished on every
@@ -251,14 +294,47 @@ Window {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         onEntered: shutWait.stop()
         onExited: { openWait.stop(); dock.touchedNear = 0; shutWait.restart() }
-        // WITHOUT A COMPOSITOR TO ASK, how close is only knowable where the region
-        // reaches -- so every position that arrives here is inside the shallow
-        // band and the distance to the edge is the whole answer. Tracked, this
-        // says nothing: trackedNear already knows, and from further out.
+        // ARRIVED, OR NOT ARRIVED. Measured against the same lines trackedNear
+        // measures against, which is the whole of the fix.
+        //
+        // A RAMP STOOD HERE and could never have worked: it took its distance from
+        // dock.outH -- the SCREEN's edge -- while the band it reads is placed
+        // against dock.edgeY, the FREE edge, the screen's less whatever a bar has
+        // reserved. This machine's second output has a 44px bar, so the band sat
+        // at y 1856..1876 and every distance inside it came out as 44 or more
+        // against a hotDepth of 20. touchedNear was pinned at 0, `near` could
+        // never reach touchAt, openWait never started: the dock did not open on
+        // any compositor but Hyprland, and could not have. The band was drawn in
+        // the right place and read in the wrong one.
+        //
+        // Not merely repaired to edgeY, replaced: a ramp across twenty pixels the
+        // pointer can only ever be inside of is a number with one value. Untracked
+        // there is no approach to feel, only an arrival -- so this answers 1 or 0,
+        // and openWait's 220ms below is what keeps a pointer crossing the edge on
+        // its way somewhere else from summoning the pill. trackedNear still ramps,
+        // because 64px of reach is far enough for a glow to say something.
+        //
+        // Bounds tested rather than assumed. A position delivered here should
+        // already be inside the mask -- so this is belt to the region's braces,
+        // and it costs two comparisons to make the answer depend on where the
+        // pointer IS rather than on the host having masked the surface exactly as
+        // asked. Past the free edge counts as arrived, exactly as it does in
+        // trackedNear: everything between it and the screen's edge is the bar, and
+        // throwing the pointer at the bottom of the screen is the gesture, not a
+        // miss.
         onPositionChanged: function (m) {
             if (dock.open || dock.tracked) return
-            var d = dock.onTop ? m.y : (dock.outH - m.y)
-            dock.touchedNear = Math.max(0, Math.min(1, 1 - d / dock.hotDepth))
+            var d = dock.onTop ? (m.y - dock.edgeY) : (dock.edgeY - 1 - m.y)
+            var inX = m.x >= dock.hotX && m.x <= dock.hotX + dock.hotW
+            // THE OTHER HALF OF THE DOCK LINE. That one says where the band was
+            // put; this says where the pointer was reported. Either alone is a
+            // guess -- together they tell a band in the wrong place from a band
+            // nothing is reaching, which is the entire diagnosis on a compositor
+            // nobody here can run. It is what found the bug above.
+            if (dock.debug) console.log("DOCK POS " + dock.screenName
+                + " m=" + m.x + "," + m.y + " edgeY=" + dock.edgeY
+                + " d=" + d + " inX=" + inX)
+            dock.touchedNear = (inX && d <= dock.hotDepth) ? 1 : 0
         }
         // THE WHEEL IS VOLUME HERE, and seek on the now-playing strip. They are
         // not the same surface and not the same question: the strip is a picture
@@ -375,7 +451,13 @@ Window {
         border.width: dock.theme.borderWidth
         border.color: dock.theme.borderCol
         clip: true
-        opacity: (dock.open && dock.active) ? 1 : 0
+        // IT COMES OUT WHETHER OR NOT ANYTHING IS PLAYING. It used to need a
+        // track, so the one moment the dock was most worth having -- nothing
+        // loaded, and you want to start something -- was the one moment it did
+        // not appear, and the hot spot read as broken. What changes with no
+        // track is what is ON it: no cover, no title, no progress, and no Like,
+        // which is the only verb here that needs something to act on.
+        opacity: dock.open ? 1 : 0
         visible: opacity > 0
         Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
@@ -396,6 +478,18 @@ Window {
                     radius: 4
                     color: dock.theme.selectedBg
                     visible: cover.status !== Image.Ready
+                    // spoot's own mark where a cover would be. With nothing
+                    // playing this square is the whole of what the pill is
+                    // offering, so an empty box would read as a picture that
+                    // failed to load rather than as the button it is.
+                    Text {
+                        anchors.centerIn: parent
+                        text: dock.theme.glyphSpoot
+                        color: dock.theme.foreground
+                        opacity: 0.5
+                        font { family: dock.theme.fontFamily
+                               pointSize: dock.theme.fontSize + 4 }
+                    }
                 }
                 Image {
                     id: cover
@@ -423,8 +517,10 @@ Window {
                 Text {
                     id: nameText
                     anchors { left: parent.left; right: parent.right; bottom: parent.verticalCenter }
-                    text: (dock.playback.name || "")
-                          + (dock.icons.length ? "  " + dock.icons : "")
+                    text: dock.hasTrack
+                          ? (dock.playback.name || "")
+                            + (dock.icons.length ? "  " + dock.icons : "")
+                          : "Nothing playing"
                     elide: Text.ElideRight
                     color: dock.theme.playing
                     font { family: dock.theme.fontFamily; pointSize: dock.theme.fontSize; bold: true }
@@ -433,7 +529,8 @@ Window {
                     id: byText
                     anchors { left: parent.left; right: parent.right; top: parent.verticalCenter
                               topMargin: 2 }
-                    text: dock.playback.artists || ""
+                    text: dock.hasTrack ? (dock.playback.artists || "")
+                                      : "press play, or open spoot"
                     elide: Text.ElideRight
                     color: dock.theme.foreground
                     opacity: 0.7
@@ -493,8 +590,15 @@ Window {
                 // THE ONE VERB THE PILL WAS MISSING. Everything else on it drives
                 // the music; this is the only thing that changes what you keep,
                 // and it was the reach-for-the-menu case the dock exists to avoid.
+                // ...AND ONLY WHILE THERE IS SOMETHING TO SAVE. Every other key
+                // on the pill drives the player and still means something with
+                // nothing loaded; a heart with no track under it is a button
+                // whose only possible answer is "nothing playing".
                 GlyphKey {
                     theme: dock.theme
+                    // A Row skips an invisible child outright, so the gap goes
+                    // with the key rather than being left behind as a hole.
+                    visible: dock.hasTrack
                     glyph: dock.liked ? dock.theme.glyphLiked : dock.theme.glyphUnliked
                     lit: dock.liked
                     onTapped: dock.controlRequested("like", 0)

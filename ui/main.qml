@@ -180,6 +180,9 @@ Window {
     // an opening panel, which is a flicker rather than a flash but is still not
     // nothing. Declared here, the panel never begins to appear at all.
     property bool listenWanted: (typeof startView !== "undefined" && startView === "listen")
+    // HAS A MENU EVER BEEN DRAWN. Cold starts open the panel before the answer to
+    // that is yes; see showPanel, which waits for it.
+    property bool firstDrawn: false
     ListModel { id: rows }
     // The card's rows. A second model rather than a second app: the engine hands
     // back ONE draw per round trip (see Util.serve_run), so the only way to have
@@ -585,6 +588,11 @@ Window {
             // See Util.view_trail_jump: the engine cannot walk a path that spans
             // roots, so it names the step and this does the walking.
             else if (name === "jump") { root.jumpTrail(data.crumb || 0) }
+            // CLEAR SESSION. The trail lives here while spoot is open, so the
+            // engine emptying its own files cleared nothing visible -- the next
+            // draw arrived carrying the same hops. This is the UI dropping them,
+            // which is exactly what Alt+Delete does. See Util.clear_trail.
+            else if (name === "home") root.goHome()
             // A view that wants to say "No results" says it here -- rofi_message
             // has nowhere to draw when the front end is not rofi.
             else if (name === "message") {
@@ -888,6 +896,26 @@ Window {
             // whichever list the step actually went to.
             if (root.ctxHops.length) root.ctxHops = root.ctxShown.slice()
             else root.popTransient()
+            // ...AND THE SNAPSHOT IS SPENT HERE TOO, which is the third and last
+            // route out of a draw. preHops is good for exactly one draw --
+            // applyWhere clears it and applyContext clears it -- and this branch
+            // returns before either runs, which the openListen note further down
+            // says in as many words: "the draw comes back empty, so applyWhere
+            // never ran".
+            //
+            // So a step that drew nothing left a plausible-looking trail from an
+            // earlier branch alive into the NEXT step, where applyWhere's test is
+            // two small integers agreeing -- and when they did, `hops` was
+            // replaced wholesale by a path nobody had walked in a while. The
+            // crumb still read correctly, because it comes from the draw, and
+            // nothing looked wrong until the step after that: the engine replayed
+            // the stale path and answered about a row in a menu one level up.
+            // That is picking a track in an album and opening an album from the
+            // step before it, and -- when the shifted index lands on a menu with
+            // an "Add to Playlist" row -- the toast about a playlist that is no
+            // longer there, from a place that was never a playlist.
+            root.preHops = []
+            root.prePos = -1
             return
         }
         // AN ACTION MENU GOES ON TOP OF THE MENU, not in place of it. Decided
@@ -1219,9 +1247,17 @@ Window {
         // HOW ITS ROWS ARE ARRANGED, from the menu that knows. Absent means one
         // column, which is every card but the window-position picker.
         root.ctxColsWanted = d.cols || 1
+        // ...AND WHETHER THEY ARE WORDS OR PICTURES, from the same menu. See
+        // Util.ui_pick.
+        root.ctxCells = d.cells || ""
+        // 1-based on the wire, like every index the engine sends.
+        root.ctxActive = (typeof d.active === "number") ? d.active - 1 : -1
         // WHICH FACE THIS CARD IS SHOWING, for the one menu that has two. Empty
         // for every other card, which is what tabHere reads to tell them apart.
         root.ctxMode = d.mode || ""
+        // ...AND WHETHER THE LIST BEHIND IT KEEPS ITS BACKDROP. Absent for every
+        // card but the two that ask -- see contextCover.wanted.
+        root.ctxHideArt = d.hideArt === true
         root.ctxMesg = d.mesg || d.prompt || ""
         var list = root.toArray(d.rows)
         // Same rule the body follows: patch where the shape allows it, rebuild
@@ -1272,11 +1308,21 @@ Window {
     function closeContext() {
         root.ctxHops = []
         root.ctxShown = []
+        // ABOVE THE GUARD, with the other two. Everything below it is state the
+        // card draws with, and dropping that while no card is up is nothing. This
+        // one reaches OUT of the card -- it takes the backdrop off the list behind
+        // it -- so if it were ever set with ctxUp false it would sit there hiding
+        // the cover for the rest of the session with nothing on screen to explain
+        // it. applyContext sets the two together today and cannot get between
+        // them; cleared here, it cannot start to.
+        root.ctxHideArt = false
         if (!root.ctxUp) return
         root.ctxUp = false
         root.ctxFilter = ""
         root.ctxAll = []
         root.ctxColsWanted = 1
+        root.ctxCells = ""
+        root.ctxActive = -1
         root.ctxMode = ""
         root.cardArt = ""
         root.ctxFlashSrc = -1
@@ -1378,6 +1424,14 @@ Window {
         root.bodyFade = 0
         swapIn.restart()
         if (typeof SPOOT_DEBUG !== "undefined") {}
+        // ...AND THE PANEL OPENS ONTO IT. On a cold start showPanel ran before any
+        // of this existed and held its animation back for exactly this moment, so
+        // the pop happens at the panel's real height rather than growing into it.
+        // Warm starts never reach the branch: firstDrawn is long since true.
+        if (!root.firstDrawn) {
+            root.firstDrawn = true
+            if (root.opened && root.showFactor === 0) openAnim.restart()
+        }
         // A MENU EXISTS NOW, so a pending `--listen` has something to sit on. Spent
         // on the way past, so a later draw cannot reopen it. See listenWanted.
         // Arming BEFORE clearing the wish, so the dim never lapses between the two
@@ -1467,9 +1521,33 @@ Window {
     // nothing takes one, which is what every card did before this existed.
     readonly property int ctxCols: Math.max(1, root.ctxColsWanted)
     property int ctxColsWanted: 1
+    // WHAT THE CARD'S ROWS ARE. Empty for every card there is except the
+    // window-position picker, whose rows are pictures of the screen rather than
+    // names of places on it. See Util.ui_pick's `cells` and RowList.cellKind.
+    property string ctxCells: ""
+    // ...AND WHICH ROW IS THE VALUE IT IS CURRENTLY SET TO, 0-based, or -1. Not
+    // the cursor: a picker opens with the cursor wherever it was left and the
+    // setting is wherever it is. See RowList.activeIndex, which the lyrics view
+    // uses for the same distinction between what is live and where you are.
+    property int ctxActive: -1
+    // HOW TALL ONE OF THOSE ROWS IS. A row of words is a row of words; a picture
+    // of a screen needs to be a shape you can recognise, and a 26px cell three of
+    // which have to stack is a line, not a monitor.
+    readonly property int ctxRowH: root.ctxCells === "anchor" ? zenon.rowHeight * 3
+                                                              : zenon.rowHeight
     // The face a two-faced card is showing -- only the trail menu sends one. See
     // Util.view_trail_jump and tabHere.
     property string ctxMode: ""
+    // A CARD THAT TAKES THE BACKDROP DOWN WITH IT.
+    //
+    // Not root.noCover, and the difference is the whole point of it: noCover is a
+    // menu saying it has no subject, and applyContext deliberately ignores that
+    // field because every action menu sets it and the list behind the card has
+    // not stopped being about anything. This is the rarer, stronger statement --
+    // Seek and the search type filter are rulers and counts, and a cover peering
+    // out beside them is decoration in the way of a choice. See Util.serve_draw's
+    // hideArt. Cleared by closeContext, so it lives exactly as long as the card.
+    property bool ctxHideArt: false
     // ROWS DOWN THE CARD, which is not the row COUNT once there is more than one
     // column: nine cells in three columns is three rows tall.
     readonly property int ctxRowsUsed: Math.ceil(ctxRows.count / root.ctxCols)
@@ -1478,7 +1556,7 @@ Window {
     // which is the whole screen, so running past that is running off it.
     readonly property int ctxFits: Math.max(1, Math.floor(
         (root.height - zenon.sheetPad * 2 - zenon.rowHeight - zenon.messagePadV * 4)
-        / zenon.rowHeight))
+        / root.ctxRowH))
     readonly property int ctxLines: Math.max(1, Math.min(root.ctxRowsUsed,
                                                          root.ctxG.lines, root.ctxFits))
     // THE CAPTION, AS THE MENU WROTE IT. Most cards caption themselves in one
@@ -1495,13 +1573,13 @@ Window {
     // flush at the top and loose at the bottom.
     readonly property int ctxCardHeight: root.ctxMesgLines.length * zenon.rowHeight
                                        + zenon.messagePadV * 2
-                                       + root.ctxLines * zenon.rowHeight
+                                       + root.ctxLines * root.ctxRowH
                                        + zenon.borderWidth
     // THE CARD'S OWN BACKDROP, square against its rows -- the same shape the body
     // wears beside a list, at the size the card happens to be. Zero when the card
     // is about nothing picturable, and a Row with a zero-wide first child is a
     // Row with one child, so nothing else has to know.
-    readonly property int ctxCoverW: root.cardArt.length ? root.ctxLines * zenon.rowHeight : 0
+    readonly property int ctxCoverW: root.cardArt.length ? root.ctxLines * root.ctxRowH : 0
     // AS WIDE AS ITS LONGEST VERB, which is what makes it a card rather than a
     // second panel. The `action` theme declares 1000px because as a FULL menu it
     // had to match the one it was replacing, and a 1000px card over a 1000px panel
@@ -1875,6 +1953,16 @@ Window {
     readonly property var focusItem: root.ctxUp ? ctxList : body.item
     readonly property var focusModel: root.ctxUp ? ctxRows : rows
     readonly property var focusG: root.ctxUp ? root.ctxG : root.menuG
+    // ...AND HOW MANY COLUMNS IT IS ACTUALLY DRAWN IN, which is not what its
+    // theme declares. A card's columns come from the menu that sent it (ctxCols --
+    // the window-position picker is three wide and its theme says nothing), and
+    // the body clamps the theme's count to the number of rows it actually has, so
+    // a shelf of three tiles is three columns and not five.
+    //
+    // move() read focusG.columns, so Down in the 3x3 picker stepped one cell
+    // instead of one row -- "cursor movement is not all-directional" -- and Down
+    // in a short grid overshot the row below it.
+    readonly property int focusCols: root.ctxUp ? root.ctxCols : root.columns
     // AN OVERLAY THAT *IS* THE PANEL BRINGS ITS OWN GEOMETRY -- a details sheet
     // slides over the rows and takes the whole window, so the window becomes the
     // shape the sheet asks for.
@@ -2153,24 +2241,18 @@ Window {
     // keypress cannot be. Never reset: "selecting any track removes the cursor" is
     // about the selection, not about whether the track turned out to be playable.
     property bool picked: false
-    // ...AND WHETHER SPOOT IS ALLOWED TO REMEMBER ANY OF IT. Session Replay off
-    // means "do not carry last time into this one", and where you left off is
-    // exactly that -- the setting reached the trail and the cursors and stopped
-    // one short of the thing most visible: open any list and the track you last
-    // played wore a marker, put there by spoot on the strength of a session the
-    // setting had just been told to forget.
-    //
-    // `!== false` so a settings payload that predates the key still remembers,
-    // which is the default.
-    readonly property bool replaySession: root.settings.replay !== false
     // WHERE YOU LEFT OFF. Empty as soon as either of the above says the question
     // has been answered, which is why no view needs to know any of this.
+    //
+    // A `replaySession` TEST STOOD HERE, gating these on the setting from the UI
+    // side. The engine answers it now -- with Session Replay off and nothing
+    // played this session, Util.serve_playback reports no track at all -- so
+    // `playback.id` is already empty and a second copy of the rule over here was
+    // one more place to keep in agreement with it.
     readonly property string lastId:
-        (root.playbackLive || root.picked || !root.replaySession)
-            ? "" : (root.playback.id || "")
+        (root.playbackLive || root.picked) ? "" : (root.playback.id || "")
     readonly property string lastAlbumId:
-        (root.playbackLive || root.picked || !root.replaySession)
-            ? "" : (root.playback.albumId || "")
+        (root.playbackLive || root.picked) ? "" : (root.playback.albumId || "")
     // ...and the marker's own id, which is now the one that has to be earned.
     readonly property string liveId: root.playbackLive ? (root.playback.id || "") : ""
     readonly property string liveAlbumId:
@@ -2192,6 +2274,20 @@ Window {
     }
 
     function activate(i, alt) {
+        // NOT WHILE THE LIST UNDER THE POINTER IS ON ITS WAY OUT.
+        //
+        // A pick is an INDEX -- `src` below, the row's position in the unfiltered
+        // list -- and the engine replays it against whatever menu it draws at that
+        // depth. render holds an arriving draw and animates the old body out
+        // first, and for the whole of that fade the previous rows are still in the
+        // model and still under the pointer: a click there computes its index
+        // against a list the engine has already moved past, and every index after
+        // it in the path is shifted by one.
+        //
+        // swapOut/heldDraw and not root.inFlight, which would be the wrong gate: a
+        // sticky card fires pick after pick against requests still in flight by
+        // design -- that is what Seek is -- and none of those swap anything.
+        if (swapOut.running || root.heldDraw) return
         root.rememberPos()
         root.flashRow(i)
         // The cursor is spent. See root.picked -- picking THIS row or any other is
@@ -2435,7 +2531,17 @@ Window {
         // begin wherever a half-finished close had left it.
         root.showFactor = 0
         root.riseFactor = 0
-        openAnim.restart()
+        // ...AND ONLY ONCE THERE IS SOMETHING TO OPEN ONTO.
+        //
+        // A warm summon has rows already and pops at its real height. A COLD start
+        // is revealed by the host before the first draw has landed, so the same
+        // animation played against an empty body -- the panel appeared as a sliver
+        // and then grew as the rows arrived. The first render says so plainly:
+        // `panel=1000x1`.
+        //
+        // Deferred to that draw instead (see firstDrawn in render), which is the
+        // only moment the two starts differ at all.
+        if (root.firstDrawn) openAnim.restart()
         // ...AND THE BACKDROP CATCHES UP. Everything else on the panel is a
         // binding and is simply correct by the time it is drawn; the cover is a
         // cross-fade, and an animation started while the window was hidden has
@@ -2789,7 +2895,7 @@ Window {
         root.lastManualMove = Date.now()
         // Yours to steer: instant. See RowList.glideMs.
         if (view.glideMs !== undefined) view.glideMs = 0
-        var cols = root.focusG.columns || 1
+        var cols = Math.max(1, root.focusCols)
         var n = root.focusModel.count
         var i = view.currentIndex + dx + dy * cols
         // WRAPS, but only for a single step. Off the bottom comes back to the
@@ -3263,6 +3369,12 @@ Window {
             // part that did nothing. It moved a cursor you could not even see.
             onRowClicked: root.dismissTop()
             onRowQueued: function (i) { if (!root.ctxUp) root.queueRow(i) }
+            // HOLD THE FOLLOW WHILE A CLICK IS BEING MADE. Synced lyrics scroll
+            // themselves to the sung line, so the row you pressed had moved on by
+            // the time the second press of a double click landed -- and the seek
+            // went to whatever line had slid under the pointer. Same grace the
+            // keyboard already earns by moving the cursor. See syncLyrics.
+            onRowPressed: root.lastManualMove = Date.now()
             // A CLICK AWAY IS NOT A CLICK ON. With a card, a prompt or a viewer in
             // front, the rows behind are what you click to DISMISS it -- and the
             // cursor was moving to whichever row you happened to dismiss it over,
@@ -3296,6 +3408,8 @@ Window {
             // See gridView: a click behind a card closes it, the third button queues.
             onRowClicked: root.dismissTop()
             onRowQueued: function (i) { if (!root.ctxUp) root.queueRow(i) }
+            // See gridView: a press holds the lyrics follow off while you click.
+            onRowPressed: root.lastManualMove = Date.now()
             // See gridView: a click that dismisses something must not also pick.
             inert: root.anythingUp
         }
@@ -3424,7 +3538,18 @@ Window {
         //
         // Matched to the incoming half of the transition, so the panel finishes
         // arriving at the same moment its contents do.
-        Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        //
+        // NOT ON THE FIRST ONE. A cold start has no rows, so this height starts at
+        // nothing and the first draw is a resize like any other -- 160ms of the
+        // panel growing from a sliver. The panel is anchored to the bottom edge, so
+        // growing means the TOP edge travelling upward: the open read as a slide
+        // rather than as the pop it is, and holding openAnim back for the first
+        // draw could not help, because the slide was underneath the pop rather than
+        // before it. There is nothing to ease FROM on the first menu.
+        Behavior on height {
+            enabled: root.firstDrawn
+            NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+        }
         // WHERE IT SITS. Docked south for a menu -- that is ZENON's whole layout,
         // a panel rising off the bottom edge -- and centered on the output for the
         // image viewer, which is a thing you look AT rather than a thing you
@@ -4016,6 +4141,15 @@ Window {
                         // The rows stay, dimmed, so you can still see you have
                         // not gone anywhere.
                         && !root.listenMode
+                        // ...nor behind a card that asked for it gone. Same case
+                        // the listener makes, said by the menu instead of named
+                        // here: Seek and the search type filter are about a
+                        // position and a set of counts, and the cover of whatever
+                        // happens to be playing beside either is decoration in
+                        // the way of the choice. See root.ctxHideArt -- it is
+                        // cleared with the card, so the backdrop comes back on
+                        // its own.
+                        && !root.ctxHideArt
                         && root.themeName !== "trail" && root.themeName !== "search"
                         && root.scope !== "system" && root.scope !== "lyrics"
                     width: wanted ? root.bodyHeight : 0
@@ -4142,16 +4276,27 @@ Window {
                 // keymap owns input and moves the cursor itself.
                 focus: false
             }
-            // HOW FAR DOWN, while you are moving. Declared beside the Loader and
-            // handed its item rather than living inside the list: a Flickable's
-            // children ride the content, so an indicator in there would scroll
-            // away with the very rows it is describing. See ScrollMark.
+            }
+            // HOW FAR DOWN, while you are moving. Handed the list rather than
+            // living inside it: a Flickable's children ride the content, so an
+            // indicator in there would scroll away with the very rows it is
+            // describing. See ScrollMark.
+            //
+            // AND OUTSIDE THE ROW, which is the whole of "a scrollbar appears way
+            // outside spoot". A Row POSITIONS its children: declared in there this
+            // was laid out after the list, its `x: body.x` binding overwritten by
+            // the positioner, so the mark -- a full body's width of it -- was
+            // parked one whole list to the right of the panel, out on the desktop.
+            // bodyArea is a plain Item and positions nothing, so the binding holds.
             ScrollMark {
                 theme: zenon
                 view: body.item
-                x: body.x; y: body.y
+                x: bodyRow.x + body.x; y: bodyRow.y + body.y
                 width: body.width; height: body.height
-            }
+                // ...and it fades with the rows it is about. Outside the Row it
+                // no longer inherits the transition, and a model swap moves
+                // contentY, which the mark reads as scrolling.
+                fade: root.bodyFade
             }
 
             // THE WAIT, made visible. A glow across the whole top of the body,
@@ -4577,6 +4722,25 @@ Window {
             // NOT CLIPPED, and this is the whole point of moving out here: a card
             // taller than the panel hangs off it rather than being cut to it.
             clip: false
+            // NOTHING GETS PAST A LAYER THAT IS IN FRONT.
+            //
+            // This layer caught no input at all: a click on a card's shadow, on the
+            // blurred list around it, on the picture itself, went straight through
+            // to whatever row happened to be underneath. What stopped that being a
+            // PICK was RowList.inert -- a display property doing the work of a hit
+            // test, and the only thing between a stray click and the wrong track.
+            //
+            // Declared FIRST so it is at the bottom of this layer: the card, the
+            // buttons and the rows inside it are all above and take their own
+            // clicks. What reaches here is by definition a click on nothing, which
+            // is a dismissal -- the same one `outside` performs, through the same
+            // function. `inert` stays, as belt-and-braces rather than the mechanism.
+            MouseArea {
+                anchors.fill: parent
+                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                onClicked: root.dismissTop()
+                onWheel: function (e) { e.accepted = true }
+            }
                 // The card's own, and this is the one no compositor could ever
                 // draw: the thing it has to sit on is inside the same surface.
                 // Twenty lines of grown-shape-capture-blur stood here and are
@@ -4819,13 +4983,13 @@ Window {
                         // that is a shape rather than a list, and says so with
                         // `cols`.
                         columns: root.ctxCols
-                        // ...AND READS ACROSS when it does. A RowList is rofi's
-                        // listview, which fills a column top to bottom -- right for
-                        // a two-column menu of continuing rows, wrong for a 3x3 of
-                        // places, where "Top Left, Top, Top Right" has to be the
-                        // first row and not the first column.
-                        rowMajor: root.ctxCols > 1
-                        rowHeight: zenon.rowHeight
+                        rowHeight: root.ctxRowH
+                        // ...AND WHAT A ROW IS. Words for every card but one; see
+                        // root.ctxCells.
+                        cellKind: root.ctxCells
+                        // The value the setting is ON, as opposed to the row the
+                        // cursor is on. -1 for every card that is not a picker.
+                        activeIndex: root.ctxActive
                         copiedSrc: root.copiedSrc
                         flashSrc: root.ctxFlashSrc
                         flashSeq: root.ctxFlashSeq
@@ -5141,6 +5305,15 @@ Window {
         // towards the frame after -- the same smear the panel's own opacity
         // carries a note about.
         opacity: root.artShowFactor * root.showFactor
+        // See ctxLayer's catcher, and for the same reason: a picture drawn over
+        // the menu must not let a click reach the rows under it. Declared before
+        // the card so the card's own contents stay clickable above it.
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+            onClicked: root.dismissTop()
+            onWheel: function (e) { e.accepted = true }
+        }
 
         // The menu is still there, just behind. Dark enough that the picture
         // is what you are looking at, light enough that you can see you have

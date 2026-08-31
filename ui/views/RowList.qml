@@ -58,11 +58,19 @@ GridView {
     // that did are marked so the list can be scanned rather than re-read. See
     // Mark.js -- the tiles do the same with the same code.
     property string filter: ""
-    // ACROSS, THEN DOWN. Off by default and on for the one menu that is a SHAPE
-    // rather than a list: the window-position picker, whose nine cells are the
-    // nine places on the screen and have to read "Top Left, Top, Top Right" along
-    // the first row. See main.qml's ctxCols.
-    property bool rowMajor: false
+    // ROWS THAT ARE PICTURES. Empty for every list there is -- rows are words --
+    // and "anchor" for the window-position picker, whose nine cells are the nine
+    // places a window can sit on a screen. Nine place NAMES in a 3x3 is a
+    // crossword: you read "Bottom Left" and then work out where that is, when the
+    // grid in front of you is already the shape of the answer.
+    //
+    // WHERE each cell sits is derived from the cell's own place in the grid --
+    // index against `columns` -- rather than being sent. That is not a guess: the
+    // engine writes the nine values in reading order and asks for three columns
+    // precisely so the menu is a picture of the choice (see Util.UI_POSITIONS),
+    // and a cell's corner IS its position in that picture.
+    property string cellKind: ""
+    readonly property bool pictorial: list.cellKind === "anchor"
     // A ROW WAS PICKED WITH THE MOUSE. The list does not know what picking one
     // means -- that is main.qml's activate() -- and it must not, because the same
     // component is the body and the inside of a card and only the app knows which
@@ -83,6 +91,11 @@ GridView {
     // because closing whatever is in front is the app's business, not this
     // file's.
     property bool inert: false
+    // A PRESS LANDED, whatever it turns out to mean. Reported so the app can
+    // stop anything that MOVES this list while a click is being made: a
+    // double click is two presses, and a list that scrolls between them hands
+    // the second one to a different row. See main.qml's lastManualMove.
+    signal rowPressed()
     clip: true
     keyNavigationWraps: false
     // HOW FAR A SHOVE CARRIES, the same numbers the grid uses. Qt's defaults are
@@ -113,26 +126,27 @@ GridView {
         id: wheelAnim
         duration: 110; easing.type: Easing.OutCubic
     }
-    // Fills down, then across -- rofi's `listview` default. Left to right would
-    // read the rows in the wrong order entirely for a two-column MENU, where the
-    // second column continues the first.
-    // ...AND A SINGLE COLUMN IS A LIST, which flows the other way.
+    // ACROSS, THEN DOWN, ALWAYS.
     //
-    // FlowTopToBottom is what makes a two-column MENU read right: the second
-    // column continues the first, so the rows have to fill down before they fill
-    // across. With ONE column it means something else entirely -- the view fills
-    // the height, wraps into a second column off the right-hand edge, and scrolls
-    // SIDEWAYS. Measured: 700 rows at 26px in a 400px view came out 47 columns
-    // wide, contentWidth 47000 and contentHeight -1.
+    // This was FlowTopToBottom -- rofi's `listview` default, which fills a column
+    // before it starts the next -- with FlowLeftToRight as an exception for one
+    // column and for the window-position picker. Both halves of that were wrong.
     //
-    // Everything that reads a list's position was quietly wrong because of it.
-    // The wheel moved it a page sideways per notch, which is "scrolling does not
-    // work in lists"; followTo animates contentY, which had no travel in it; and
-    // the new position indicator described an axis nothing was moving on. One
-    // column, flowing left to right, is one item per row scrolling down -- the
-    // same rows in the same order, on the axis they look like they are on.
-    flow: (rowMajor || columns <= 1) ? GridView.FlowLeftToRight
-                                     : GridView.FlowTopToBottom
+    // With ONE column, filling down means the view fills the height, wraps into a
+    // second column off the right-hand edge, and scrolls SIDEWAYS. Measured: 700
+    // rows at 26px in a 400px view came out 47 columns wide, contentWidth 47000
+    // and contentHeight -1. Everything that reads a list's position was quietly
+    // wrong because of it -- the wheel moved a page sideways per notch, which is
+    // "scrolling does not work in lists".
+    //
+    // And with MORE than one, nothing here could reach it: every list theme
+    // declares one column (see Theme.viewGeom) and the only menu that asks for
+    // more is the position picker, which is a shape read across. So the
+    // column-major branch was unreachable -- and had it ever been reached,
+    // main.qml's move() would have walked the cursor across the grid on the Down
+    // key, because it steps by the column count. One flow, and the rows are in the
+    // order and on the axis they look like they are on.
+    flow: GridView.FlowLeftToRight
     cellWidth: Math.floor(width / Math.max(1, columns))
     cellHeight: rowHeight
     // THE HIGHLIGHT IS ITS OWN ITEM, so it can travel. Painted into each
@@ -180,6 +194,11 @@ GridView {
         width: list.cellWidth
         height: list.cellHeight
         readonly property bool active: index === list.activeIndex
+        // WHERE THIS CELL SITS IN THE PICTURE, 0..2 on each axis. See cellKind.
+        readonly property int cellCol: index % Math.max(1, list.columns)
+        readonly property int cellRow: Math.floor(index / Math.max(1, list.columns))
+        readonly property int cellRows:
+            Math.max(1, Math.ceil(list.count / Math.max(1, list.columns)))
         // On the delegate ROOT: read from a child it is a different, always-false
         // instance -- the same trap that hid grid selection.
         readonly property bool current: GridView.isCurrentItem
@@ -229,7 +248,7 @@ GridView {
             id: numText
             anchors { left: parent.left; leftMargin: list.theme.rowPadH
                       verticalCenter: parent.verticalCenter }
-            visible: cell.split
+            visible: cell.split && !list.pictorial
             text: cell.split ? model.label.substring(0, cell.numEnd) : ""
             color: list.theme.playing
             font.family: list.theme.fontFamily
@@ -244,7 +263,7 @@ GridView {
             anchors { left: cell.split ? numText.right : parent.left
                       leftMargin: cell.split ? 0 : list.theme.rowPadH
                       verticalCenter: parent.verticalCenter }
-            visible: cell.playing
+            visible: cell.playing && !list.pictorial
             text: list.paused ? list.theme.glyphPause : list.theme.glyphPlay
             color: list.theme.playing
             font.family: list.theme.fontFamily
@@ -279,6 +298,7 @@ GridView {
                   ? Mark.mark(raw, rich, list.filter, list.theme.notice)
                   : raw
             textFormat: (rich || list.filter.length) ? Text.StyledText : Text.PlainText
+            visible: !list.pictorial
             color: (active || cell.playing) ? list.theme.playing : list.theme.foreground
             Behavior on color { ColorAnimation { duration: 180 } }
             horizontalAlignment: list.centered ? Text.AlignHCenter : Text.AlignLeft
@@ -343,6 +363,49 @@ GridView {
                 }
             }
         }
+        // A SCREEN, WITH THE WINDOW ON IT. Drawn rather than written, and drawn to
+        // the proportions of a monitor so it reads as one at a glance: an outline
+        // for the display, a filled block in this cell's own corner for where spoot
+        // would open. Lit green where the setting is currently pointed, so the row
+        // that is live says so the way a checkmark used to.
+        Item {
+            anchors.fill: parent
+            anchors.margins: 4
+            visible: list.pictorial
+            Rectangle {
+                id: screen
+                // 16:10, capped by whichever of the two the cell runs out of first.
+                readonly property real ratio: 1.6
+                width: Math.min(parent.width, parent.height * ratio)
+                height: Math.round(width / ratio)
+                anchors.centerIn: parent
+                color: "transparent"
+                radius: 3
+                border.width: 1
+                border.color: cell.active ? list.theme.playing
+                                          : list.theme.fade(list.theme.foreground, 0.35)
+                Behavior on border.color { ColorAnimation { duration: 180 } }
+                // The window, at a third of the screen each way -- which is what
+                // makes the nine of them tile it, so the picker as a whole reads as
+                // one screen divided nine ways.
+                Rectangle {
+                    readonly property real third: 1 / 3
+                    width: Math.round(parent.width * third)
+                    height: Math.round(parent.height * third)
+                    // Inset by the border so a corner block sits inside the frame
+                    // rather than on top of it.
+                    x: Math.round((parent.width - width) * (cell.cellCol
+                        / Math.max(1, list.columns - 1)))
+                    y: Math.round((parent.height - height) * (cell.cellRow
+                        / Math.max(1, cell.cellRows - 1)))
+                    radius: 1
+                    color: cell.active ? list.theme.playing
+                                       : list.theme.fade(list.theme.foreground,
+                                                         cell.current ? 0.55 : 0.3)
+                    Behavior on color { ColorAnimation { duration: 180 } }
+                }
+            }
+        }
         MouseArea {
             anchors.fill: parent
             // The BACK button is deliberately NOT accepted: unhandled buttons
@@ -352,6 +415,7 @@ GridView {
             // ONE CLICK MOVES THE CURSOR, and that is all it has ever done: a
             // list you are typing to filter must not act on the row your pointer
             // happens to be resting over.
+            onPressed: list.rowPressed()
             onClicked: function (m) {
                 if (list.inert) { list.rowClicked(index); return }
                 list.currentIndex = index

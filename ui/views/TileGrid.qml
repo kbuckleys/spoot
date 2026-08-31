@@ -80,6 +80,11 @@ GridView {
     // because closing whatever is in front is the app's business, not this
     // file's.
     property bool inert: false
+    // A PRESS LANDED, whatever it turns out to mean. Reported so the app can
+    // stop anything that MOVES this list while a click is being made: a
+    // double click is two presses, and a list that scrolls between them hands
+    // the second one to a different row. See main.qml's lastManualMove.
+    signal rowPressed()
 
     // THE CORNER EVERY COVER TURNS, cut once. An Image has no radius and `clip`
     // is a bounding-box clip, so rounding one means masking it -- and a mask is a
@@ -348,6 +353,7 @@ GridView {
             // See RowList's delegate: same three gestures, same reasons, and the
             // BACK button left unaccepted so it reaches `outside`.
             acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+            onPressed: grid.rowPressed()
             onClicked: function (m) {
                 if (grid.inert) { grid.rowClicked(index); return }
                 grid.currentIndex = index

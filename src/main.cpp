@@ -19,6 +19,8 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QRegion>
+#include <QMutex>
+#include <QIcon>
 #include <QQmlContext>
 #include <QProcess>
 #include <QJsonDocument>
@@ -67,6 +69,14 @@
 #include <fcntl.h>
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
+
+// WHICH PLAYER SPOOT IS ABOUT. spoot drives one daemon and one only, and three
+// places in this file need to name it: the transport a toast's buttons press,
+// the hint that tells a notification daemon which player a toast is about, and
+// the resolver the engine's own MPRIS calls go through. Written once so they
+// cannot drift apart. Matched as a SUBSTRING of the bus name's suffix, the way
+// playerctl does -- librespot appends an instance number to it.
+static const QLatin1String kPlayer("spotifyd");
 
 // WHAT "THE PLAYER CHANGED" IS, on the bus, in one place. Two signals, because
 // one of them cannot report the other: PropertiesChanged tells you about a
@@ -159,6 +169,31 @@ private:
     bool m_armed = false;
     bool m_fired = false;
 };
+
+// WHICH TOASTS ARE OURS.
+//
+// `default` is the spec's key for "the body was clicked" and is spelled exactly
+// that -- no room for the `spoot:` prefix the transport keys carry -- so it
+// cannot be told from any other program's default action by its key. The id can:
+// Notify hands one back, and a press names it. Kept to the last few, because a
+// toast nobody has clicked by then is a toast nobody is going to.
+//
+// TWO THREADS. l_notify runs on a job's own thread (see JobRunner) and
+// ToastActions on the GUI thread's bus, so the set is guarded rather than shared
+// by luck.
+static QMutex g_toastLock;
+static QList<uint> g_toastIds;
+static void rememberToast(uint id) {
+    if (!id) return;
+    QMutexLocker lock(&g_toastLock);
+    g_toastIds.removeAll(id);
+    g_toastIds.append(id);
+    while (g_toastIds.size() > 8) g_toastIds.removeFirst();
+}
+static bool ourToast(uint id) {
+    QMutexLocker lock(&g_toastLock);
+    return g_toastIds.contains(id);
+}
 
 class Natives {
 public:
@@ -597,17 +632,41 @@ private:
         // that took the hint at its word would look for an icon called
         // "spoot:prev", find nothing, and draw three blank buttons. The labels
         // render everywhere.
-        QString desktopEntry = w->m_player;
-        if (desktopEntry.startsWith(QStringLiteral("org.mpris.MediaPlayer2.")))
-            desktopEntry = desktopEntry.mid(23);
-        hints.insert(QStringLiteral("desktop-entry"), desktopEntry);
+        // SPOOT'S OWN, and this used to be the PLAYER's: derived from m_player it
+        // stripped to "spotifyd", so every toast spoot raised advertised the
+        // daemon's identity -- and a daemon with no .desktop file has no icon for
+        // a notification server to find. spoot installs one now (see `setup`).
+        hints.insert(QStringLiteral("desktop-entry"), QStringLiteral("spoot"));
+        // ...AND WHICH PLAYER THIS IS ABOUT, which is not the same question.
+        //
+        // `desktop-entry` names the SENDER, and it used to be derived from
+        // m_player -- so every toast spoot raised advertised "spotifyd", the
+        // daemon it drives. Correcting that cost something nobody had noticed was
+        // riding on it: a notification daemon that offers transport controls finds
+        // the player by matching the toast's identity against the live MPRIS names,
+        // and with spoot's own identity on it there was nothing left to match.
+        // The buttons stopped appearing.
+        //
+        // Both facts, then, each in its own field: who sent it, and what it is
+        // about. A daemon that has never heard of this hint ignores it -- the spec
+        // says unknown hints are dropped -- so nothing else changes.
+        {
+            const QString player = w->mprisName(QByteArray(kPlayer.data(), kPlayer.size()));
+            if (!player.isEmpty())
+                hints.insert(QStringLiteral("x-mpris-player"),
+                             player.mid(sizeof("org.mpris.MediaPlayer2.") - 1));
+        }
         // The argument order is the spec's: app_name, replaces_id, app_icon,
         // summary, body, actions, hints, expire_timeout. -1 leaves the timeout to
         // the daemon, which is what notify-send does when not told otherwise.
         const QDBusMessage r = notifications.call(
             QStringLiteral("Notify"), QStringLiteral("spoot"), uint(0), icon,
             title, body, actions, hints, int(-1));
-        lua_pushboolean(L, r.type() != QDBusMessage::ErrorMessage);
+        const bool ok = r.type() != QDBusMessage::ErrorMessage;
+        // THE ID, WHICH USED TO BE THROWN AWAY. It is the only thing that can say
+        // a `default` press belongs to spoot -- see rememberToast.
+        if (ok && !r.arguments().isEmpty()) rememberToast(r.arguments().at(0).toUInt());
+        lua_pushboolean(L, ok);
         return 1;
     }
 
@@ -1320,8 +1379,19 @@ public:
             QStringLiteral("org.freedesktop.Notifications"),
             QStringLiteral("ActionInvoked"), this, SLOT(invoked(uint, QString)));
     }
+signals:
+    // The body of one of OUR toasts was clicked. Answered by main.qml with
+    // jumpToPlaying(), the same thing Alt+C does.
+    void openedFromToast();
+
 private slots:
-    void invoked(uint, const QString &key) {
+    void invoked(uint id, const QString &key) {
+        // THE BODY, not a button. Matched by id because the key cannot be
+        // namespaced -- see rememberToast.
+        if (key == QStringLiteral("default")) {
+            if (ourToast(id)) emit openedFromToast();
+            return;
+        }
         if (!key.startsWith(QStringLiteral("spoot:"))) return;
         const QString verb = key.mid(6);
         QString method;
@@ -1337,7 +1407,7 @@ private slots:
         if (!names.isValid()) return;
         for (const QString &n : names.value()) {
             if (!n.startsWith(QStringLiteral("org.mpris.MediaPlayer2."))) continue;
-            if (!n.mid(23).contains(QStringLiteral("spotifyd"))) continue;
+            if (!n.mid(23).contains(kPlayer)) continue;
             QDBusInterface(n, QStringLiteral("/org/mpris/MediaPlayer2"),
                            QStringLiteral("org.mpris.MediaPlayer2.Player"), b)
                 .asyncCall(method);
@@ -1772,6 +1842,12 @@ int main(int argc, char *argv[]) {
     // anchors south, and Wayland forbids a client positioning itself, so that
     // call is the only reason the 1:1 look is reachable at all.
     QGuiApplication app(argc, argv);
+    // SPOOT'S OWN FACE. Installed by `setup` into the hicolor theme, so this finds
+    // it by name rather than by path -- and the same name is what the toast's
+    // desktop-entry hint sends, so a notification server looking for spoot's icon
+    // and a task switcher looking for its window icon land on one file.
+    app.setDesktopFileName(QStringLiteral("spoot"));
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("spoot")));
     app.setApplicationName("spoot");
 
     // If one is already resident, hand it the request and leave. Done before the
@@ -1805,6 +1881,12 @@ int main(int argc, char *argv[]) {
     qml.rootContext()->setContextProperty("Shell", shell);
     // --listen opens straight on the Listen view, the way the rofi build's one
     // rofi-opening flag does today.
+    // WHAT THE DOCK SAW, on demand. It is built against wlr-layer-shell -- which
+    // every compositor spoot can run on implements -- but only Hyprland answers
+    // `cursorpos`, so everywhere else the hot spot rides on a probe surface being
+    // sized the way this machine sizes it. SPOOT_DOCK_DEBUG=1 makes it say so.
+    qml.rootContext()->setContextProperty("SPOOT_DOCK_DEBUG",
+        QString::fromUtf8(qgetenv("SPOOT_DOCK_DEBUG")));
     qml.rootContext()->setContextProperty("startView",
         app.arguments().contains("--listen") ? "listen" : "main");
     qml.load(QUrl::fromLocalFile(ui));
@@ -1898,7 +1980,13 @@ int main(int argc, char *argv[]) {
 
         // Listening from the moment the shell is up, so a toast raised by the
         // background notifier is pressable too.
-        new ToastActions(&app);
+        auto *toasts = new ToastActions(&app);
+        // CLICKING THE TOAST TAKES YOU TO THE TRACK. Revealed here and navigated
+        // by the QML, which already knows how: jumpToPlaying is what Alt+C runs.
+        QObject::connect(toasts, &ToastActions::openedFromToast, shell, [shell, win] {
+            shell->reveal();
+            QMetaObject::invokeMethod(win, "jumpToPlaying", Qt::QueuedConnection);
+        });
 
         shell->attach(win, screenUnderCursor);
         shell->reveal();

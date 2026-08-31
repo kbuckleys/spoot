@@ -1,7 +1,7 @@
 main                   layout=grid  rows=1-9   icons=some scope=main             ctx=no  crumb=1
 liked                  layout=list  rows=100+  icons=none scope=liked            ctx=no  crumb=2
 top-tracks             layout=list  rows=10-99 icons=none scope=top-tracks       ctx=no  crumb=2
-recently-played        layout=list  rows=100+  icons=none scope=recently-played  ctx=no  crumb=2
+recently-played        layout=list  rows=10-99 icons=none scope=recently-played  ctx=no  crumb=2
 saved-albums           layout=grid  rows=10-99 icons=some scope=saved-albums     ctx=no  crumb=2
 followed-artists       layout=grid  rows=10-99 icons=some scope=followed-artists ctx=no  crumb=2
 playlists              layout=grid  rows=1-9   icons=some scope=playlists        ctx=no  crumb=2
@@ -9,7 +9,7 @@ categories             layout=grid  rows=10-99 icons=some scope=categories      
 collections            layout=grid  rows=1-9   icons=some scope=spotify-picks    ctx=no  crumb=2
 new-releases           layout=grid  rows=10-99 icons=some scope=new-releases     ctx=no  crumb=2
 top-artists            layout=grid  rows=1-9   icons=some scope=top-artists      ctx=no  crumb=2
-discover-genre         layout=list  rows=100+  icons=none scope=discover-genre   ctx=no  crumb=2
+discover-genre         layout=grid  rows=100+  icons=some scope=discover-genre   ctx=no  crumb=2
 podcasts               layout=grid  rows=10-99 icons=some scope=podcasts         ctx=no  crumb=2
 library                layout=grid  rows=1-9   icons=some scope=library          ctx=no  crumb=2
 system                 layout=list  rows=10-99 icons=none scope=system           ctx=no  crumb=2
@@ -23,7 +23,7 @@ artist-albums          layout=grid  rows=10-99 icons=some scope=artist-albums   
 artist-actions         layout=list  rows=1-9   icons=none scope=followed-artists ctx=yes crumb=2
 library>liked          layout=list  rows=100+  icons=none scope=liked            ctx=no  crumb=3
 track-actions          layout=list  rows=10-99 icons=none scope=liked            ctx=yes crumb=2
-trail-jump             layout=list  rows=100+  icons=none scope=None             ctx=yes crumb=1
+trail-jump             layout=list  rows=10-99 icons=none scope=None             ctx=yes crumb=1
 ctx:track              layout=list  rows=10-99 icons=none scope=liked            ctx=yes crumb=2
 ctx:album              layout=list  rows=1-9   icons=none scope=saved-albums     ctx=yes crumb=2
 ctx:artist             layout=list  rows=1-9   icons=none scope=followed-artists ctx=yes crumb=2

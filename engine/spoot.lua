@@ -111,6 +111,15 @@ P.prefetch_pid  = P.run .. "/art-prefetch.pid"
 P.plindex_pid   = P.run .. "/plindex.pid"
 P.art_spool     = P.run .. "/art-spool"
 P.rate_cooldown = P.run .. "/rate-cooldown"
+-- WHEN WE LAST SAID SO, which is not the same clock as the gate above. A rolling
+-- limit outlives one cooldown: the window closes, the next request walks into the
+-- same limit and re-arms it, and a notice tied to the gate says the same sentence
+-- every half minute for as long as the limit lasts. See Util.rate_arm.
+P.rate_said     = P.run .. "/rate-said"
+-- How long the notice holds its tongue for. Long enough that a rolling limit is
+-- one interruption rather than twenty, short enough that a limit an hour later is
+-- news again.
+P.rate_say_every = 600
 P.last_notify   = P.run .. "/last-notify"
 P.oauth_code    = P.run .. "/oauth-code"
 P.oauth_pid     = P.run .. "/oauth.pid"
@@ -170,7 +179,6 @@ P.warm       = P.cache .. "/shelf_warm.json"
 -- from the caches themselves so confirming freshness never rewrites megabytes.
 P.lib_fp     = P.cache .. "/library_fp.json"
 P.session    = P.cache .. "/session.json"
-P.trails     = P.cache .. "/trails.json"
 -- WHERE THE UI IS, as a hop list (see Util.serve_nav). session.json records the
 -- engine's own stack; this records the trail you can still walk, which is a
 -- different thing and outlives a restart.
@@ -660,6 +668,46 @@ function Util.rate_cool()
     return left
 end
 
+-- SHUT THE GATE, AND SAY SO AT MOST NOW AND THEN.
+--
+-- The one writer of P.rate_cooldown. It existed in api_get's 429 branch alone,
+-- which left the batch path -- Util.paged_fetch's parallel page fetch, the only
+-- thing here that can earn fifty 429s in one second -- writing nothing at all: a
+-- burst got itself limited, said nothing, and every request behind it walked into
+-- the same closed window.
+--
+-- `secs` is what the server asked for where a header was seen, clamped at both
+-- ends: a floor so a header of "1" cannot become a busy loop, a ceiling so a
+-- pathological value cannot take the app off the network for an hour.
+--
+-- THE NOTICE IS THROTTLED SEPARATELY, and this is "i get the rate limit
+-- notification A LOT". Spotify's limits are rolling, so one limit is many
+-- cooldowns: the window closes, the next request re-arms it, and a notice that
+-- fired whenever the gate went from open to shut fired on every one of them. Its
+-- own clock, P.rate_say_every apart, so a limit that lasts ten minutes is one
+-- sentence rather than twenty.
+--
+-- SAYING IT IS THE CALLER'S, exactly as Util.net_note above says of itself and
+-- for the same reason: ui_say is a local declared several thousand lines below
+-- this, so a call from here is a global lookup and a nil call. What comes back is
+-- the sentence -- composed once, here, where the numbers are -- or nil when this
+-- arm is not worth interrupting anyone over.
+function Util.rate_arm(secs, headers)
+    secs = tonumber(secs)
+        or tonumber(string.match(headers or "", "[Rr]etry%-[Aa]fter:%s*(%d+)"))
+        or 30
+    secs = math.max(5, math.min(secs, 60))
+    Util.secure_write(P.rate_cooldown, os.time() + secs)
+    -- A background job arms the gate and never speaks: the gate is about the
+    -- ACCOUNT, the notice is about the person looking at the screen.
+    if Util.detached then return secs, nil end
+    local said = tonumber((read_file(P.rate_said) or ""):match("%d+"))
+    if said and os.time() - said < P.rate_say_every then return secs, nil end
+    Util.secure_write(P.rate_said, os.time())
+    return secs, "Spotify API rate limit reached (429)" .. SEP
+                 .. "using cache for " .. secs .. "s"
+end
+
 function Util.http(req)
     -- Nothing goes out while the gate is shut; see NET_DOWN_SECS. `bg` included:
     -- a fire-and-forget write is exactly the kind of thing there is no point
@@ -903,7 +951,16 @@ function Util.spawn_self(args, log, pidf)
                   or  {"nohup lua ", shell_quote(P.dir .. "/spoot.lua")}
     for _, a in ipairs(args) do c[#c+1] = " " .. shell_quote(a) end
     c[#c+1] = " > " .. shell_quote(log or "/dev/null") .. " 2>&1 &"
-    if pidf then c[#c+1] = " echo $! > " .. shell_quote(pidf) end
+    -- ONLY IF IT NAMES A FILE. The third argument identifies the job, and the two
+    -- transports spend that identity differently: hosted it is JobPool's in-flight
+    -- key and never touches the disk, so a caller that only wants the pool to
+    -- refuse a duplicate can name its job anything -- "notify:<track id>", say.
+    -- Out here the same string was written to as a path, which would have left a
+    -- file called `notify:...` in whatever directory spoot was started from. Every
+    -- caller that actually wants a pid file passes an absolute path out of P.
+    if pidf and pidf:sub(1, 1) == "/" then
+        c[#c+1] = " echo $! > " .. shell_quote(pidf)
+    end
     os.execute(table.concat(c))
 end
 
@@ -2082,26 +2139,21 @@ local VIEWS = {}
 
 local _session_stack = nil
 
-function Util.trail_load()
-    Util.trail_history = {}
-    local d = safe_decode(read_file(P.trails))
-    if d and type(d.trails) == "table" then
-        for _, t in ipairs(d.trails) do
-            if #Util.trail_history < 2 then
-                if type(t) == "table" and type(t.stack) == "table" then
-                    Util.trail_history[#Util.trail_history + 1] = t
-                elseif type(t) == "string" then
-                    Util.trail_history[#Util.trail_history + 1] = {label=t, stack={}}
-                end
-            end
-        end
-    end
-end
-
-function Util.trail_save()
-    write_file(P.trails, json.encode({trails=Util.trail_history}))
-end
-Util.trail_history = Util.trail_history or {}
+-- ARCHIVED TRAILS STOOD HERE -- Util.trail_history, Util.trail_load,
+-- Util.trail_save, Util.restore_trail and trails.json.
+--
+-- It was rofi's answer to having only one path: Alt+Space put the trail you were
+-- on into a list and started a fresh one, and Backspace off the root walked back
+-- into the last archived one. NOTHING HAS APPENDED TO THAT LIST SINCE THE PORT.
+-- trail_load read the file, capped at two, and every other site only ever
+-- REMOVED from what it read -- so the list could not grow, the file could only
+-- shrink, and five readers spread across the trail menu, the message bar and the
+-- main loop were all reading an empty table forever.
+--
+-- What replaced it is the trail's own ROOTS. A hop list spans them (see
+-- Util.serve_nav's chain and `roots`), the crumb draws the seam between one and
+-- the next, and Alt+left walks back across it -- which is the whole of what
+-- archiving was for, without a second store to keep in step with the first.
 
 -- ── Closed-menu history ───────────────────────────────────────────────
 -- The trail says where you still are; this says where you have BEEN and left.
@@ -2314,8 +2366,12 @@ end
 
 function Util.clear_trail()
     Util.session_set({})
-    Util.trail_history = {}
-    os.remove(P.trails)
+    -- AND THE TRAIL THE UI CAN WALK. session.json is the engine's own stack;
+    -- nav.json is the hop list a front end replays, and it is the one a warm
+    -- start actually reopens. Left behind, "Clear Session" emptied a stack
+    -- nobody reads on the way in and the next launch came straight back to where
+    -- it was. See Util.serve_nav.
+    os.remove(P.nav)
 end
 
 -- BREADCRUMB
@@ -2432,39 +2488,19 @@ function Util.crumb_arrow(s)
 end
 
 local function breadcrumb()
-    local parts = {}
-    -- Archived trails are rebuilt from their saved STACK, not from any saved
-    -- label string. Trails written by older versions carry one, joined with a
-    -- plain " > ", and rendering that verbatim left every previous trail with
-    -- unstyled arrows while the live crumb beside it had styled ones.
-    --
-    -- Rebuilding rather than writing markup into trails.json keeps presentation
-    -- out of persisted data: the arrow colour is applied at draw time, so a later
-    -- change reaches old trails too, and trails saved before this get styled
-    -- immediately instead of only new ones. It also picks up the label_only
-    -- naming fix for free -- an old label may still read "Snail of Gold > Track".
-    --
-    -- Falls back to the stored label for entries with no usable stack: trail_load
-    -- turns a legacy bare string into {label=t, stack={}}.
-    for _, t in ipairs(Util.trail_history) do
-        if type(t) == "table" and type(t.stack) == "table" and #t.stack > 0 then
-            parts[#parts+1] = table.concat(Util.parts_from_stack(t.stack), Util.crumb_arrow(" > "))
-        else
-            parts[#parts+1] = type(t) == "table" and t.label or t
-        end
-    end
+    -- ONE SEGMENT. A list of archived trails was joined onto this with the trail
+    -- glyph between them; nothing has archived one since the port (see the note
+    -- where Util.trail_history stood), and roots are the UI's to join now --
+    -- Util.serve_nav hands it the whole chain and where each root begins.
     local live = Util.breadcrumb_parts()
     -- Util.parts_from_stack always seeds "Main", so #live == 1 IS the empty
-    -- stack: you are at the root with nothing pushed. With nothing archived
-    -- beside it the whole line would be that one word, naming the menu already
-    -- filling the screen -- the app's own name says more. One live step or one
-    -- archived trail and "Main" is the head of a path again, which is why this
-    -- lives here and not in parts_from_stack: the Trail Steps rows, the
-    -- closed-menus list and an archived trail's own head all still want the root
-    -- called Main.
-    if #parts == 0 and #live == 1 then return "spoot" end
-    parts[#parts+1] = table.concat(live, Util.crumb_arrow(" > "))
-    return table.concat(parts, "  " .. Util.markup('<span foreground="#a3a9bd">\u{F17B7}</span>') .. "  ")
+    -- stack: you are at the root with nothing pushed. The whole line would be
+    -- that one word, naming the menu already filling the screen -- the app's own
+    -- name says more. One live step and "Main" is the head of a path again, which
+    -- is why this lives here and not in parts_from_stack: the Trail Steps rows
+    -- and the closed-menus list both still want the root called Main.
+    if #live == 1 then return "spoot" end
+    return table.concat(live, Util.crumb_arrow(" > "))
 end
 
 -- ROFI
@@ -3584,7 +3620,15 @@ local function thumb_resolve(it, kind)
     -- No usable art URL. Deliberately returns no url, so the caller does not mark
     -- it missing: there is nothing to fetch, and the placeholder ships with the
     -- themes so it is always present and costs no network.
-    return Util.ART_NONE
+    --
+    -- ...AND A ROW MAY STILL NAME ITS OWN STAND-IN, exactly as one filed under a
+    -- kind may -- see the `fb` above, whose comment describes this case and only
+    -- reached half of it. A row with no Spotify object behind it wears
+    -- Util.ART_NONE otherwise, which is the "no cover" mark: it says the thing
+    -- has no artwork, when the truth is that it is not the kind of thing that
+    -- has any. The genre grid is the case that found it -- 126 rows that are
+    -- words, not objects.
+    return it.art_fallback or Util.ART_NONE
 end
 
 -- `focus` is the row the menu is about to open on (0-based, same convention as
@@ -3865,33 +3909,15 @@ local function api_get(path, params, _retry)
                         headers = {"Authorization: Bearer " .. token}}
     local status, body = r.code, r.body
     if status == 429 then
-        -- WHAT SPOTIFY ACTUALLY ASKED FOR. This used to be
-        -- `math.min(tonumber(secs), 5) + 5` -- a ten-second ceiling on a window
-        -- the server might have said was five minutes long -- so spoot went back
-        -- early, every time, and Spotify's limits are ROLLING: asking again inside
-        -- the window is what extends it. The cap made the outage longer than
-        -- obeying the header would have.
-        --
-        -- Clamped at both ends and not capped at one: a floor so a header of "1"
-        -- cannot turn into a busy loop, a ceiling so a pathological value cannot
-        -- take the app off the network for an hour. Between them, the number the
-        -- server sent.
-        local secs = tonumber(string.match(r.headers or "", "[Rr]etry%-[Aa]fter:%s*(%d+)")) or 30
-        secs = math.max(5, math.min(secs, 60))
-        -- Read BEFORE the write below, so this asks whether a window was already
-        -- open -- which is the difference between the first 429 of an outage and
-        -- the twentieth. The gate above means there should not BE a twentieth any
-        -- more; this stays because a burst already in flight can still produce one.
-        local was = Util.rate_cool()
-        -- ...and a background job arms the gate too. It used to write nothing at
-        -- all (`if not Util.detached`), so a prefetch that got itself rate limited
-        -- left no record of it and every foreground request walked straight into
-        -- the same window. The gate is about the ACCOUNT, not about who noticed.
-        Util.secure_write(P.rate_cooldown, os.time() + secs)
-        if was == 0 and not Util.detached then
-            ui_say("Spotify API rate limit reached (429)" .. SEP
-                   .. "using cache for " .. secs .. "s")
-        end
+        -- WHAT SPOTIFY ACTUALLY ASKED FOR, obeyed and announced in one place --
+        -- see Util.rate_arm, which the batch path uses too. This branch used to
+        -- hold all of it: the clamp, the write, and a `was == 0` test meant to
+        -- tell the first 429 of an outage from the twentieth. The test could not
+        -- work here, because the gate at the top of this function means the only
+        -- way to REACH this line is with the window already open -- so `was` was
+        -- 0 every time and the notice fired on every re-arm.
+        local _, note = Util.rate_arm(nil, r.headers)
+        if note then ui_say(note) end
         return nil
     end
     if status == 401 then
@@ -3985,30 +4011,42 @@ Util.paged_fetch = function(path, mk_params, done, each, opts)
         -- every other request in the file puts it: the config is written 0700
         -- and deleted immediately, so this is the one fetch whose credentials
         -- never appear in the process list.
+        -- THE GATE, ONCE MORE, IMMEDIATELY BEFORE THE BURST. api_get above opened
+        -- this fetch and may have taken hundreds of milliseconds doing it; a
+        -- window that shut in that time must not then be answered with fifty
+        -- parallel requests. Cheap -- one small read -- against the one call in
+        -- the file that can earn a limit all by itself.
+        if Util.rate_cool() > 0 then return nil end
         local got = Util.curl_batch(jobs, {compressed = true, parallel = 6, timeout = 15,
                                            header = "Authorization: Bearer " .. token})
         -- 429 IS REACHABLE HERE in a way it was not when pages went one at a
         -- time, and it arrives for the whole burst at once: measured against a
         -- 54-page podcast, an over-eager batch came back 54/54 rate limited in
-        -- 0.66s. Back off once and re-ask for just the pages that missed, at a
-        -- crawl -- without this the retry below hands each of them to api_get,
-        -- which answers nil on a 429, and one burst would fail the whole fetch
-        -- and cache nothing.
+        -- 0.66s.
+        --
+        -- IT USED TO SLEEP TWO SECONDS AND ASK AGAIN, which is the one thing a
+        -- rolling limit must not be answered with: asking inside the window is
+        -- what extends it, so a library sweep spent its way from one 429 into a
+        -- long one and every foreground read behind it fell to cache. Worse, the
+        -- burst wrote no cooldown of its own -- Util.curl_batch has no notion of
+        -- one -- so nothing else in the process knew to stand down either, and
+        -- the first api_get to notice was the one that raised the notice. That is
+        -- the report: not one limit told twenty times, but twenty limits.
+        --
+        -- So a limited batch arms the gate and gives up on this fetch. Every
+        -- caller here treats nil as "keep what you have", which is a list that is
+        -- one revalidation stale rather than an outage that pays for itself.
         if got then
-            local again, limited = {}, false
+            local limited = false
             for i = 1, pages - 1 do
                 local r = got[jobs[i].out]
-                if not (r and Util.is2xx(r.code)) then
-                    again[#again+1] = jobs[i]
-                    if r and r.code == "429" then limited = true end
-                end
+                if r and r.code == "429" then limited = true; break end
             end
-            if limited and #again > 0 then
-                os.execute("sleep 2")
-                for out, r in pairs(Util.curl_batch(again, {compressed = true, parallel = 2,
-                        timeout = 15, header = "Authorization: Bearer " .. token}) or {}) do
-                    got[out] = r
-                end
+            if limited then
+                for i = 1, pages - 1 do os.remove(jobs[i].out) end
+                local _, note = Util.rate_arm()
+                if note then ui_say(note) end
+                return nil
             end
         end
         for i = 1, pages - 1 do
@@ -5434,6 +5472,9 @@ function Util.play_or_toggle(item, ctx_type, ctx_id, all_items, idx)
         current_track = item
         current_id = item.id
         is_playing = true
+        -- THIS REQUEST STARTED THIS TRACK, which is the one moment the backdrop
+        -- is allowed to cost a download. See Util.serve_draw_cover.
+        Util.serve_played = item.id
         return true
     end
     return false
@@ -7233,6 +7274,11 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
                   or ctx == "liked-by-artist" or ctx == "top-by-artist"
                   or ctx == "recommendations"
                   or ctx == "recently-played" or ctx == "genre"
+                  -- WHAT THE LISTENER HAS FOUND. Tracks, drawn by display_track
+                  -- like every other list here -- and left off this test, so
+                  -- Return on one fell through every branch below and did
+                  -- nothing at all. See Util.view_listen_history.
+                  or ctx == "listen-history"
                   -- A show's EPISODE list. It carries no ctx_type/ctx_id pair
                   -- because there is no context_uri to build from them: Spotify
                   -- documents context_uri for albums, artists and playlists
@@ -8375,8 +8421,13 @@ function Util.search_page_pick(results, page)
     -- A CARD, not a menu you go to. Picking a type does not take you anywhere --
     -- it changes which slice of the results you were already looking at is shown
     -- -- so the results stay on screen behind it and the picker floats over them.
+    -- `hide_art` and `no_cover` are what `art=false` alone could not carry: the
+    -- first takes the results' own backdrop down while this is up, the second
+    -- keeps the card from resolving a picture of its own from whatever row the
+    -- step in picked. See Util.serve_draw's hideArt.
     local idx = ui_menu(rows, {prompt="Type", mesg="Filter results by type", by_index=true,
-                                  theme=THEME_SUB, art=false, context=true})
+                                  theme=THEME_SUB, art=false, context=true,
+                                  hide_art=true, no_cover=true})
     if not idx or idx < 1 or idx > #Util.SEARCH_PAGES then return nil end
     if Util.search_page_count(results, idx) == 0 then
         ui_say("No " .. Util.SEARCH_PAGES[idx].label:lower() .. " results")
@@ -8534,11 +8585,37 @@ function Util.view_discover_genre()
     if not genres or #genres == 0 then ui_say("No genres available"); return end
     Util.scope({view="discover-genre"}, function()
         local gk = "discover-genre||"
+        -- A COPY, and this is not tidiness. Util.album_thumbs appends its
+        -- "\0icon" decoration to the entry strings IN PLACE, and `genres` is the
+        -- table cached_fetch handed back -- the one memoised behind
+        -- Util.api_get_genre_seeds. Drawing straight from it would leave every
+        -- genre name carrying a file path for the life of the process, and the
+        -- next reader of the seed list would be matching against it.
+        --
+        -- The items beside it exist only to carry the stand-in: a genre is a
+        -- word, not a Spotify object, so there is no artwork to look up and
+        -- thumb_resolve answers with art_fallback and no url -- no hash, no
+        -- stat, no fetch, no queue. `id` is the seed itself, which is what makes
+        -- the row identifiable to anything downstream that pairs items to rows.
+        local ge, items = {}, {}
+        for i, g in ipairs(genres) do
+            ge[i] = g
+            items[i] = {id = g, art_fallback = Util.ART_GENRE}
+        end
+        local function paint() Util.album_thumbs(ge, items, nil, Util.pos_get(gk), gk); return ge end
         while true do
-            -- NO BACKDROP. A list of genre NAMES is not about a track, and the
-            -- cover of whatever happens to be playing beside it is decoration --
-            -- the same case the search results' type filter makes about itself.
-            local idx = ui_menu(genres, {prompt="Genre", mesg="Discover by Genre" .. SEP .. #genres .. " genres", by_index=true, art=false})
+            paint()
+            -- A GRID, because 126 names in a column is a scroll and five across
+            -- is a page. `thumbs` is the whole switch -- Util.serve_draw reads it
+            -- as the layout and the UI picks its delegate off that.
+            --
+            -- NO BACKDROP STILL. A list of genre NAMES is not about a track, and
+            -- the cover of whatever happens to be playing beside it is
+            -- decoration -- the same case the search results' type filter makes
+            -- about itself. The tiles are the view's own pictures; the backdrop
+            -- would be somebody else's.
+            local idx = ui_menu(ge, {prompt="Genre", mesg="Discover by Genre" .. SEP .. #genres .. " genres",
+                                     by_index=true, art=false, thumbs=true, refresh=paint})
             if not idx then return end
             if idx >= 1 and idx <= #genres then Util.open_genre_tracks(genres[idx]) end
             if jump_to_track_pending then return end
@@ -9466,18 +9543,6 @@ end
 -- made every display name load-bearing -- rename a row and its action silently
 -- stopped firing. Same reason the cursor is remembered by `key`.
 Util.COLLECTION_TILES = {
-    -- Its own tile grid, opened from this one. First because it is the only row
-    -- here backed by your library rather than by Spotify's editorial shelves,
-    -- and the art follows suit: the podcasts you follow, or the placeholder
-    -- until you follow one.
-    {key = "podcasts",       label = "Podcasts",
-     open = function() Util.view_podcasts() end,
-     -- Cover only. This opens Util.PODCAST_TILES -- four library rows plus the
-     -- 21 topics -- which is 25 rows whether or not a single show is followed,
-     -- so it falls back to podcasts.png with nothing followed but is never
-     -- dimmed. The rows INSIDE it dim for themselves.
-     art_only = true,
-     art = function() return Util.shelf_head(Util.load_saved_shows) end},
     {key = "madeforyou",     label = "Made For You",
      open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.made_for_you, "Made For You") end,
      art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.made_for_you) end},
@@ -9496,6 +9561,19 @@ Util.COLLECTION_TILES = {
     {key = "charts",         label = "Charts",
      open = function() Util.open_category_playlists(Util.PICK_CATEGORIES.charts, "Charts") end,
      art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.charts) end},
+    -- Its own tile grid, opened from this one, and the only row here backed by
+    -- your library rather than by Spotify's editorial shelves -- so the art
+    -- follows suit: the podcasts you follow, or the placeholder until you follow
+    -- one. It led this list until it was moved down here behind the shelves,
+    -- which is why the cursor is remembered by `key`: nobody's position moved.
+    {key = "podcasts",       label = "Podcasts",
+     open = function() Util.view_podcasts() end,
+     -- Cover only. This opens Util.PODCAST_TILES -- four library rows plus the
+     -- 21 topics -- which is 25 rows whether or not a single show is followed,
+     -- so it falls back to podcasts.png with nothing followed but is never
+     -- dimmed. The rows INSIDE it dim for themselves.
+     art_only = true,
+     art = function() return Util.shelf_head(Util.load_saved_shows) end},
     -- The two picker rows. Discover by Genre is a picker over 126 genre names
     -- and Categories one over Spotify's browse categories, not shelves of
     -- objects, so there is nothing whose cover could stand for either -- the
@@ -9867,25 +9945,17 @@ end
 -- VIEW: PLAYBACK CONTROLS
 
 view_seek = function(item)
-    -- THE TRACK IT IS SEEKING IN, named for the card's own backdrop -- the same
-    -- line view_actions carries, for the same reason.
+    -- NO PICTURE AT ALL, and no cover recorded for one.
     --
-    -- It named nothing before, which was harmless while a tail segment started
-    -- with no subject at all: the card simply had no picture. Tails inherit what
-    -- the trail was standing on now (see Util.serve_run's keepCtx, which is what
-    -- lets a double-clicked backdrop know it is in an album) -- so a Seek card
-    -- opened by keybind inside an album would have inherited the ALBUM and shown
-    -- its sleeve, which is a picture of the wrong thing: seeking is about the
-    -- track that is playing, and that track need not be from this album at all.
+    -- This used to name the playing track's sleeve so the card would wear it,
+    -- because a tail segment inherits whatever the trail was standing on (see
+    -- Util.serve_run's keepCtx) and a Seek opened by keybind inside an album
+    -- would otherwise have come up wearing the ALBUM -- a picture of the wrong
+    -- thing, since the track being seeked in need not be from it.
     --
-    -- Cache-only. This is a card about what is already playing, so its cover has
-    -- been on disk since the row that started it was drawn; a miss just means no
-    -- picture, which is what the card had before.
-    do
-        local u = item and item.album and item.album.images
-                  and item.album.images[1] and item.album.images[1].url or nil
-        if u then Util.serve_cover(Util.ensure_art_med(u, true), u) end
-    end
+    -- Seek is a ruler, not a portrait. It says `no_cover` below, so
+    -- Util.serve_card_art is never asked and the recording had nobody left to
+    -- read it -- and `hide_art` beside it takes the list's backdrop down too.
     Util.scope({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0}, function()
     local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "+1:00", "-1:00", "0:00"}
     while true do
@@ -9910,7 +9980,8 @@ view_seek = function(item)
         -- card is a live list now and keeps its own cursor, so the memory was
         -- writing a file to feed a variable nobody read.
         local si = ui_menu(seeks, {prompt="Seek", theme=THEME_SUB,
-                                      context=true, art=false, sticky=true})
+                                      context=true, art=false, sticky=true,
+                                      hide_art=true, no_cover=true})
         if not si then
             if jump_to_track_pending then return end
             break
@@ -10386,8 +10457,8 @@ function Util.restart_daemons()
     Util.bust_device()
     -- Search results are cached until the daemons go, so this is where they go.
     Util.drop_search_cache()
-    -- Deliberately keeps P.trails: restarting audio plumbing has
-    -- nothing to do with navigation history.
+    -- Deliberately keeps the session and the trail: restarting audio plumbing
+    -- has nothing to do with navigation history.
     os.execute("sleep 1")
     -- Not inv_playback(): that clears current_track but LEAVES the saved
     -- queue, and get_playback reads "me/player empty" + "we still hold a
@@ -10459,10 +10530,17 @@ function Util.ui_pick(spec)
             for v = spec.min, spec.max, spec.step do values[#values + 1] = v end
         end
         local rows = {}
+        -- WHICH VALUE IS THE LIVE ONE, as a number rather than as a checkmark
+        -- buried in markup. The anchor picker draws its rows as pictures of the
+        -- screen (see `cells` below) and a picture has no room for a tick, so the
+        -- fact has to arrive as a fact. Every picker sends it; only that one reads
+        -- it, and it costs one integer.
+        local at = nil
         for i, v in ipairs(values) do
             local label = Util.ui_show(spec, v)
             if v == spec.default then label = label .. " (default)" end
             if v == cur then
+                at = i
                 label = Util.markup('<span foreground="#b6e0a4">') .. "\u{f00c} "
                         .. label .. Util.markup("</span>")
             end
@@ -10487,7 +10565,15 @@ function Util.ui_pick(spec)
                                  .. Util.ui_show(spec, cur)) or nil,
             theme = THEME_SUB, by_index = true, art = false,
             context = true, sticky = true,
-            cols = (spec.kind == "anchor") and 3 or nil})
+            cols = (spec.kind == "anchor") and 3 or nil,
+            -- ...AND THEY ARE DRAWN AS SCREENS, not as words. Nine place NAMES in
+            -- a 3x3 is a crossword: you read "Bottom Left" and then work out
+            -- where that is, when the grid in front of you is already the shape
+            -- of the answer. `cells` says the rows of this menu are pictures and
+            -- what of; the UI derives each cell's corner from its own position in
+            -- the grid, which is the same reading order this list is written in.
+            cells = (spec.kind == "anchor") and "anchor" or nil,
+            active = at})
         if not sel then return end
         local chosen = values[sel]
         if chosen ~= nil and chosen ~= cur then Util.ui_set(spec.key, chosen) end
@@ -10794,6 +10880,18 @@ local function view_system()
             break
         elseif clean == "Clear Session" then
             Util.clear_trail()
+            -- ...AND THE FRONT END LETS GO OF ITS OWN COPY.
+            --
+            -- The trail lives in the UI while spoot is open: it holds the hops and
+            -- replays them, and the engine is handed them on every draw. So
+            -- clearing three files here cleared nothing anyone could see -- the
+            -- very next draw arrived carrying the same trail, System included, and
+            -- the row read as doing nothing at all.
+            --
+            -- `home` is that trail being dropped, which the UI already knows how
+            -- to do: it is Alt+Delete (see main.qml's goHome), and its own nav
+            -- with no hops is what leaves nav.json empty rather than rewritten.
+            Util.serve_write({ev = "home"})
             main_pending = true
             break
         elseif clean == "Quit" then
@@ -11012,20 +11110,6 @@ local function replay_session(prefer_current)
     end
 end
 
-function Util.restore_trail()
-    for i = #Util.trail_history, 1, -1 do
-        local t = Util.trail_history[i]
-        if type(t) == "table" and type(t.stack) == "table" and #t.stack > 0 then
-            table.remove(Util.trail_history, i)
-            Util.session_set(t.stack)
-            Util.trail_save()
-            replay_session()
-            return true
-        end
-    end
-    return false
-end
-
 -- Mode 2, Trail History: menus you closed that the trail no longer offers.
 --
 -- Rows are rendered from Util.parts_from_stack, the same function the breadcrumb
@@ -11034,14 +11118,7 @@ end
 -- the whole line, so typing either one finds the row.
 function Util.menu_hist_rows(live)
     local rows, entries = {}, {}
-    local function reachable(path)
-        if Util.stack_prefix(path, live) then return true end
-        for _, t in ipairs(Util.trail_history) do
-            if type(t) == "table" and type(t.stack) == "table"
-               and Util.stack_prefix(path, t.stack) then return true end
-        end
-        return false
-    end
+    local function reachable(path) return Util.stack_prefix(path, live) end
     for _, e in ipairs(Util.menu_hist_all()) do
         if type(e) == "table" and type(e.stack) == "table" and #e.stack > 0
            and not reachable(e.stack) then
@@ -11118,9 +11195,6 @@ function Util.view_trail_jump(stack, tip, tip_roots, mode_arg)
                  step_label(stk[i]), stk, i)
         end
         first = false
-    end
-    for _, t in ipairs(Util.trail_history) do
-        if type(t) == "table" and type(t.stack) == "table" then add_trail(t.stack) end
     end
     -- THE WHOLE PATH when the UI has told us what it is, and the single segment
     -- the engine can see when it has not (an older UI, or a call from somewhere
@@ -11283,15 +11357,6 @@ function Util.view_trail_jump(stack, tip, tip_roots, mode_arg)
                 local o = opts[idx]
                 local target = {}
                 for i = 1, o.depth do target[i] = o.stack[i] end
-                if o.stack ~= stack then
-                    for i = #Util.trail_history, 1, -1 do
-                        if Util.trail_history[i] and Util.trail_history[i].stack == o.stack then
-                            table.remove(Util.trail_history, i)
-                            break
-                        end
-                    end
-                    Util.trail_save()
-                end
                 Util.session_set(target)
             end
             break
@@ -11686,7 +11751,6 @@ local function init_library(cold_start)
     -- main menu to Collections, which is usually all it needs. Both are
     -- rate-limited and no-ops once warm, so a normal launch spawns nothing.
     for kind in pairs(Util.SHELF_KINDS) do Util.spawn_shelf_warm(kind) end
-    Util.trail_load()
     session_load()
     replay_session(true)
     last_playback = os.time()
@@ -11713,6 +11777,13 @@ Util.MAIN_TILES = {
      -- same glyph and green a track row gets in every other list.
      name = function()
         if not current_track then return nil end
+        -- ...AND NOT LAST NIGHT'S, WITH REPLAY OFF. Same rule and same test as
+        -- Util.serve_playback: the poll always names a track, and captioning this
+        -- tile with one nothing is playing is the session leaking through a
+        -- setting that was told to forget it. Falls back to "Playback".
+        if not (is_playing or Util.played_here) and not Util.ui_get().replay then
+            return nil
+        end
         return current_track.name, true
      end,
      -- States its case rather than returning a bare nil: nothing playing is an
@@ -11880,8 +11951,6 @@ local function main()
                 session_pop()
                 replay_session()
                 goto m1
-            elseif Util.restore_trail() then
-                goto m1
             end
         end
         if not sel then goto m1 end
@@ -11916,7 +11985,23 @@ end
 -- track starts exactly one notify helper.
 -- On Util, not a file local: this chunk is at Lua's 200-local ceiling.
 function Util.notify_seen(track_id)
-    if not (track_id and #track_id > 0) then return false end
+    -- NOTHING TO KEY ON IS NOT PERMISSION.
+    --
+    -- This answered false -- "not notified yet, go ahead" -- for a missing id,
+    -- and recorded nothing, so the one snap that could not be deduplicated was
+    -- the one snap allowed through unconditionally. The guard inverted on exactly
+    -- the input it existed for. spotifyd emits a track's metadata as several
+    -- PropertiesChanged bursts and the host posts a snap for every one of them,
+    -- so a burst carrying a title before the trackid has landed took this branch
+    -- and raised a toast of its own, on top of the one the identified burst
+    -- raised a moment later.
+    --
+    -- Suppressing rather than passing is also the consistent rule: daemon_snap
+    -- already refuses to write now.json for a snap with no id, and
+    -- Util.run_notify needs one to fetch the track at all -- an idless toast is
+    -- missing its explicit and lyrics glyphs and leaves now_track.json stale. The
+    -- identified burst is a moment behind and carries all of it.
+    if not (track_id and #track_id > 0) then return true end
     local prev_id = read_file(P.last_notify)
     if prev_id and trim(prev_id) == track_id then return true end
     Util.secure_write(P.last_notify, track_id)
@@ -11962,9 +12047,18 @@ function Util.daemon_snap(snap)
         -- TRACK, and Util.fast_now_track then answered false on every menu
         -- entry for as long as the podcast played -- a me/player round trip
         -- per menu, which is the exact cost carrying the kind removes.
+        -- KEYED, so the pool can refuse a second one while the first is still
+        -- running. Util.spawn_self passes this straight to JobPool::submit as the
+        -- in-flight key, and submit skips its dedupe entirely for an empty one --
+        -- which is what every --notify job had. That is invisible while the caches
+        -- are warm, because each job finishes in milliseconds and there is never
+        -- a second one in flight to collide with. On a COLD cache each blocks on a
+        -- live CDN fetch plus a track lookup plus lyrics, three run at once, and
+        -- they queue behind the prefetch and revalidation jobs and land together.
+        -- Exactly the "fired three times per track for a while, then stopped".
         Util.spawn_self({"--notify", track_id or "", title, artist or "", album or "",
             duration and tostring(math.floor(duration)) or "", art_url or "",
-            track_kind or ""})
+            track_kind or ""}, nil, "notify:" .. (track_id or ""))
     end
 end
 
@@ -12204,11 +12298,35 @@ function Util.run_notify()
     -- ONLY WHERE THEY CAN BE DRAWN. Attached to a daemon that does not advertise
     -- `actions` they are three keys nobody will ever see or press, and some
     -- daemons log a complaint about each one.
+    -- `default` IS THE BODY OF THE TOAST. The spec spells it exactly that, with no
+    -- room for the `spoot:` prefix the other three carry -- so it cannot be told
+    -- from any other program's default action by its key. The host matches it by
+    -- NOTIFICATION ID instead: l_notify records the id this call returns and
+    -- ToastActions only answers a `default` it recognises. Empty label, because a
+    -- daemon must not draw a button for "you clicked the notification".
     Util.notify{title = title, body = body, icon = art_path,
                 actions = caps.has.actions
-                          and {"spoot:prev", "Previous",
+                          and {"default", "",
+                               "spoot:prev", "Previous",
                                "spoot:playpause", "Play/Pause",
                                "spoot:next", "Next"} or nil}
+    -- AFTER THE TOAST, NEVER BEFORE IT: THE BACKDROP'S RENDITION.
+    --
+    -- The 300px fetch at the top of this function is the toast's own icon and
+    -- every grid tile. The BACKDROP is drawn at the full height of the body and
+    -- reads the 640px pool instead, and nothing warmed that for a track played
+    -- out of a plain list -- a playlist, Liked, a search result all draw their
+    -- rows with no per-row thumbs, so no cover of theirs was ever fetched at any
+    -- size. That is why Util.serve_draw_cover's cache-only lookup missed on
+    -- exactly the lists people play from: the draw could not ship a cover, so the
+    -- backdrop had to wait for the late context-art event to arrive.
+    --
+    -- Here because this is already a background job that runs once per track
+    -- change and already holds the url -- but BELOW the notify, because the toast
+    -- does not read this file and must not be made to wait a CDN round trip for
+    -- it. Nothing waits on it at all: not the notification, and not the draw that
+    -- prompted it. The NEXT draw is what finds it warm.
+    if art_url then Util.ensure_art_med(art_url) end
     os.exit(0)
 end
 
@@ -12825,15 +12943,25 @@ Util.SERVE_VIEWS = {
     -- WHAT THE BACKDROP IS A PICTURE OF, full size. Double clicking the cover
     -- beside a list means "show me this properly", and what "this" is depends on
     -- where you are: inside an album or on an artist's page the backdrop is that
-    -- container's own picture, and everywhere else it is whatever is playing.
+    -- container's own picture, and on a shelf it is whatever is playing.
     --
-    -- Util.serve_ctx_item is exactly that distinction already -- the row the step
-    -- into this place picked, which is the album, the playlist or the artist, and
-    -- nil when you simply opened a shelf. view_art sorts the three kinds out for
-    -- itself, which is why an artist gets an impression and an album a sleeve
-    -- without this having to know the difference.
+    -- Util.serve_ctx_item was read here as though it were that distinction -- the
+    -- row the step into this place picked, so the album, the playlist or the
+    -- artist. It is only ever the container, and the distinction belongs to
+    -- Util.serve_ctx_art, which was already making it a different way: inside a
+    -- playlist the backdrop is the playing track and this answered with the
+    -- playlist's tile. So the backdrop's own resolver records what it settled on
+    -- and this reads that. view_art still sorts the kinds out for itself, which is
+    -- why an artist gets an impression and an album a sleeve without this having
+    -- to know the difference.
     ["art-here"] = function()
-        local it = Util.serve_ctx_item
+        -- WHAT THE BACKDROP IS OF, not what contains it. Util.serve_ctx_art
+        -- records a CONTAINER when the backdrop is a picture of this place, and
+        -- nil when it is a picture of the music -- see the note there. nil is the
+        -- common case and means "ask now": a shelf's backdrop keeps moving with
+        -- the playback poll long after the draw, so the only honest answer is the
+        -- one below, which is what "art-current" does too.
+        local it = Util.serve_art_item
         if type(it) ~= "table" then
             if not Util.fast_now_track() then last_playback = 0; get_playback() end
             it = current_track
@@ -12889,6 +13017,16 @@ end
 function Util.serve_draw(name, d, raw)
     if not d then return {view = name, rows = {}, empty = true} end
     local o = d.opts or {}
+    -- ONE PICTURE, ONE STATEMENT. `cover` and `coverFor` below are the two halves
+    -- of the same sentence -- here is the cover, and here is the track it belongs
+    -- to -- and they were computed independently, so a draw could send the second
+    -- without the first. That is what the playlist flash was: the cover lookup is
+    -- cache-only and a playlist's track list draws no per-row thumbs, so it
+    -- missed; `coverFor` went out regardless, artBehind believed a cover it had
+    -- not been given, and the UI pinned the PREVIOUS view's backdrop for the full
+    -- 1.6s the name is honoured for. Resolved once and read twice, the half
+    -- without the whole cannot be sent.
+    local cover = Util.serve_draw_cover(d)
     return {
         view   = name,
         -- opts.thumbs is precisely how the rofi build decides grid vs list, so
@@ -13012,11 +13150,30 @@ function Util.serve_draw(name, d, raw)
         -- CACHE-ONLY, so it is a stat and a read or nothing at all. Almost always
         -- something: the list that drew this track's row already fetched its
         -- thumbnail. On a miss this stays absent and the event answers as before.
-        cover = Util.serve_draw_cover(d),
-        coverFor = (Util.serve_shelf(d) and current_track and current_track.id) or nil,
+        cover = cover,
+        coverFor = (cover and Util.serve_shelf(d) and current_track and current_track.id) or nil,
+        -- A CARD THAT WANTS THE BACKDROP GONE WHILE IT IS UP.
+        --
+        -- `art=false` cannot say this and must not be made to. Every action menu
+        -- sets it, and a card floats OVER a list that is still wearing its own
+        -- backdrop -- honouring it there would strip the picture off something
+        -- that did not change, which is why applyContext ignores the field
+        -- outright. So the two menus that really are about nothing you can
+        -- picture -- Seek and the search type filter -- say the stronger thing
+        -- separately, and only they carry it.
+        hideArt = o.hide_art and true or nil,
         -- HOW MANY COLUMNS THE ROWS FLOW INTO, for a card that is a shape rather
         -- than a list. Absent everywhere else, which the UI reads as one.
         cols = (type(o.cols) == "number" and o.cols > 1) and o.cols or nil,
+        -- WHAT THE ROWS ARE, for a menu whose rows are not sentences. Only the
+        -- window-position picker sends one -- "anchor", nine pictures of the
+        -- screen -- and absent everywhere else, which the UI reads as words.
+        cells = (type(o.cells) == "string" and #o.cells > 0) and o.cells or nil,
+        -- WHICH ROW IS THE LIVE VALUE, 1-based, as opposed to which row the
+        -- cursor is on. A settings picker has both and they are usually not the
+        -- same row -- the same distinction a lyrics view draws between the line
+        -- being sung and the line you are reading.
+        active = (type(o.active) == "number" and o.active >= 1) and o.active or nil,
         -- WHICH OF A MENU'S FACES IS SHOWING, for a menu that has more than one.
         -- The trail menu is the only one, and it is how Tab there crosses between
         -- them without the crossing becoming a step. See Util.view_trail_jump.
@@ -13049,6 +13206,10 @@ function Util.serve_run(name, fn, args)
     Util.serve_last_menu = nil
     Util.serve_answered_menus = {}
     Util.serve_ctx_item = nil
+    -- WHETHER THIS REQUEST STARTS SOMETHING PLAYING. Set by Util.play_or_toggle a
+    -- moment before the redraw it causes, read once by Util.serve_draw_cover, and
+    -- false for every request that merely looks at something.
+    Util.serve_played = nil
     -- Reset with it. serve_ctx_path never was, so a menu naming no cover of its
     -- own wore whichever one the last menu that did had named.
     Util.serve_ctx_path = nil
@@ -13057,6 +13218,14 @@ function Util.serve_run(name, fn, args)
     -- so inherits what that place was about. See the segment loop, which is the
     -- only caller that ever passes this.
     if args and args.keepCtx ~= nil then Util.serve_ctx_item = args.keepCtx end
+    -- Util.serve_art_item is DELIBERATELY NOT RESET HERE, and it is the one piece
+    -- of draw state that is not. It records what the last backdrop turned out to
+    -- be a picture of (see Util.serve_ctx_art), and the only thing that reads it
+    -- is "art-here" -- a request of its own, arriving after the draw it is asking
+    -- about. Clearing it here would clear it a moment before its reader ran, which
+    -- is the very failure keepCtx above exists to undo for serve_ctx_item. Its
+    -- lifetime is "the last backdrop resolved", which is exactly what the gesture
+    -- means by "this".
     Util.serve_answered_depth = nil
     -- FROM EMPTY, every time. The replay pushes a scope per step as it walks the
     -- path, so a stack left over from the previous request would be pushed on top
@@ -13463,9 +13632,36 @@ function Util.serve_draw_cover(d)
     end
     local it = current_track
     local alb = it and (it.type == nil or it.type == "track") and it.album or nil
+    -- A GUARD STOOD HERE returning Util.serve_ctx_path for an album whose playing
+    -- track matched, on the theory that the flash was this function resolving one
+    -- picture through two art pools. It was the right diagnosis of the wrong half:
+    -- the UI does not read this field on a shelf at all. `artLive` sends it to the
+    -- playback poll's own `art` instead (see main.qml's coverArt), so whatever is
+    -- returned here was never what got drawn. The rule moved to Util.serve_shelf,
+    -- where it can answer the question the UI is actually asking.
     local url = alb and alb.images and alb.images[1] and alb.images[1].url or nil
     if not url then return nil end
-    local p = Util.ensure_art_med(url, true)
+    -- CACHE-ONLY, EXCEPT ON THE PICK THAT STARTED THIS TRACK.
+    --
+    -- Cache-only everywhere else is right: this exists to close a one-poll gap and
+    -- must not become a second way of resolving artwork, and a miss costs nothing
+    -- because the continuation answers properly a moment later.
+    --
+    -- But on the draw that FOLLOWS a play it costs everything. Outside an album
+    -- grid nothing has warmed the 640px rendition for the track just picked -- a
+    -- playlist, Liked and a search result all draw their rows with no per-row
+    -- thumbs -- so the lookup missed on exactly the lists people play from, the
+    -- draw shipped no cover, and the UI fell back to the playback poll, which is
+    -- up to a second behind and still naming the track BEFORE this one. A wrong
+    -- picture, every first play. That is the flash.
+    --
+    -- Affordable precisely here and nowhere else: this draw is a REDRAW of a list
+    -- already on screen, patched in place, so nothing the eye is waiting on is
+    -- behind it -- and it is one image, once per pick, bounded by Util.ART_DECOR
+    -- at a single attempt (~150ms warm, 4s at the very worst with the network
+    -- dead, by which point nothing is playing either).
+    local fresh = Util.serve_played ~= nil and it and Util.serve_played == it.id
+    local p = Util.ensure_art_med(url, not fresh)
     return (p ~= "" and p) or nil
 end
 
@@ -13502,7 +13698,24 @@ function Util.serve_shelf(d)
     -- the moment the list is drawn, and from then on the playback poll moves the
     -- cover with no draw at all. That is what makes it work while the menu is
     -- closed, which is the case the report was about.
-    if o.own_art and not Util.playing_here(it) then return false end
+    if o.own_art then
+        -- ...BUT AN ALBUM IS ONE PICTURE, and this is the backdrop flash.
+        --
+        -- Every track in an album wears the album's sleeve, so there is nothing
+        -- for the backdrop to follow: it is already showing what the next track
+        -- is going to show. Calling it a shelf anyway handed the backdrop to the
+        -- playback poll (`artLive` -- see main.qml's coverArt), and the poll is up
+        -- to a second behind the pick, so entering an album with something playing
+        -- drew the PREVIOUS track's cover for that second and then cross-faded to
+        -- the album's own. One second of the wrong picture, in the one view where
+        -- the right picture could never change.
+        --
+        -- ALBUM ONLY. A playlist's tile is not the playing track's artwork and a
+        -- podcast's is not its episodes', so in those the cover genuinely does
+        -- change when the music moves, and the paragraph above is why it must.
+        if o.ctx_type == "album" and o.ctx_id then return false end
+        if not Util.playing_here(it) then return false end
+    end
     return true
 end
 
@@ -13525,6 +13738,30 @@ function Util.playing_here(items)
 end
 
 function Util.serve_ctx_art(d)
+    -- WHAT THE BACKDROP TURNS OUT TO BE A PICTURE OF, recorded as this decides
+    -- it -- because one other thing has to know, and had been answering for
+    -- itself. Double-clicking the backdrop opens it full size (SERVE_VIEWS's
+    -- "art-here"), and that read Util.serve_ctx_item: the row the step into this
+    -- place picked, which is the CONTAINER. Inside an album the two agree, since
+    -- an album is not a shelf and both are the sleeve. Inside a playlist they do
+    -- not: the backdrop is the playing track's cover by the rule below, and the
+    -- double-click came back with the playlist's tile -- a picture of something
+    -- other than the one you clicked on.
+    --
+    -- Recorded rather than re-derived. The shelf-versus-container rule is this
+    -- function's, and a second copy of it in a command handler is the kind of
+    -- pair that drifts.
+    --
+    -- THE DECISION, NOT THE ITEM, and that distinction is the whole of it. The
+    -- track was recorded here first, which was wrong in the one way that matters:
+    -- a shelf's backdrop follows the playback POLL and goes on moving with no
+    -- further draw -- that is what artLive buys -- so the item a draw saw is stale
+    -- the moment the music advances, and double-clicking answered with the track
+    -- BEFORE the one on screen. nil is the honest record for that case: it says
+    -- "whatever is playing", and the reader asks when it is asked, exactly as
+    -- "art-current" does. Only a CONTAINER's picture is a fact about this place
+    -- rather than about the music, and only that is worth pinning.
+    Util.serve_art_item = nil
     -- The view already told us, if it is one of the two that names a cover.
     -- ...or it told us where to get it. This is the fetch the menu used to wait
     -- on -- see Util.serve_named_cover, which both this and the card's resolver
@@ -13542,16 +13779,51 @@ function Util.serve_ctx_art(d)
     -- This, an album -- so this is one rule rather than a list of views.
     local shelf = Util.serve_shelf(d)
     if not shelf then
+        Util.serve_art_item = Util.serve_ctx_item
         local p = named()
         if p then return p end
+    end
+    -- ...AND A SHELF THAT IS AN ALBUM KEEPS THE SLEEVE IT CAME IN WITH, for the
+    -- reason Util.serve_draw_cover gives: the same picture named from two pools is
+    -- a cross-fade between two copies of one image. Asked here too, or the event
+    -- that follows the rows would undo what the draw just got right.
+    do
+        local o = (d and d.opts) or {}
+        local t = current_track
+        local a = t and (t.type == nil or t.type == "track") and t.album or nil
+        if shelf and Util.serve_ctx_path and o.ctx_type == "album" and o.ctx_id
+           and a and a.id == o.ctx_id then
+            Util.serve_art_item = Util.serve_ctx_item
+            return Util.serve_ctx_path
+        end
     end
     -- NOBODY PICKED ANYTHING, so the cover belongs to whatever is playing.
     --
     -- Resolved through the same album_thumbs path as any other cover, in the
     -- continuation, so it costs the draw nothing.
     local item = (not shelf) and Util.serve_ctx_item or nil
+    -- Container or music, said once. nil here is a shelf, and a shelf's backdrop
+    -- is whatever is playing at the moment somebody looks -- not at the moment
+    -- this ran.
+    Util.serve_art_item = item
     if type(item) ~= "table" then
-        if not Util.fast_now_track() then last_playback = 0; get_playback() end
+        -- ASK, UNLESS WE ARE THE ONES WHO CHANGED IT.
+        --
+        -- Util.fast_now_track overwrites current_track from now_track.json, which
+        -- is the DAEMON's view -- written when MPRIS reports a change, so on the
+        -- request that just started a track it is still describing the track
+        -- before it. This runs in the continuation, after the rows, and it was
+        -- undoing the very thing the draw had got right: the cover shipped with
+        -- the rows was the new track's, and the context-art event a moment later
+        -- carried the old one back, stamped with the NEW track's id. The UI
+        -- believed the stamp, and that is the flash -- the last of it, and the
+        -- half no amount of warming the art pool could have fixed.
+        --
+        -- Util.play_or_toggle set current_track itself a few lines before this;
+        -- there is nothing to ask.
+        if not Util.serve_played then
+            if not Util.fast_now_track() then last_playback = 0; get_playback() end
+        end
         item = current_track
     end
     -- A shelf with nothing playing falls back to what contains it. That is the
@@ -13560,6 +13832,7 @@ function Util.serve_ctx_art(d)
         local p = named()
         if p then return p end
         item = Util.serve_ctx_item
+        Util.serve_art_item = item
     end
     if type(item) ~= "table" then return nil end
     -- A TRACK'S COVER COMES FROM THE MED-RES POOL, not the grid's. The context
@@ -13792,6 +14065,22 @@ function Util.serve_playback()
     -- is the same order every other caller in this file uses.
     if not Util.fast_now_track() then get_playback() end
     local t = current_track
+    -- OFF MEANS OFF. Session Replay reached the trail, the cursor store and the
+    -- "where you left off" marker, and stopped one short of the thing you actually
+    -- look at: the poll ALWAYS names a track -- on a cold start the last one
+    -- Spotify remembers, hours old and loaded nowhere -- so the now-playing strip,
+    -- the backdrop, the dock and Main's Playback tile all went on naming last
+    -- night's song after the setting had been told to forget the session.
+    --
+    -- Answered here, once, so nothing downstream needs to know the setting exists:
+    -- with no track in the payload the strip collapses on its own (nowBar.active
+    -- reads `name`), the backdrop has nothing to draw and the dock stays empty.
+    --
+    -- `live` is the same test used below -- is there a player behind any of this --
+    -- so the moment you play something this session it all comes back.
+    if t and not (is_playing or Util.played_here) and not Util.ui_get().replay then
+        t = nil
+    end
     return {
         playing  = is_playing or false,
         -- WHETHER THERE IS A PLAYER BEHIND ANY OF THIS. `id` below names the last
@@ -14103,10 +14392,8 @@ function Util.serve_mode()
     -- does it, so the stack was empty and every warm start looked like a cold
     -- one. Then snapshotted, because every request resets the stack to build its
     -- own and the first one the UI sends would erase exactly what a warm start
-    -- needs. The trail is loaded for the same reason: it is what the crumb draws
-    -- previous journeys from.
+    -- needs.
     session_load()
-    Util.trail_load()
     -- ...AND NOT THE CURSORS, WITH REPLAY OFF.
     --
     -- Every menu's cursor is remembered by name and written to disk, so a list
@@ -14282,6 +14569,37 @@ function Util.serve_mode()
                 if Util.tab_pressed or Util.del_pressed then
                     Util.serve_last_menu = nil
                 end
+            end
+            -- AN ANSWER THAT DOES NOT FIT THIS MENU IS NOT THIS MENU'S ANSWER.
+            --
+            -- The path is a list of POSITIONS -- there is no row identity on the
+            -- wire -- and they are fed to menus in the order the menus are drawn.
+            -- That holds only while the path still describes this tree, and when
+            -- it does not, every index after the misfeed is shifted by one and
+            -- each is spent on whatever menu happens to be there. The end of that
+            -- cascade is a row nobody picked: picking a track in an album opening
+            -- an album from the step before it, or -- when a shifted index lands
+            -- on a track's action menu and takes its "Add to Playlist" row -- the
+            -- toast about a playlist that is no longer there, raised from a place
+            -- that was never a playlist.
+            --
+            -- An index past the end of the rows is the one shape of that which is
+            -- PROVABLE from here, so it is the one refused. The answer is dropped
+            -- rather than handed over, which ends the replay: the capture below
+            -- draws this menu and the UI gets the place the path really reaches
+            -- instead of an action nobody asked for. The flags ride on the same
+            -- step and are dropped with it, or a discarded Shift+Return would
+            -- still be sticky for the next plain Return.
+            --
+            -- Only for a NUMBER. A string step is free-typed text -- a query, a
+            -- new playlist name -- and indexes nothing.
+            if type(ans) == "number" and type(entries) == "table"
+               and (ans < 1 or ans > #entries) then
+                ans = nil
+                Util.alt_pressed = false
+                Util.del_pressed = false
+                Util.tab_pressed = false
+                Util.queue_pressed = false
             end
             -- The SEARCH HISTORY list is the one menu whose Delete ui_menu
             -- handled itself: view_search only ever passes hist_key and never
@@ -14601,18 +14919,15 @@ elseif arg and arg[1] == "--listen" then
         init_instance_lock()
         ensure_daemon()
         Util.sync_now()
-        -- The trail and the stack this keybind lands ON. Skipping them made the
-        -- result menu a lone entry with nothing under it: its breadcrumb read
-        -- "Main > Track" however deep you already were, Backspace out of it
-        -- ended the process instead of returning to the menu beneath, and an
-        -- Alt+Space from it archived onto an empty Util.trail_history -- which
-        -- Util.trail_save then wrote over the real trails.json with.
+        -- The stack this keybind lands ON. Skipping it made the result menu a
+        -- lone entry with nothing under it: its breadcrumb read "Main > Track"
+        -- however deep you already were, and Backspace out of it ended the
+        -- process instead of returning to the menu beneath.
         --
         -- Loading is all that is needed; NOT replay_session. The menus below are
         -- not reopened on the way in -- the point of the keybind is to get to
         -- the listener -- they are reopened on the way OUT, by main() below,
         -- from the stack Util.scope leaves behind when the result menu closes.
-        Util.trail_load()
         session_load()
         local shown = Util.view_listen()
         -- Alt+Space, Alt+L, Alt+P and the trail jump do not navigate themselves:

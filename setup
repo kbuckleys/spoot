@@ -644,6 +644,56 @@ rm -rf build
 say "built $here/bin/spoot"
 say "bind that path to a key -- a second run hands over to the first and exits"
 
+# --- a face and a name ------------------------------------------------------
+#
+# spoot is summoned with a key and has never needed a launcher entry -- but
+# without one it has no ICON either, and a notification server looking up the
+# `desktop-entry` hint every toast carries finds nothing to draw. That is the same
+# file answering both questions, so it is installed even though nobody has to
+# click it.
+#
+# Into the user's own data dirs, not /usr: this script installs a tree wherever it
+# was unpacked and asks for no root anywhere else.
+#
+# Exec is the absolute path to THIS checkout, for the reason the banner gives
+# about binding a key: there is no `spoot` on PATH to fall back on.
+say "installing the launcher entry"
+icon_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
+app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+mkdir -p "$icon_dir" "$app_dir"
+cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" 2>/dev/null || true
+cat > "$app_dir/spoot.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=spoot
+GenericName=Spotify Client
+Comment=Spotify, as a menu you summon with a key
+Exec=$here/bin/spoot
+Icon=spoot
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=spotify;music;player;
+StartupWMClass=spoot
+Actions=Listen;
+
+[Desktop Action Listen]
+Name=Identify what is playing
+Exec=$here/bin/spoot --listen
+DESKTOP
+
+# BEST EFFORT, both of them. The caches make the entry and the icon visible to a
+# launcher sooner; neither is required for the files to work, and a machine
+# without them is not a machine with a broken install.
+#
+# `command -v` rather than have_dep: that function is a roster of spoot's actual
+# dependencies, answering by NAME, and neither of these is one -- they are nice to
+# have run if they happen to exist.
+command -v update-desktop-database >/dev/null 2>&1 \
+    && update-desktop-database "$app_dir" >/dev/null 2>&1 || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 \
+    && gtk-update-icon-cache -qtf \
+       "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+
 # --- over to spoot ----------------------------------------------------------
 #
 # STARTED AND LET GO. This used to `exec ./bin/spoot`, which made the installer

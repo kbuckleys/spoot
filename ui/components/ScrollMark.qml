@@ -40,7 +40,14 @@ Item {
         : Math.max(0.06, Math.min(1, (horiz ? view.width / Math.max(1, view.contentWidth)
                                             : view.height / Math.max(1, view.contentHeight))))
 
-    visible: span > 0
+    // ...AND IT BELONGS TO THE LIST IT DESCRIBES. Handed the body's own fade (see
+    // main.qml's bodyFade) so it goes out with the rows during a menu change: a
+    // new menu replaces the model, which moves contentY, which is motion as far as
+    // the Connections below can tell -- so without this the mark woke up and sat
+    // there for a second over every transition, describing a list that was no
+    // longer on screen.
+    property real fade: 1
+    visible: span > 0 && fade > 0.01
     // SEEN WHILE IT MOVES. Faded up the instant the position changes and back
     // down a beat after it settles -- long enough to read where you landed, short
     // enough that a still list has no furniture on it.
@@ -76,7 +83,7 @@ Item {
         // The dim the trail's inactive steps use. It is chrome about the list,
         // not part of it, and it must never compete with a row.
         color: mark.theme ? mark.theme.foreground : "#808080"
-        opacity: 0.45
+        opacity: 0.45 * mark.fade
     }
     // Long enough to grab hold of even when the list is enormous.
     readonly property real thumbLen:
