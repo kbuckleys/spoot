@@ -22,7 +22,6 @@
 #include <QMutex>
 #include <QIcon>
 #include <QQmlContext>
-#include <QProcess>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFileInfo>
@@ -35,7 +34,6 @@
 #include <QDirIterator>
 #include <QLocalServer>
 #include <QLocalSocket>
-#include <QProcess>
 #include <QDateTime>
 #include <QThread>
 #include <mutex>
@@ -392,6 +390,28 @@ private:
     // connection -- so this is process hygiene rather than latency, and it also
     // gets HTTP/2 multiplexing over a single socket for free.
     //
+    // A WINDOW, NOT A FLOOD, and this is the whole of "I am rate limited almost
+    // all the time". curl's `--parallel-max` bounded how many of a batch were in
+    // the air at once; this branch replaced it with a loop that called get() on
+    // every job before waiting on any of them, and `parallel` -- which every
+    // caller in the engine still passes -- reached nothing. Over HTTP/2 that is
+    // not six requests and then six more: it is all of them multiplexed down one
+    // socket in the same millisecond. A 1,578-track library is 32 pages of
+    // me/tracks, so a warm start asked Spotify for the same endpoint 32 times at
+    // once and earned a 429 on it that outlived the burst by a long way --
+    // measured with spoot NOT running and nothing else on the account: me,
+    // me/player and browse/new-releases all answered 200 while me/tracks went on
+    // answering 429. The per-endpoint limit was still shut hours later, which is
+    // what made "failed to load playlist" and a track that needs pressing twice
+    // look like separate bugs.
+    //
+    // So the batch is pumped: at most `parallel` replies in flight, the next
+    // started as each one lands. Same total work, same connection, same order --
+    // and the burst that Spotify counts is the size the caller asked for.
+    //
+    // Jobs that never start (the clock ran out first) are reported as code 0,
+    // which every caller already reads as "this page did not come back".
+    //
     // Results are collected AFTER the loop, never inside the finished handler.
     // A handler that writes into locals of this frame would still be armed on a
     // reply that outlived a timeout, and would then scribble on a dead stack.
@@ -415,34 +435,56 @@ private:
         lua_getfield(L, 1, "timeout");
         const int timeoutMs = int(luaL_optnumber(L, -1, 10) * 1000);
         lua_pop(L, 1);
+        // The same number curl was given, honoured rather than dropped. Eight is
+        // Util.curl_batch's own default -- the number it passes to
+        // `--parallel-max` when a caller names none -- so the two transports
+        // cannot differ on what "a batch" means.
+        lua_getfield(L, 1, "parallel");
+        const int window = qMax(1, int(luaL_optnumber(L, -1, 8)));
+        lua_pop(L, 1);
 
-        QVector<QNetworkReply *> reps;
+        QVector<QByteArray> urls;
         QVector<QString> outs;
         lua_getfield(L, 1, "jobs");
         const lua_Integer n = luaL_len(L, -1);
-        int pending = 0;
-        QEventLoop loop;
         for (lua_Integer i = 1; i <= n; ++i) {
             lua_rawgeti(L, -1, i);
             const QByteArray u = field(L, -1, "url");
             const QByteArray o = field(L, -1, "out");
             lua_pop(L, 1);
             if (u.isEmpty()) continue;
-            QNetworkRequest req{QUrl(QString::fromUtf8(u))};
-            for (const QByteArray &h : heads) {
-                const int c = h.indexOf(':');
-                if (c > 0) req.setRawHeader(h.left(c).trimmed(), h.mid(c + 1).trimmed());
-            }
-            QNetworkReply *rep = w->m_nam->get(req);
-            reps << rep;
+            urls << u;
             outs << QString::fromUtf8(o);
-            ++pending;
-            QObject::connect(rep, &QNetworkReply::finished, &loop,
-                             [&pending, &loop] { if (--pending == 0) loop.quit(); });
         }
         lua_pop(L, 1);
 
-        if (pending > 0) {
+        QVector<QNetworkReply *> reps(urls.size(), nullptr);
+        QEventLoop loop;
+        int next = 0, done = 0, inflight = 0;
+        // Recursive through a reference to itself: `pump` is called once to fill
+        // the window and again from each reply that lands, so the batch walks
+        // itself forward without a timer or a second loop.
+        std::function<void()> pump = [&] {
+            while (inflight < window && next < urls.size()) {
+                const int idx = next++;
+                QNetworkRequest req{QUrl(QString::fromUtf8(urls[idx]))};
+                for (const QByteArray &h : heads) {
+                    const int c = h.indexOf(':');
+                    if (c > 0) req.setRawHeader(h.left(c).trimmed(), h.mid(c + 1).trimmed());
+                }
+                QNetworkReply *rep = w->m_nam->get(req);
+                reps[idx] = rep;
+                ++inflight;
+                QObject::connect(rep, &QNetworkReply::finished, &loop, [&] {
+                    --inflight;
+                    if (++done == urls.size()) loop.quit();
+                    else pump();
+                });
+            }
+        };
+        pump();
+
+        if (done < urls.size()) {
             QTimer clock;
             clock.setSingleShot(true);
             QObject::connect(&clock, &QTimer::timeout, &loop, &QEventLoop::quit);
@@ -453,6 +495,16 @@ private:
         lua_newtable(L);
         for (int i = 0; i < reps.size(); ++i) {
             QNetworkReply *rep = reps[i];
+            // NEVER STARTED, because the clock beat it to the front of the queue.
+            // Reported rather than left out: `nil` and a zero are read the same
+            // way by every caller, and a zero says which page it was.
+            if (!rep) {
+                lua_newtable(L);
+                lua_pushinteger(L, 0); lua_setfield(L, -2, "code");
+                lua_pushinteger(L, 0); lua_setfield(L, -2, "size");
+                lua_setfield(L, -2, outs[i].toUtf8().constData());
+                continue;
+            }
             QObject::disconnect(rep, nullptr, nullptr, nullptr);
             if (!rep->isFinished()) rep->abort();
             const int code = rep->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -1416,6 +1468,17 @@ private slots:
     }
 };
 
+// WHERE A LAYER SURFACE GOES, given what we managed to find out about the
+// pointer. Nullptr is a real answer -- see screenUnderCursor in main(), which
+// can only answer on Hyprland -- and it means "let the compositor place this on
+// its own active output", which is the only portable version of "where I am".
+// One function because the cold start and every later reveal must not be able
+// to disagree about what not knowing means.
+static void placeOnScreen(LayerShellQt::Window *ls, QScreen *sc) {
+    if (sc) ls->setScreen(sc);
+    else ls->setWantsToBeOnActiveScreen(true);
+}
+
 // and a second `spoot` hands its request to the first one over a socket and
 // exits -- so the Lua engine, the token, and every warm cache survive between
 // summons. A cold start pays for the engine, the API handshake and the first
@@ -1604,7 +1667,7 @@ public:
         // masked to nothing: an empty region is a thing Qt and the compositor
         // may each read their own way, and hidden is unambiguous.
         for (QWindow *d : m_docks) d->hide();
-        if (auto *ls = LayerShellQt::Window::get(m_win)) ls->setScreen(m_pick());
+        if (auto *ls = LayerShellQt::Window::get(m_win)) placeOnScreen(ls, m_pick());
         m_win->show();
         m_win->requestActivate();
         emit revealed();
@@ -1898,20 +1961,43 @@ int main(int argc, char *argv[]) {
     // the pointer is until it enters one of its own surfaces, so a freshly
     // launched app reads a stale (0,0) and Qt picks the first screen. That is
     // exactly why spoot always came up on HDMI-A-1. The compositor is the only
-    // thing that actually knows, so ask it, and fall back to Qt's guess if the
-    // query fails or spoot is running somewhere without hyprctl.
+    // thing that actually knows, so ask it.
+    //
+    // NULL IS AN ANSWER, and it is the one that fixes every session that is not
+    // Hyprland. This used to fall back to primaryScreen(), which is a GUESS
+    // dressed as a fact: on KDE, on GNOME, on sway, spoot opened on whichever
+    // output the platform happened to call first no matter where you were
+    // standing. There is no portable "where is the pointer" for a Wayland
+    // client -- but there IS a portable way to decline to answer, and the
+    // protocol already has a word for it: a layer surface created with no output
+    // is placed by the compositor on ITS active one. So the query result is
+    // returned where there is one and nullptr where there is not, and the two
+    // call sites below turn nullptr into setWantsToBeOnActiveScreen(true).
+    //
+    // No fork for it either. `hyprctl cursorpos` is a process; the answer comes
+    // off the same command socket Shell::pollCursor already reads, which is a
+    // connect-write-read on a UNIX socket, and this is on the summon path.
     auto screenUnderCursor = [] () -> QScreen * {
-        QProcess p;
-        p.start("hyprctl", {"cursorpos"});
-        if (p.waitForFinished(300)) {
-            const QStringList xy = QString::fromUtf8(p.readAllStandardOutput()).trimmed().split(',');
-            if (xy.size() == 2) {
-                const QPoint at(xy[0].trimmed().toInt(), xy[1].trimmed().toInt());
-                for (QScreen *s : QGuiApplication::screens())
-                    if (s->geometry().contains(at)) return s;
-            }
-        }
-        return QGuiApplication::primaryScreen();
+        const QByteArray sig = qgetenv("HYPRLAND_INSTANCE_SIGNATURE");
+        const QByteArray run = qgetenv("XDG_RUNTIME_DIR");
+        if (sig.isEmpty() || run.isEmpty()) return nullptr;
+        QLocalSocket sock;
+        sock.connectToServer(QString::fromUtf8(run) + QStringLiteral("/hypr/")
+                             + QString::fromUtf8(sig) + QStringLiteral("/.socket.sock"));
+        if (!sock.waitForConnected(150)) return nullptr;
+        sock.write("cursorpos");
+        sock.flush();
+        if (!sock.waitForReadyRead(150)) return nullptr;
+        const QByteArray r = sock.readAll().trimmed();
+        const int comma = r.indexOf(',');
+        if (comma <= 0) return nullptr;
+        bool okx = false, oky = false;
+        const QPoint at(r.left(comma).trimmed().toInt(&okx),
+                        r.mid(comma + 1).trimmed().toInt(&oky));
+        if (!okx || !oky) return nullptr;
+        for (QScreen *s : QGuiApplication::screens())
+            if (s->geometry().contains(at)) return s;
+        return nullptr;
     };
 
     if (qEnvironmentVariableIsSet("SPOOT_DEBUG_SCREENS")) {
@@ -1933,7 +2019,7 @@ int main(int argc, char *argv[]) {
             // layer surface binds to an output of its own, and the QWindow's
             // screen has no say in it -- setting only that left spoot on
             // HDMI-A-1 no matter where the pointer was.
-            ls->setScreen(screenUnderCursor());
+            placeOnScreen(ls, screenUnderCursor());
             ls->setLayer(LayerShellQt::Window::LayerOverlay);
             // THE SURFACE IS THE WHOLE OUTPUT, and the panel is positioned
             // inside it by QML. Two things fall out of that, neither reachable

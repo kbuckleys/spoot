@@ -15,7 +15,7 @@ library                layout=grid  rows=1-9   icons=some scope=library         
 system                 layout=list  rows=10-99 icons=none scope=system           ctx=no  crumb=2
 ui-settings            layout=list  rows=1-9   icons=none scope=ui-settings      ctx=no  crumb=2
 ui-settings>opacity    layout=list  rows=10-99 icons=none scope=ui-setting       ctx=yes crumb=3
-playback               layout=list  rows=10-99 icons=none scope=playback         ctx=no  crumb=2
+playback               layout=list  rows=10-99 icons=none scope=None             ctx=yes crumb=1
 album                  layout=list  rows=1-9   icons=none scope=album            ctx=no  crumb=3
 album-actions          layout=list  rows=1-9   icons=none scope=saved-albums     ctx=yes crumb=2
 album>track-actions    layout=list  rows=10-99 icons=none scope=album            ctx=yes crumb=3

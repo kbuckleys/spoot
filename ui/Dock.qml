@@ -196,7 +196,44 @@ Window {
         if (d < 0) d = 0
         return 1 - d / dock.hotDepth
     }
-    property real touchedNear: 0
+    // ARRIVED, OR NOT ARRIVED, read off where the pointer IS rather than written
+    // by the last motion event that happened to be delivered.
+    //
+    // A HANDLER STOOD HERE and that is "the hot spot sometimes does not trigger",
+    // and on another machine "does not work at all". `onPositionChanged` fires on
+    // MOTION -- and the gesture people actually make is to throw the pointer at
+    // the edge and STOP. The compositor then delivers an enter and no motion
+    // inside the band at all, so nothing ever set this, `near` never reached
+    // touchAt and the pill never came. Whether it worked was down to whether your
+    // hand kept moving after you arrived, which is why it looked intermittent
+    // here and dead elsewhere.
+    //
+    // As a binding the question is asked whenever any part of the answer moves,
+    // and `containsMouse` is what the compositor's own enter and leave already
+    // drive -- the surface is masked to the band, so being in the region and
+    // being over the band are the same fact.
+    //
+    // Bounds still tested rather than assumed: belt to the region's braces, and
+    // it makes the answer depend on where the pointer is rather than on the host
+    // having masked the surface exactly as asked. Past the free edge counts as
+    // arrived, exactly as it does in trackedNear -- everything between it and the
+    // screen's edge is the bar, and throwing the pointer at the bottom of the
+    // screen is the gesture, not a miss.
+    readonly property real touchedNear: {
+        if (dock.tracked || dock.open || !dock.armed) return 0
+        if (!hot.containsMouse) return 0
+        var d = dock.onTop ? (hot.mouseY - dock.edgeY) : (dock.edgeY - 1 - hot.mouseY)
+        var inX = hot.mouseX >= dock.hotX && hot.mouseX <= dock.hotX + dock.hotW
+        // THE OTHER HALF OF THE DOCK LINE. That one says where the band was put;
+        // this says where the pointer was reported. Either alone is a guess --
+        // together they tell a band in the wrong place from a band nothing is
+        // reaching, which is the entire diagnosis on a compositor nobody here can
+        // run.
+        if (dock.debug) console.log("DOCK POS " + dock.screenName
+            + " m=" + hot.mouseX + "," + hot.mouseY + " edgeY=" + dock.edgeY
+            + " d=" + d + " inX=" + inX)
+        return (inX && d <= dock.hotDepth) ? 1 : 0
+    }
     readonly property real near: dock.tracked ? dock.trackedNear : dock.touchedNear
     // Crossing the line starts the wait; falling back below it cancels it. One
     // watcher rather than a test in two places, because `near` now has two
@@ -292,50 +329,12 @@ Window {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        // The two the binding above cannot express, because they are about TIME
+        // rather than about position: entering cancels a close already counting
+        // down, leaving starts one. Where the pointer is while it is here is
+        // dock.touchedNear's question and is asked there.
         onEntered: shutWait.stop()
-        onExited: { openWait.stop(); dock.touchedNear = 0; shutWait.restart() }
-        // ARRIVED, OR NOT ARRIVED. Measured against the same lines trackedNear
-        // measures against, which is the whole of the fix.
-        //
-        // A RAMP STOOD HERE and could never have worked: it took its distance from
-        // dock.outH -- the SCREEN's edge -- while the band it reads is placed
-        // against dock.edgeY, the FREE edge, the screen's less whatever a bar has
-        // reserved. This machine's second output has a 44px bar, so the band sat
-        // at y 1856..1876 and every distance inside it came out as 44 or more
-        // against a hotDepth of 20. touchedNear was pinned at 0, `near` could
-        // never reach touchAt, openWait never started: the dock did not open on
-        // any compositor but Hyprland, and could not have. The band was drawn in
-        // the right place and read in the wrong one.
-        //
-        // Not merely repaired to edgeY, replaced: a ramp across twenty pixels the
-        // pointer can only ever be inside of is a number with one value. Untracked
-        // there is no approach to feel, only an arrival -- so this answers 1 or 0,
-        // and openWait's 220ms below is what keeps a pointer crossing the edge on
-        // its way somewhere else from summoning the pill. trackedNear still ramps,
-        // because 64px of reach is far enough for a glow to say something.
-        //
-        // Bounds tested rather than assumed. A position delivered here should
-        // already be inside the mask -- so this is belt to the region's braces,
-        // and it costs two comparisons to make the answer depend on where the
-        // pointer IS rather than on the host having masked the surface exactly as
-        // asked. Past the free edge counts as arrived, exactly as it does in
-        // trackedNear: everything between it and the screen's edge is the bar, and
-        // throwing the pointer at the bottom of the screen is the gesture, not a
-        // miss.
-        onPositionChanged: function (m) {
-            if (dock.open || dock.tracked) return
-            var d = dock.onTop ? (m.y - dock.edgeY) : (dock.edgeY - 1 - m.y)
-            var inX = m.x >= dock.hotX && m.x <= dock.hotX + dock.hotW
-            // THE OTHER HALF OF THE DOCK LINE. That one says where the band was
-            // put; this says where the pointer was reported. Either alone is a
-            // guess -- together they tell a band in the wrong place from a band
-            // nothing is reaching, which is the entire diagnosis on a compositor
-            // nobody here can run. It is what found the bug above.
-            if (dock.debug) console.log("DOCK POS " + dock.screenName
-                + " m=" + m.x + "," + m.y + " edgeY=" + dock.edgeY
-                + " d=" + d + " inX=" + inX)
-            dock.touchedNear = (inX && d <= dock.hotDepth) ? 1 : 0
-        }
+        onExited: { openWait.stop(); shutWait.restart() }
         // THE WHEEL IS VOLUME HERE, and seek on the now-playing strip. They are
         // not the same surface and not the same question: the strip is a picture
         // of the position, so moving the position is what a wheel over it means;

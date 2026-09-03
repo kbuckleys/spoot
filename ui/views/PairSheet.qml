@@ -55,8 +55,8 @@ Column {
     // got. rofi could not do this: it is handed a size up front, which is why
     // meta.rasi says 800px whether the sheet holds three fields or twelve.
     //
-    // Everything below is measured with the SAME TextMetrics the delegates draw
-    // with, so the numbers cannot disagree with the layout.
+    // Everything below is measured with the SAME font the delegates draw with,
+    // so the numbers cannot disagree with the layout.
 
     // The gutter between the label column and the value column. Wide on purpose:
     // this is a definition list, and 14px read as two columns jammed together
@@ -75,11 +75,24 @@ Column {
     // pathological case is a cap that stops surprising people.
     property int maxValueWidth: 1400
 
+    // MEASURED WITH A FUNCTION, NOT BY MOVING A PROPERTY.
+    //
+    // All three of these used to assign to a TextMetrics and then read its
+    // `width` back -- which is a binding that writes what it depends on. Qt calls
+    // that a binding loop and says so, hundreds of times, every time a sheet
+    // opens; the widths converged only because the last assignment happened to be
+    // the one that mattered, and a binding Qt decides to abandon leaves the sheet
+    // whatever size it was when the loop was cut.
+    //
+    // FontMetrics.advanceWidth is the same measurement as a CALL: no property to
+    // invalidate, so no loop, and one instance can serve every reader -- which
+    // also retires the "two measuring sticks" the loop forced on the key column.
+    // Same font as the delegates draw with, so the numbers still cannot disagree
+    // with the layout.
     readonly property int valueWidth: {
         var w = 0
         for (var i = 0; i < rows.length; i++) {
-            metrics.text = rows[i].desc || ""
-            w = Math.max(w, metrics.width)
+            w = Math.max(w, metrics.advanceWidth(rows[i].desc || ""))
         }
         return Math.ceil(Math.min(w, maxValueWidth))
     }
@@ -91,16 +104,16 @@ Column {
 
     // Exact, wrapped rows included. Column.implicitHeight only counts delegates
     // the Repeater has actually built, so binding a window size to it produced a
-    // sheet tall enough for eleven of twenty rows; TextMetrics knows the line
-    // height for this font before a single delegate exists.
+    // sheet tall enough for eleven of twenty rows; the font metrics know the
+    // line height before a single delegate exists.
     readonly property int contentHeight: {
         var lineH = Math.ceil(metrics.height) + (capsuleKeys ? capPadV * 2 : 0)
         var h = 0
         for (var i = 0; i < rows.length; i++) {
             var n = 1
             if (wrapValues && valueWidth > 0) {
-                metrics.text = rows[i].desc || ""
-                n = Math.max(1, Math.ceil(metrics.width / valueWidth))
+                n = Math.max(1, Math.ceil(metrics.advanceWidth(rows[i].desc || "")
+                                          / valueWidth))
             }
             h += n * lineH + spacing
         }
@@ -110,29 +123,22 @@ Column {
     // The key column is as wide as the widest key, so both columns are flush
     // without anyone counting characters.
     //
-    // TWO measuring sticks, not one. Both this and valueWidth assign to their
-    // TextMetrics before reading it, so sharing a single instance made each
-    // binding invalidate the other -- whichever ran last left its text behind,
-    // and the key column came out as wide as the longest DESCRIPTION. That is
-    // the 250px of dead space the sheet opened with.
-    property int keyWidth: {
+    // ONE measuring stick now. Two were needed only while these were TextMetrics
+    // instances being written to mid-binding: each assignment invalidated the
+    // other's read, so a shared one had the key column come out as wide as the
+    // longest DESCRIPTION -- the 250px of dead space the sheet opened with. A
+    // function cannot do that to anyone. See valueWidth.
+    readonly property int keyWidth: {
         var w = 0
         for (var i = 0; i < rows.length; i++) {
             var k = rows[i].key
             if (!k) continue
-            keyMetrics.text = k
-            w = Math.max(w, keyMetrics.width)
+            w = Math.max(w, metrics.advanceWidth(k))
         }
         return Math.ceil(w) + (capsuleKeys ? capPadH * 2 : 0)
     }
-    TextMetrics {
-        id: keyMetrics
-        font.family: sheet.theme.fontFamily
-        font.pointSize: sheet.theme.sheetFontSize
-        font.weight: sheet.theme.sheetFontWeight
-    }
-    TextMetrics {
-        id: metrics          // values, and the line height every row shares
+    FontMetrics {
+        id: metrics          // both columns, and the line height every row shares
         font.family: sheet.theme.fontFamily
         font.pointSize: sheet.theme.sheetFontSize
         font.weight: sheet.theme.sheetFontWeight

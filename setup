@@ -657,11 +657,47 @@ say "bind that path to a key -- a second run hands over to the first and exits"
 #
 # Exec is the absolute path to THIS checkout, for the reason the banner gives
 # about binding a key: there is no `spoot` on PATH to fall back on.
+#
+# AT MORE THAN ONE SIZE, and this is "the icon shows up for me and for nobody
+# else". The face was installed into hicolor/512x512 alone -- the file's true
+# size, and the honest place for it -- but 512x512 is a LATE addition to the
+# hicolor theme's index, and an icon in a directory the index does not declare is
+# an icon the lookup cannot see. On a machine whose hicolor-icon-theme predates
+# it, `Icon=spoot` resolves to nothing and the launcher draws its fallback. The
+# entry was never the problem and neither were its paths: nothing here is written
+# out, `$here` is where this script found itself and the rest is XDG.
+#
+# So it goes in at the sizes every theme has always declared as well. Downscaled
+# where there is something to downscale with, copied as-is where there is not --
+# a 512px file in a 48x48 directory is a little untidy and every implementation
+# loads and scales it, which is the difference between an icon that is slightly
+# too big and no icon at all.
 say "installing the launcher entry"
-icon_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps"
-app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-mkdir -p "$icon_dir" "$app_dir"
-cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" 2>/dev/null || true
+share_dir="${XDG_DATA_HOME:-$HOME/.local/share}"
+app_dir="$share_dir/applications"
+mkdir -p "$app_dir"
+if [ ! -f "$here/assets/spoot.png" ]; then
+    # LOUDLY. This was `2>/dev/null || true`, so a checkout missing its assets
+    # installed a .desktop naming an icon that was never copied and said it had
+    # installed the launcher entry.
+    warn "assets/spoot.png is missing -- the launcher entry will have no icon"
+else
+    for px in 512 256 128 64 48; do
+        icon_dir="$share_dir/icons/hicolor/${px}x${px}/apps"
+        mkdir -p "$icon_dir" || continue
+        # `command -v`, not have_dep: that function is a roster of spoot's actual
+        # dependencies and a scaler is not one -- it is only nice to have.
+        if [ "$px" = 512 ] || ! command -v magick >/dev/null 2>&1; then
+            cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" \
+                || warn "could not write $icon_dir/spoot.png"
+        else
+            magick "$here/assets/spoot.png" -resize "${px}x${px}" \
+                   "$icon_dir/spoot.png" 2>/dev/null \
+                || cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" \
+                || warn "could not write $icon_dir/spoot.png"
+        fi
+    done
+fi
 cat > "$app_dir/spoot.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
@@ -692,7 +728,13 @@ command -v update-desktop-database >/dev/null 2>&1 \
     && update-desktop-database "$app_dir" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 \
     && gtk-update-icon-cache -qtf \
-       "${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+       "$share_dir/icons/hicolor" >/dev/null 2>&1 || true
+# Plasma reads neither of the above: its menu is built from its own sycoca
+# database, which is why a fresh entry can be invisible there until the next
+# login. Whichever major version is installed, or neither.
+for _k in kbuildsycoca6 kbuildsycoca5; do
+    command -v "$_k" >/dev/null 2>&1 && "$_k" >/dev/null 2>&1 && break
+done || true
 
 # --- over to spoot ----------------------------------------------------------
 #
@@ -704,6 +746,24 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 \
 # it is detached and this returns. nohup and the redirections are what let it
 # outlive the shell: without them it dies with the terminal, and a first run that
 # ends by closing the thing it just started has installed nothing you can use.
+# --- whose rate limit this install spends -----------------------------------
+#
+# spoot ships with one Spotify app id compiled into it, and Spotify's rate limit
+# belongs to the APP rather than to your account -- so every install sharing that
+# id is sharing one pool of requests. When it runs out you get 429 on everything,
+# including a cold start where you have done nothing at all, and there is no
+# amount of good behaviour on this machine that gets it back.
+#
+# Said rather than asked. This script installs and gets out of the way; a prompt
+# here would block an unattended run for something that is optional and takes two
+# minutes to do later.
+if [ "$("$here/bin/spoot" --client-id 2>/dev/null | grep -c shared)" != 0 ]; then
+    say "using the shared Spotify app id -- its rate limit is shared too"
+    say "for a quota of your own: make an app at developer.spotify.com/dashboard"
+    say "with redirect URI http://127.0.0.1:8989/login, then run"
+    say "  $here/bin/spoot --client-id <your client id>"
+fi
+
 say "starting spoot"
 nohup ./bin/spoot >/dev/null 2>&1 </dev/null &
 say "done -- bind $here/bin/spoot to a key and press it"

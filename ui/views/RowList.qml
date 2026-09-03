@@ -45,6 +45,14 @@ GridView {
     // marker and the green -- drawn HERE, from live state, rather than baked
     // into the row's text by whoever built the menu.
     property string playingId: ""
+    // ...AND THE OTHER STRING IT ANSWERS TO. Spotify relinks tracks per market,
+    // so one track has two ids -- the one that is playable where you are and the
+    // one that was asked for -- and which of them a row carries depends on how
+    // the list that built it was fetched. Matching on one alone left the marker
+    // dark on exactly the lists whose tracks got relinked. Empty for the
+    // overwhelming majority of tracks, which are not relinked at all. See the
+    // engine's serve_playback, which sends both.
+    property string playingAltId: ""
     property bool paused: false
     // WHERE YOU LEFT OFF, which is not the same thing as what is playing. On a
     // cold start the poll still names the last track Spotify remembers -- hours
@@ -207,7 +215,8 @@ GridView {
         color: "transparent"
 
         readonly property bool playing:
-            list.playingId.length > 0 && model.id === list.playingId
+            (list.playingId.length > 0 && model.id === list.playingId)
+            || (list.playingAltId.length > 0 && model.id === list.playingAltId)
         readonly property bool lastPick:
             list.lastId.length > 0 && model.id === list.lastId
         // THE GLOW. Behind the row and behind the selection bar, breathing, in the

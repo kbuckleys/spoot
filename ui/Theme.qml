@@ -53,10 +53,27 @@ QtObject {
     // the crumb arrow's near-invisible grey.
     readonly property color dim:         "#6c7086"
     readonly property color playing:     "#b6e0a4"
-    // The played portion of the now-playing strip. Dark enough that the same
-    // green text reads over it as over the unplayed grey -- so the fill marks
-    // progress without the line changing colour underneath you.
-    readonly property color progressFill: "#101b0e"
+    // A `progressFill` STOOD HERE -- the dark green the now-playing strip's
+    // played portion was washed with. The strip is gone (the now-playing line is
+    // the top bar's, and the bar's own ground is the progress) and the wash is
+    // grey now: the top bar's ground is black and the played portion is
+    // messageBg over a bar that paints no ground of its own. See progressWash.
+    // THE PLAYED PORTION OF THE TOP BAR. The grey that bar used to be painted in,
+    // lifted a little so it reads as a fill rather than as the same colour twice.
+    //
+    // A `barBg` STOOD BESIDE THIS -- an opaque-ish black for the bar's own ground
+    // -- and it is gone because the bar must not HAVE a ground. `ground` above is
+    // already black at whatever the opacity setting says, and the bar is drawn on
+    // top of it: a second black over the first compounds the two alphas (0.8 over
+    // 0.8 is 0.96), so the top of the window went nearly solid while the rest of
+    // it stayed see-through. The bar is transparent now and its black is the
+    // panel's own, which is the only way it can follow the setting.
+    //
+    // Grey and not green. The green was a thin rule under the old now-playing
+    // strip -- a scale you read -- and a full-width wash in that colour reads as a
+    // state rather than as a position. This is the bar getting lighter behind the
+    // words as the track runs.
+    readonly property color progressWash: Qt.lighter(messageBg, 1.5)
     readonly property color crumbArrow:  "#454a55"
     // Between ROOTS rather than between steps: a trail you jumped away from and
     // a trail you jumped into are joined by this, not by an arrow. Glyph and
@@ -266,12 +283,13 @@ QtObject {
     // `listenIcon` STOOD HERE at 200 -- the size of the speaker glyph the listener
     // used to draw. There is no glyph any more (see listenPill), and the asset is
     // gone from engine/assets with it.
-    // textbox-prompt-colon padding: 6px 10px 6px 20px -- the glyph sits well in
-    // from the edge, close to what you type.
-    readonly property int promptPadL: 20
+    // textbox-prompt-colon padding: the glyph sits close to what you type.
+    //
+    // `promptPadL` and `entryPad` stood beside this and are gone with the in-panel
+    // input bar that read them: the search field is a floating card now and the
+    // glyph is anchored to the text rather than inset from a panel edge. This one
+    // is the gap between the two, which is the only part that survived.
     readonly property int promptPadR: 10
-    // entry padding: 6px on every side.
-    readonly property int entryPad: 6
 
     // --- rows (ZENON `element`) ---------------------------------------------
     // `rowPadV` stood beside this and was read by nothing: a row's height is
@@ -422,17 +440,21 @@ QtObject {
     // Qt wants a URL; the engine deals in filesystem paths. One conversion, so
     // no caller has to remember the scheme -- and an empty path stays empty
     // rather than becoming a broken "file://".
-    // The now-playing strip and the progress rule beneath it. Present in every
-    // menu, so their height is part of the panel's, not something a view opts in
-    // to.
-    // 24 for the line itself plus 4 above and below, so the track sits clear of
-    // both the separator above it and the window edge below.
+    // The now-playing line's own row, at the top of the panel above the trail.
+    // Present in every menu that has a track, so its height is part of the
+    // panel's, not something a view opts in to.
+    //
+    // TIGHTER THAN IT WAS. 40 was right at the foot of the panel, where the strip
+    // was the last thing before the window edge and wanted room under it. Up here
+    // it is one of two rows sharing a bar, with the column's own padding above it
+    // and the trail immediately below -- so the same 40 read as a band of empty
+    // space above the track name. 28 is the line plus two either side.
     //
     // `progressHeight` and `progressRowHeight` stood here describing a separate
     // progress strip under the track line. There is no such strip: the played
-    // portion is a fill drawn BEHIND the line (see `played`), which is why it
-    // takes the bar's own height and neither number was ever read.
-    readonly property int nowBarHeight: 40
+    // portion is a fill drawn BEHIND the line, which is why it takes the bar's own
+    // height and neither number was ever read.
+    readonly property int nowBarHeight: 28
 
     function fileUrl(path) { return (path && path.length) ? "file://" + path : "" }
     // One of the palette's colours at a given alpha. QML has Qt.lighter and

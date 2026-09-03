@@ -87,8 +87,8 @@ Window {
     // chrome underneath reserved room for a message bar and a now-playing strip
     // that the overlay then painted over -- which is the empty band that sat
     // below every cover and every artist image.
-    readonly property int menuHeight: inputBar.height + message.height + bodyHeight
-                                     + noticeBar.height + nowBar.height + zenon.borderWidth
+    readonly property int menuHeight: message.height + bodyHeight
+                                     + noticeBar.height + zenon.borderWidth
     // A sheet is still a panel and sizes the window to itself. The art viewer is
     // a card ON the menu, so the surface only has to grow enough to hold it --
     // and when the menu is already taller, it does not grow at all.
@@ -303,6 +303,36 @@ Window {
     // -1, not 0: cleared means "no snapshot", and `want` is never negative, so
     // the test above cannot match a spent one even before preHops is consulted.
     property int prePos: -1
+    // THE ROW, NOT MERELY WHERE IT SAT.
+    //
+    // A path step is an INDEX, replayed against whatever the engine draws at that
+    // depth -- and it is only ever the right row while the list is still the list
+    // it was picked from. It often is not: a revalidation lands, a playlist is
+    // edited in another client, a shelf refreshes underneath you. Then the index
+    // picks something else, and because every step after it in the path is fed to
+    // whatever menu that opened, the whole tail is spent on rows nobody chose --
+    // "selecting a track from an album opens another album", and the toast about
+    // a playlist that was never a playlist.
+    //
+    // So the step carries the row's ID beside its index wherever the row has one.
+    // The engine checks the two agree before taking the answer and looks the id up
+    // when they do not; see ui_menu's replay. Rows without one -- verbs in a card,
+    // settings values -- send the index alone and behave exactly as they did.
+    //
+    // ONE FUNCTION because four gestures build a step (a pick, Shift+Return, Tab,
+    // Delete, a middle-click queue) and a step that carries an id from three of
+    // them is worse than one that carries it from none.
+    function rowStep(m, i, extra) {
+        var st = extra || {}
+        var inRange = !!m && i >= 0 && i < m.count
+        // Lua is 1-based, and so are the indices rofi handed back; out of range
+        // keeps the old arithmetic rather than inventing a row.
+        st.i = inRange ? m.get(i).src : (i + 1)
+        var rid = inRange ? (m.get(i).id || "") : ""
+        if (rid.length) st.id = rid
+        return st
+    }
+
     function pushHop(h) {
         // Going somewhere puts the card away. Every root and every ordinary step
         // comes through here, so this is the one place it has to be said.
@@ -1255,9 +1285,9 @@ Window {
         // WHICH FACE THIS CARD IS SHOWING, for the one menu that has two. Empty
         // for every other card, which is what tabHere reads to tell them apart.
         root.ctxMode = d.mode || ""
-        // ...AND WHETHER THE LIST BEHIND IT KEEPS ITS BACKDROP. Absent for every
-        // card but the two that ask -- see contextCover.wanted.
-        root.ctxHideArt = d.hideArt === true
+        // THIS CARD'S HEADER IS A FIELD, not a caption -- the search box, and
+        // nothing else. See Util.serve_draw's `field` and ctxTitleBar below.
+        root.ctxField = d.field === true
         root.ctxMesg = d.mesg || d.prompt || ""
         var list = root.toArray(d.rows)
         // Same rule the body follows: patch where the shape allows it, rebuild
@@ -1315,9 +1345,9 @@ Window {
         // the cover for the rest of the session with nothing on screen to explain
         // it. applyContext sets the two together today and cannot get between
         // them; cleared here, it cannot start to.
-        root.ctxHideArt = false
         if (!root.ctxUp) return
         root.ctxUp = false
+        root.ctxField = false
         root.ctxFilter = ""
         root.ctxAll = []
         root.ctxColsWanted = 1
@@ -1540,14 +1570,9 @@ Window {
     property string ctxMode: ""
     // A CARD THAT TAKES THE BACKDROP DOWN WITH IT.
     //
-    // Not root.noCover, and the difference is the whole point of it: noCover is a
-    // menu saying it has no subject, and applyContext deliberately ignores that
-    // field because every action menu sets it and the list behind the card has
-    // not stopped being about anything. This is the rarer, stronger statement --
-    // Seek and the search type filter are rulers and counts, and a cover peering
-    // out beside them is decoration in the way of a choice. See Util.serve_draw's
-    // hideArt. Cleared by closeContext, so it lives exactly as long as the card.
-    property bool ctxHideArt: false
+    // A CARD WHOSE HEADER IS SOMEWHERE TO TYPE. Only the search box asks for it;
+    // every other card wears a caption. See QueryField.
+    property bool ctxField: false
     // ROWS DOWN THE CARD, which is not the row COUNT once there is more than one
     // column: nine cells in three columns is three rows tall.
     readonly property int ctxRowsUsed: Math.ceil(ctxRows.count / root.ctxCols)
@@ -1557,8 +1582,15 @@ Window {
     readonly property int ctxFits: Math.max(1, Math.floor(
         (root.height - zenon.sheetPad * 2 - zenon.rowHeight - zenon.messagePadV * 4)
         / root.ctxRowH))
-    readonly property int ctxLines: Math.max(1, Math.min(root.ctxRowsUsed,
-                                                         root.ctxG.lines, root.ctxFits))
+    // A FIELD CARD MAY LEGITIMATELY HAVE NO ROWS -- a query that matches none of
+    // the queries remembered under it -- and the floor of one then reserved a
+    // row's worth of ground with nothing in it: a black band under the field as
+    // soon as you typed something new. Every other card is a menu of verbs and
+    // always has at least one, so the floor stays for those.
+    readonly property int ctxLines: {
+        var n = Math.min(root.ctxRowsUsed, root.ctxG.lines, root.ctxFits)
+        return Math.max(root.ctxField ? 0 : 1, n)
+    }
     // THE CAPTION, AS THE MENU WROTE IT. Most cards caption themselves in one
     // line; the trail menu writes two -- what it is, and what Tab does from here,
     // which is the one binding you cannot discover by looking. The card drew a
@@ -1571,8 +1603,15 @@ Window {
     // inside each row, so a further messagePadV * 2 under the last one was a band
     // of ground with nothing above or below it to balance against: the card sat
     // flush at the top and loose at the bottom.
-    readonly property int ctxCardHeight: root.ctxMesgLines.length * zenon.rowHeight
-                                       + zenon.messagePadV * 2
+    // HOW TALL THE CARD'S HEADER IS -- a caption of one or more lines, or the
+    // query field that replaces it. Named once because the bar is drawn from it
+    // and the card is sized from it, and those two disagreeing is a card with its
+    // rows tucked under its own title.
+    readonly property int ctxHeaderH:
+        (root.ctxField ? zenon.rowHeight
+                       : root.ctxMesgLines.length * zenon.rowHeight)
+        + zenon.messagePadV * 2
+    readonly property int ctxCardHeight: root.ctxHeaderH
                                        + root.ctxLines * root.ctxRowH
                                        + zenon.borderWidth
     // THE CARD'S OWN BACKDROP, square against its rows -- the same shape the body
@@ -1619,8 +1658,14 @@ Window {
         // a card wider than the window it is sitting on does not read as floating
         // over spoot, it reads as a mistake. Height is what a short list needed;
         // width was never the problem.
+        // A FIELD CARD HAS A FLOOR. Every other card is as wide as its longest
+        // verb, which is the right answer for a menu and the wrong one for
+        // somewhere you type: the search card came out 214px because the queries
+        // remembered in it happened to be short, and a box that narrow is not one
+        // you would start typing a sentence into. See root.ctxField.
         root.ctxCardWidth = Math.min(root.ctxG.width, panel.width,
                                      Math.max(
+                                        root.ctxField ? 500 : 0,
                                         Math.ceil(w + zenon.rowPadH * 4) * root.ctxCols,
                                         Math.ceil(cap) + zenon.rowPadH * 4)
                                      + root.ctxCoverW)
@@ -1629,6 +1674,8 @@ Window {
     // measurement has to be taken again when it lands. measureCtx assigns to the
     // thing a binding would have to read, which is why it is a function.
     onCtxCoverWChanged: root.measureCtx()
+    // ...and when it becomes a field, which changes the floor above.
+    onCtxFieldChanged: root.measureCtx()
     TextMetrics {
         id: ctxMetrics
         font.family: zenon.fontFamily
@@ -1710,8 +1757,19 @@ Window {
         // throw away what was typed; under a card or a prompt it would redraw the
         // thing in front instead, which is not what is stale. Every one of those
         // ends by itself, and the next draw re-arms this if the copy is still old.
-        running: root.drawStale && !root.ctxUp
-                 && root.promptFor.length === 0 && root.filter.length === 0
+        //
+        // AND THAT INCLUDES A PICTURE, which is the whole of "albumart closes on
+        // its own". This named the card and the prompt by hand and forgot the
+        // viewer -- so opening a cover over a shelf that happened to be stale
+        // armed a 1200ms timer, the refresh it fired came back as a draw, and
+        // applyWhere's dropStaleOverlay found an overlay whose freshness had
+        // already been spent and closed it. Nothing the user did; a housekeeping
+        // round trip walking out through the thing they were looking at.
+        //
+        // `anythingUp` is the list of things in front of the rows and already
+        // exists for exactly this question -- naming three of its four members
+        // here was the second copy that fell behind.
+        running: root.drawStale && !root.anythingUp && root.filter.length === 0
         // Cleared before the ask, so the binding above settles instead of
         // restarting the timer the moment it fires. The answer decides whether
         // there is another one.
@@ -1870,6 +1928,28 @@ Window {
              : "<a href=\"" + href + "\" style=\"color:" + col
                + ";text-decoration:none\">" + body + "</a>"
     }
+    // WHAT THE STEP YOU ARE ON SAYS, now that it is the only thing saying it.
+    //
+    // The trail's name for a step is deliberately short -- "Liked Tracks" -- and
+    // the title row above it carried the engine's detailed version of the same
+    // thing, "Liked Tracks  ⋯  691 tracks". That row is gone (see nowRow, which
+    // took its place), so the detail has nowhere else to live: the last step
+    // carries it instead. It is also the only step this can be done to, because
+    // it is the only one that is not a destination you click back to -- the ones
+    // behind you have to stay the short names they are addressed by.
+    //
+    // ...AND WHAT YOU TYPED WINS OVER BOTH, for exactly the reason the title row
+    // gave: while filtering, the thing you want to see is your own query and how
+    // much of the list it left. That feedback had no other home either.
+    //
+    // Not while COMPOSING -- the search box and the name prompts draw the text
+    // you are typing in a field of their own, and echoing it here as well was the
+    // message bar standing in for a widget that was missing.
+    readonly property string crumbHere: {
+        if (root.filter.length && !root.composing)
+            return root.filter + "  \u2500  " + rows.count
+        return root.viewMesg
+    }
     readonly property string crumbHtml: {
         var out = ""
         for (var i = 0; i < root.crumb.length; i++) {
@@ -1890,7 +1970,10 @@ Window {
             // it are doing.
             if (i > 0) out += root.crumbSpan(seam ? zenon.crumbRoot : col,
                                              root.crumbSep(seam))
-            out += root.crumbSpan(col, root.esc(root.crumb[i]), last ? undefined : i)
+            // The step you are ON says it in full; every step behind it keeps the
+            // short name it is addressed by. See root.crumbHere.
+            var name = (last && root.crumbHere.length) ? root.crumbHere : root.crumb[i]
+            out += root.crumbSpan(col, root.esc(name), last ? undefined : i)
         }
         // What you stepped back OUT of, held at the arrow's own grey so it reads
         // as a path not taken rather than another destination.
@@ -2175,7 +2258,10 @@ Window {
     // True while the Search view is showing its history and nothing has been
     // submitted: there, what you type is a QUERY, not a filter over the history.
     // rofi expressed this with `custom` on the menu; here it is one predicate.
-    readonly property bool isSearchPrompt: root.entryKey === "search" && root.path.length === 0
+    // THE SEARCH BOX IS UP. It used to be a VIEW you had navigated to -- "the
+    // search menu, before a query has been submitted" -- and it is a card now, so
+    // the card says so for itself. See ctxField and Util.serve_draw's `field`.
+    readonly property bool isSearchPrompt: root.ctxUp && root.ctxField
     // WHAT YOU TYPE IS TEXT TO SUBMIT, not a filter over rows: the search box,
     // and the prompts that ask for a name (New Playlist, Rename Playlist).
     // Everywhere else -- search RESULTS included, since those are an ordinary
@@ -2185,6 +2271,18 @@ Window {
     // Backspace all have to agree about which kind of typing this is, and they
     // were agreeing by coincidence.
     readonly property bool composing: root.isSearchPrompt || root.promptFor.length > 0
+    // A FIELD IS UP, whichever of the two it is: a prompt the engine raised (New
+    // Playlist, Rename) or the search box. They are the same thing -- somewhere
+    // to type, floating over whatever you were looking at -- and the search box
+    // used to be a bar inside the panel instead, which is one widget written
+    // twice. See promptCard, and the note where the input bar stood.
+    // Only the engine's own prompts float on their own card now: the search box
+    // lives in the header of the search card, with its history under it.
+    readonly property bool fieldUp: root.promptFor.length > 0
+    // What it is asking for. The engine names its own prompts; the search box is
+    // the one whose label this side knows.
+    readonly property string fieldLabel:
+        root.promptFor.length > 0 ? root.promptFor : "Search"
     // ...and WHETHER TYPING NARROWS THE ROWS, which is a different question and
     // was answered by `composing` only because nobody had asked it separately.
     //
@@ -2255,6 +2353,10 @@ Window {
         (root.playbackLive || root.picked) ? "" : (root.playback.albumId || "")
     // ...and the marker's own id, which is now the one that has to be earned.
     readonly property string liveId: root.playbackLive ? (root.playback.id || "") : ""
+    // The same track's other id, where Spotify relinked it. See RowList's
+    // playingAltId and the engine's serve_playback.
+    readonly property string liveAltId:
+        root.playbackLive ? (root.playback.altId || "") : ""
     readonly property string liveAlbumId:
         root.playbackLive ? (root.playback.albumId || "") : ""
     property int flashSrc: -1
@@ -2317,18 +2419,32 @@ Window {
             return
         }
         var m = root.focusModel
-        var src = (i >= 0 && i < m.count) ? m.get(i).src : (i + 1)
+        // The step this pick will send, built once here because the index inside
+        // it is also what the flash, the cursor memory and `lastSrc` are keyed by
+        // -- see root.rowStep, which is where "which row is this" is decided.
+        var step = root.rowStep(m, i, alt ? {alt: true} : {})
+        var src = step.i
         // A prompt is waiting: what you typed IS the answer. Same string-step
         // mechanism the search box uses.
         if (root.promptFor.length) {
-            root.pushHop({step: root.filter})
+            // liveFilter for the reason the search branch below takes it: the two
+            // are the same string whenever no card is up, and only one of them
+            // stays right if one ever is.
+            root.pushHop({step: root.liveFilter})
             root.promptFor = ""; root.setFilter(""); root.refresh()
             return
         }
-        if (root.isSearchPrompt && root.filter.length) {
+        if (root.isSearchPrompt && root.liveFilter.length) {
             // Free-typed text wins over the highlighted history row, exactly as
             // it does in rofi when custom input is enabled.
-            root.pushHop({step: root.filter})
+            //
+            // ON THE CARD'S OWN STEPS, not on the trail. The search box is a card
+            // and its step lives in ctxHops; pushHop would call closeContext and
+            // drop that step, so the trail would gain the query with no Search in
+            // front of it and the engine would replay it against the wrong menu.
+            // Sent as a card step, the answer is a real menu -- the results -- and
+            // applyWhere adopts BOTH steps onto the trail when it lands.
+            root.ctxHops = root.ctxHops.concat([{step: root.liveFilter}])
             root.setFilter(""); root.refresh()
             return
         }
@@ -2352,7 +2468,7 @@ Window {
         // every menu it reaches answers `context`. If one ever does not, applyWhere
         // adopts the hop into the trail and the result is exactly what pushHop
         // would have given -- so the wrong guess costs nothing.
-        var hop = {step: alt ? {i: src, alt: true} : src}
+        var hop = {step: step}
         if (root.ctxUp || alt) root.ctxHops = root.ctxHops.concat([hop])
         else root.pushHop(hop)
         root.refresh()
@@ -2884,7 +3000,12 @@ Window {
         // Composing is exactly the state where what you typed is the answer
         // rather than a filter over rows, so it is also exactly the state where
         // there needing to BE a row is a misreading. See root.composing.
-        if (root.composing && root.filter.length) root.activate(-1, alt === true)
+        // liveFilter, not root.filter: the search box is a CARD now, so what you
+        // type lands in ctxFilter and root.filter is empty -- this read it and a
+        // brand-new query with nothing in the history to match did nothing at all,
+        // which is the same "search is unusable until it has been used" the note
+        // above describes, arriving by a different door.
+        if (root.composing && root.liveFilter.length) root.activate(-1, alt === true)
     }
     // dx moves within a row, dy between rows. A list is one column wide, so dy
     // is the only axis that means anything there -- which is also how rofi
@@ -3114,8 +3235,8 @@ Window {
         // the body's otherwise, which is the same pair activate() and
         // deleteEntry() already use.
         root.rememberPos()
-        var hop = {step: {i: root.focusModel.get(root.focusItem.currentIndex).src,
-                          tab: true}}
+        var hop = {step: root.rowStep(root.focusModel,
+                                      root.focusItem.currentIndex, {tab: true})}
         if (root.ctxUp) root.ctxHops = root.ctxHops.concat([hop])
         else root.pushHop(hop)
         root.refresh()
@@ -3132,7 +3253,7 @@ Window {
         var m = root.focusModel
         if (!m || i < 0 || i >= m.count) return
         root.rememberPos()
-        root.pushHop({step: {i: m.get(i).src, queue: true}})
+        root.pushHop({step: root.rowStep(m, i, {queue: true})})
         root.refresh()
     }
     function deleteEntry() {
@@ -3141,8 +3262,8 @@ Window {
             return
         }
         root.rememberPos()
-        root.pushHop({step: {i: root.focusModel.get(root.focusItem.currentIndex).src,
-                             del: true}})
+        root.pushHop({step: root.rowStep(root.focusModel,
+                                        root.focusItem.currentIndex, {del: true})})
         root.refresh()
     }
     function goBack() {
@@ -3394,6 +3515,7 @@ Window {
             flashSrc: root.flashSrc
             flashSeq: root.flashSeq
             playingId: root.liveId
+            playingAltId: root.liveAltId
             lastId: root.lastId
             paused: root.playback.playing !== true
             // Per-theme, with ZENON's defaults where a theme says nothing.
@@ -3602,6 +3724,38 @@ Window {
         // stuttering. The listener dim is the only part that needs easing of its
         // own, and it has it, on a value of its own.
         opacity: root.showFactor * root.listenDim
+        // WHO IS AT THE FOOT OF THE PANEL, and therefore wears its bottom
+        // corners. The column is a stack of things that each collapse to nothing
+        // when they have nothing to say, so which of them is last is a QUESTION
+        // rather than a constant -- and every one of them used to answer it for
+        // itself or not at all. The now-playing strip answered it (see
+        // the old now-playing strip's `corner`); the notice bar and the body did
+        // not, so with no track playing the last thing in the column drew square
+        // into two rounded corners. That is the backdrop cutting the corner off,
+        // and the highlight bar squaring the one on the right: one omission, two
+        // complaints.
+        //
+        // Two candidates now rather than three -- the strip moved to the top of
+        // the panel and the title row it replaced was never at the foot.
+        //
+        // Inset by the border, which all of these sit inside of.
+        readonly property int footCorner: zenon.radius - zenon.borderWidth
+        // HOW FAR BACK THE LIST IS PUSHED, as one number.
+        //
+        // Two things float over it and neither is more entitled to the treatment
+        // than the other: a card of verbs, and a sheet of details or keybinds. The
+        // card had it and the sheet did not, so Track Details, Album Details and
+        // the keybind list floated over a perfectly sharp menu whose rows read
+        // straight through their own translucent ground.
+        //
+        // Read off their opacities rather than off the state that drives them, so
+        // this follows whatever is arriving or leaving -- and a sheet opened FROM a
+        // card (Track Details is a verb in one) keeps the treatment through the
+        // handover instead of flickering between the two.
+        //
+        readonly property real veil: Math.max(ctxLayer.opacity, sheetCard.opacity)
+        readonly property bool noticeAtFoot: noticeBar.height > 0
+        readonly property bool bodyAtFoot: noticeBar.height <= 0
         // The shadow is OUTSIDE this item, above -- a child of the panel would
         // be simpler, but see Shadow.qml for why all three casters are siblings.
         // --- the panel (ZENON `window`) -----------------------------------------
@@ -3633,75 +3787,19 @@ Window {
             // showed as the album cover clipping the frame on the left.
             anchors.margins: zenon.borderWidth
 
-            // --- input bar (ZENON `inputbar`, search.rasi) ----------------------
+            // AN INPUT BAR STOOD HERE, first in the column, drawn only by the
+            // search view. It is a FLOATING FIELD now -- see promptCard, which was
+            // already exactly this for New Playlist and Rename and had no business
+            // being two things.
             //
-            // FIRST in the column, because search.rasi orders its mainbox
-            // [inputbar, message, listview] and every theme that has one puts it
-            // above the message bar. Drawn only where the theme leaves it enabled --
-            // which is search and nothing else, see Theme.glyphSearch.
-            //
-            // What you type in the search box is a QUERY, not a filter over the
-            // history rows behind it, and until now it had nowhere to appear except
-            // the message bar, where it read as a filter with a match count after
-            // it. This is the field it always belonged in.
-            Item {
-                id: inputBar
-                width: parent.width
-                visible: root.themeName === "search"
-                height: visible ? Math.max(promptGlyph.implicitHeight,
-                                           entryText.implicitHeight) + zenon.entryPad * 2
-                                : 0
-                Text {
-                    id: promptGlyph
-                    anchors { left: parent.left; leftMargin: zenon.promptPadL
-                              verticalCenter: parent.verticalCenter }
-                    text: zenon.glyphSearch
-                    color: zenon.playing
-                    font { family: zenon.fontFamily; pointSize: zenon.promptSize
-                           weight: Font.DemiBold }
-                }
-                Text {
-                    id: entryText
-                    anchors { left: promptGlyph.right; leftMargin: zenon.promptPadR
-                              verticalCenter: parent.verticalCenter }
-                    // As wide as the text needs and no wider, so the caret can sit
-                    // against its end rather than at a fixed stop. Sized rather than
-                    // anchored on both sides because the caret anchors to THIS, and
-                    // anchoring the two to each other is a loop.
-                    width: Math.min(implicitWidth,
-                                    inputBar.width - promptGlyph.width - zenon.promptPadL
-                                    - zenon.promptPadR - zenon.entryPad - caretWidth - 4)
-                    readonly property int caretWidth: 2
-                    text: root.filter
-                    color: zenon.playing
-                    // From the LEFT, so the end you are typing at is the end you can
-                    // still see once a query outgrows the field.
-                    elide: Text.ElideLeft
-                    font { family: zenon.fontFamily; pointSize: zenon.entrySize
-                           weight: Font.DemiBold }
-                }
-                // rofi drew a cursor here and ZENON never styled it, so it takes the
-                // entry's own colour and height. It is what says "type" when the
-                // field is empty, which is the whole state the search box opens in.
-                Rectangle {
-                    id: caret
-                    anchors { left: entryText.right; leftMargin: 2
-                              verticalCenter: parent.verticalCenter }
-                    width: entryText.caretWidth
-                    height: entryText.implicitHeight - 2
-                    color: zenon.playing
-                    visible: inputBar.visible
-                    SequentialAnimation on opacity {
-                        loops: Animation.Infinite
-                        running: inputBar.visible
-                        NumberAnimation { from: 1; to: 0; duration: 500
-                                          easing.type: Easing.InOutQuad }
-                        NumberAnimation { from: 0; to: 1; duration: 500
-                                          easing.type: Easing.InOutQuad }
-                    }
-                }
-            }
-
+            // Its removal is also the "solid corners behind the rounded corners in
+            // search". This bar was a transparent Item with no ground of its own,
+            // so the panel's rounded corner showed THROUGH it -- and the message
+            // bar below was told to drop its own rounding on the grounds that
+            // something was above it. The result was a rounded corner in the
+            // panel's ground with the message bar's lighter grey squared off
+            // immediately beneath it: two corners, one of them a box. With nothing
+            // above it, the message bar is the top of the panel and rounds like it.
             // --- message bar (ZENON `message`) ---------------------------------
             //
             // A Column inside an Item, rather than one Rectangle whose height was
@@ -3721,8 +3819,32 @@ Window {
             Item {
                 id: message
                 width: parent.width
-                readonly property bool hasMesg: messageText.text.length > 0
+                // IS THERE A TRACK TO SHOW. What the title row's `hasMesg` used
+                // to answer, asked of the thing that replaced it: the now-playing
+                // line collapses with nothing loaded, exactly as the strip at the
+                // foot of the panel used to.
+                //
+                // NOT WHILE LISTENING, for the reason the old strip gave: the card
+                // floating over the panel is the only thing spoot is doing at that
+                // moment, and a line naming whatever happens to be playing
+                // underneath answers a question nobody asked.
+                readonly property bool hasNow:
+                    !!(root.playback && root.playback.name) && !root.listenMode
                 height: msgCol.height
+                // HOW FAR THE TRACK HAS RUN, and where the wash stops being solid.
+                // Kept as a FRACTION rather than a width: a gradient stop is a
+                // float and is rasterised continuously, so the edge lands between
+                // pixels and slides. A clipped Item sized to `width * progress` is
+                // a scissor rectangle -- integers -- and on a 1000px bar under a
+                // six-minute track it sat still for a third of a second and then
+                // jumped a whole pixel. That was the stutter.
+                readonly property real head: Math.max(0, Math.min(1, root.progress))
+                // How far the leading edge is softened over. In pixels, converted
+                // once: a fixed fraction would be a hard edge on a narrow bar and
+                // a wide smear on a wide one.
+                readonly property real feather:
+                    width > 0 ? Math.min(head, 34 / width) : 0
+                readonly property real headStart: head - feather
                 // NO `visible: height > 0`. In Qt Quick an item's `visible`
                 // reports its EFFECTIVE visibility, so a false parent makes every
                 // child read false too -- and this bar's height is added up from
@@ -3737,7 +3859,11 @@ Window {
                 // Saying so twice was what broke it.
                 Rectangle {
                     anchors.fill: parent
-                    color: zenon.messageBg
+                    // NO GROUND OF ITS OWN. The panel's ground is already black at
+                    // the opacity setting and this is drawn over it, so a black
+                    // here compounds the two alphas and the top of the window goes
+                    // solid while the rest stays see-through. See Theme.progressWash.
+                    color: "transparent"
                     // AND THE PANEL'S TOP CORNERS, the way the now bar wears its
                     // bottom pair. This bar is the topmost thing in every menu but
                     // search, and square it painted its own colour into the corner
@@ -3745,23 +3871,65 @@ Window {
                     // and visible once you know it is there. In search the input
                     // bar is above it and the corners are the panel's own, so the
                     // rounding is dropped rather than applied halfway down.
-                    topLeftRadius: inputBar.visible ? 0 : zenon.radius - zenon.borderWidth
-                    topRightRadius: inputBar.visible ? 0 : zenon.radius - zenon.borderWidth
-                    // TOP RULE TOO, under the input bar. ZENON gives the message
-                    // bar a bottom border and search.rasi alone overrides it to
-                    // `1px 0px 1px 0px` -- because search is the one menu with
-                    // something ABOVE this bar, and without the rule the field
-                    // and the caption ran into each other as one block.
-                    Rectangle {
-                        anchors { left: parent.left; right: parent.right; top: parent.top }
-                        height: 1
-                        color: zenon.separator
-                        visible: inputBar.visible
-                    }
+                    // ALWAYS THE PANEL'S TOP CORNERS. This used to drop them
+                    // whenever the search view's input bar was above it, along
+                    // with a top rule to separate the two -- and there is nothing
+                    // above it any more: the field floats. See the note where that
+                    // bar stood.
+                    topLeftRadius: zenon.radius - zenon.borderWidth
+                    topRightRadius: zenon.radius - zenon.borderWidth
                     Rectangle {
                         anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
                         height: 1
                         color: zenon.separator
+                    }
+                }
+                // THE PROGRESS BAR, and it is now the GROUND OF THIS BAR rather
+                // than a strip at the foot of the panel.
+                //
+                // One gradient, full width, solid to the playhead and feathered
+                // out over 34px after it -- so there is no edge to see, which is
+                // what made the old fill look unfinished when it was clipped to a
+                // hard vertical cut. It used to be three layers (a wash, a
+                // breathing bloom around the head, and a 2px green rule along the
+                // bottom); the rule is gone with the strip that carried it, and a
+                // bloom on the bar that holds the trail would be a light pulsing
+                // behind text you are trying to read.
+                //
+                // The same corners the ground turns, or this paints a square top
+                // over the panel's own curve.
+                Rectangle {
+                    anchors.fill: parent
+                    visible: message.head > 0
+                    topLeftRadius: zenon.radius - zenon.borderWidth
+                    topRightRadius: zenon.radius - zenon.borderWidth
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: zenon.progressWash }
+                        GradientStop { position: message.headStart
+                                       color: zenon.progressWash }
+                        GradientStop { position: message.head
+                                       color: zenon.fade(zenon.progressWash, 0) }
+                        GradientStop { position: 1.0
+                                       color: zenon.fade(zenon.progressWash, 0) }
+                    }
+                }
+                // THE WHEEL OVER THE BAR SEEKS. It is the widest target in the
+                // window and is already a picture of the position, so moving the
+                // position is the gesture it was asking for. Declared before the
+                // content so presses fall through to the trail steps and the
+                // transport glyphs, which are controls of their own.
+                //
+                // Five seconds a notch rather than the keyboard's ten: a wheel is
+                // spun, so the small step is the one that can still be aimed.
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.NoButton
+                    onWheel: function (e) {
+                        var d = e.angleDelta.y !== 0 ? e.angleDelta.y : e.angleDelta.x
+                        if (d === 0) return
+                        root.control("seek", d > 0 ? 5 : -5)
+                        e.accepted = true
                     }
                 }
                 Column {
@@ -3772,53 +3940,59 @@ Window {
                     // be the same loop again in a smaller circle -- and it
                     // resolves to "nothing to show", which is a bar that never
                     // appears rather than one that misbehaves.
-                    topPadding: (messageText.visible || crumbRow.visible) ? zenon.messagePadV : 0
+                    topPadding: (message.hasNow || crumbRow.visible) ? zenon.messagePadV : 0
                     bottomPadding: topPadding
                     spacing: 0
-                Text {
-                    id: messageText
-                    visible: message.hasMesg
-                    // Inside the padding and ELIDED. It was neither: given the
-                    // column's full width with nothing to stop it, a long
-                    // caption -- the playing track's name and every artist on it
-                    // -- ran off both edges of the panel. ZENON truncates the
-                    // same line for the same reason (truncate_text, 49 chars).
-                    x: zenon.messagePadH
-                    width: msgCol.width - zenon.messagePadH * 2
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    // What you typed wins over what the view is called: while
-                    // filtering, the thing you want to see is your own query.
-                    //
-                    // Unless there is a field for it. With the input bar up the
-                    // query has a home of its own, and echoing it here as well --
-                    // with a match count against rows it does not even filter --
-                    // was the message bar standing in for a widget that was missing.
-                    // The prompt is a CARD now (see promptCard), so the bar goes
-                    // back to describing the menu underneath rather than echoing
-                    // a field that is drawn somewhere else.
-                    text: (inputBar.visible || root.promptFor.length)
-                          ? root.viewMesg
-                          : (root.filter.length ? (root.filter + "  \u2500  " + rows.count)
-                                                : root.viewMesg)
-                    color: zenon.playing
-                    font.family: zenon.fontFamily
-                    font.pointSize: zenon.fontSize
-                    font.bold: true
 
-                    // THE TITLE IS A CONTROL. Every step of the trail below it is
-                    // already clickable; the line naming where you ARE was the one
-                    // part of the bar that did nothing. Clicking it opens the menu
-                    // of the whole path -- the same card Tab opens -- which makes
-                    // the bar navigable end to end with the mouse alone.
-                    //
-                    // openCard, not openView: the trail menu is a card beside the
-                    // trail and never a step on it, which is what keeps it out of
-                    // the very list it is showing.
-                    MouseArea {
+                // WHAT IS PLAYING, AT THE TOP OF THE PANEL.
+                //
+                // THE TITLE ROW STOOD HERE and is gone. It named the menu you were
+                // already looking at -- "Liked Tracks", over a list of liked
+                // tracks, above a trail whose last step said it a third time --
+                // and it cost a row of chrome on every menu to do it. The trail
+                // below says where you are, and says it navigably; the floating
+                // cards keep their own titles, because a card really is about
+                // something you cannot otherwise see.
+                //
+                // AND THE NOW-PLAYING STRIP CAME UP HERE from the foot of the
+                // panel to take the row. It is the one line that is never about
+                // the menu, so it is the one line worth a permanent place -- and
+                // up here it sits on the progress wash behind it, which is what
+                // lets the bar itself be the progress bar.
+                Item {
+                    id: nowRow
+                    width: parent.width
+                    // Collapsed rather than hidden, so the panel closes the gap
+                    // instead of leaving a band of nothing.
+                    height: message.hasNow ? zenon.nowBarHeight : 0
+                    visible: height > 0
+                    clip: true
+                    Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+                    NowContent {
                         anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.openCard("trail-jump")
+                        theme: zenon
+                        fg: zenon.playing
+                        // The transport glyph is a control beside the title now,
+                        // not the first character of it -- see NowContent's modes
+                        // row -- so this is the name and the artists and nothing
+                        // else.
+                        track: {
+                            var p = root.playback
+                            if (!p || !p.name) return ""
+                            return p.name + (p.artists ? zenon.sep + p.artists : "")
+                        }
+                        icons: root.playback.icons || ""
+                        elapsed: root.clock(root.positionMs)
+                        total: root.clock(root.playback.duration || 0)
+                        shuffle: root.playback.shuffle === true
+                        playing: root.playback.playing === true
+                        repeatMode: root.playback.repeat_ || "off"
+                        onControlRequested: function (a) { root.control(a) }
+                        // The playing track's verbs -- the same card Shift+Return
+                        // reaches from any row of it, and the same one Main's
+                        // Playback tile opens.
+                        onTitleClicked: root.openCard("track-actions")
                     }
                 }
 
@@ -4074,6 +4248,46 @@ Window {
             id: bodyArea
             width: parent.width
             height: root.bodyHeight
+            // CUT TO THE PANEL'S BOTTOM CORNERS when this is the foot of the
+            // column -- which it is whenever nothing is playing and there is no
+            // notice, since both of those collapse to nothing. Two things in here
+            // reach that edge and neither is a Rectangle, so neither can round a
+            // corner for itself: the backdrop is an Image and drew a hard square
+            // into the bottom-left arc, and the rows are a view whose highlight bar
+            // runs the full width and squared off the bottom-right one. Both
+            // painted over the border while they were at it.
+            //
+            // ...AND BLURRED, while something floats over it.
+            //
+            // ONE LAYER DOES BOTH, and it has to. The blur used to be a separate
+            // item drawing a BLURRED COPY over the rows -- a ShaderEffectSource of
+            // bodyRow, then a MultiEffect over that -- and a ShaderEffectSource
+            // does not come back right when the item it samples, or anything
+            // inside it, is LAYERED. Measured three ways with a card open over a
+            // masked list: the mask on bodyRow drew the cover at several times its
+            // size; pinning the capture rect fixed the size and killed the blur;
+            // moving the masks down onto the cover and the list killed it again.
+            //
+            // As a layer EFFECT there is nothing to sample. The rows are rendered
+            // once into a texture and the same MultiEffect blurs it and cuts the
+            // corners off it -- so the two cannot fight, and the blur now covers
+            // the scroll mark and the loading glow as well, which are part of the
+            // list and were sharp beside a blurred one.
+            //
+            // Only while there is something to do: a layer is an offscreen texture
+            // and neither half is free. With a now-playing strip below and no card
+            // in front, this is a plain unlayered Item exactly as it always was.
+            layer.enabled: panel.bodyAtFoot || panel.veil > 0
+            layer.effect: MultiEffect {
+                maskEnabled: panel.bodyAtFoot
+                maskSource: bodyFoot.texture
+                blurEnabled: panel.veil > 0
+                // Animated rather than switched, so the list settles back rather
+                // than snapping sharp the instant a card starts leaving.
+                blur: panel.veil
+                blurMax: 40
+                autoPaddingEnabled: false
+            }
 
             Row {
                 id: bodyRow
@@ -4089,6 +4303,17 @@ Window {
                 transformOrigin: Item.Center
                 scale: root.bodyZoom
                 opacity: root.bodyFade
+
+                // NOT MASKED HERE, however much this looks like the place for it.
+                // The two things inside carry it one each -- see contextCover and
+                // the body Loader. Masking the Row itself is the obvious way to cut
+                // the panel's bottom corners and it cannot work: the card blur
+                // takes a ShaderEffectSource of this very Row, and a
+                // ShaderEffectSource of a LAYERED item does not come back right.
+                // Measured, with a card open over a masked list: the cover drawn at
+                // several times its size, and then -- once the capture rect was
+                // pinned to fix that -- no blur at all. The children carry the
+                // mask instead, so nothing the blur samples is layered.
 
                 // Only a list gets a cover beside it: a grid already shows the
                 // artwork of everything in it, and an action menu is the one view
@@ -4141,15 +4366,13 @@ Window {
                         // The rows stay, dimmed, so you can still see you have
                         // not gone anywhere.
                         && !root.listenMode
-                        // ...nor behind a card that asked for it gone. Same case
-                        // the listener makes, said by the menu instead of named
-                        // here: Seek and the search type filter are about a
-                        // position and a set of counts, and the cover of whatever
-                        // happens to be playing beside either is decoration in
-                        // the way of the choice. See root.ctxHideArt -- it is
-                        // cleared with the card, so the backdrop comes back on
-                        // its own.
-                        && !root.ctxHideArt
+                        // NO CARD TAKES IT DOWN. A card floats OVER this list;
+                        // the list has not stopped being about what it was about,
+                        // and stripping its picture while a ruler or a set of
+                        // counts is up made the whole panel change shape for
+                        // something that changed nothing. What a card can say is
+                        // that IT has no picture, which is `no_cover` and is
+                        // answered where cards resolve their own art.
                         && root.themeName !== "trail" && root.themeName !== "search"
                         && root.scope !== "system" && root.scope !== "lyrics"
                     width: wanted ? root.bodyHeight : 0
@@ -4288,6 +4511,21 @@ Window {
             // the positioner, so the mark -- a full body's width of it -- was
             // parked one whole list to the right of the panel, out on the desktop.
             // bodyArea is a plain Item and positions nothing, so the binding holds.
+            // THE SHAPE THE WHOLE BODY IS CUT TO, when it is the last thing in
+            // the column and its bottom edge is the panel's own. See bodyArea.
+            //
+            // In bodyArea and NOT in the Row: a Row POSITIONS its children, so a
+            // mask declared in there would be laid out beside the list and push it
+            // off the panel -- the same trap the ScrollMark below documents.
+            // bodyArea is a plain Item and positions nothing.
+            CornerMask {
+                id: bodyFoot
+                width: bodyArea.width
+                height: bodyArea.height
+                bottomLeft:  panel.footCorner
+                bottomRight: panel.footCorner
+            }
+
             ScrollMark {
                 theme: zenon
                 view: body.item
@@ -4375,47 +4613,28 @@ Window {
             // needs no geometry of its own. It used to spell bodyRow's box out by
             // hand because it lived one level up and `anchors.fill` is silently
             // refused across that gap.
-            Item {
-                id: ctxBlur
+            // ...and darkened over the blur, because a blurred dark list is still
+            // a dark list and the card needs somewhere to sit. Lighter than a full
+            // scrim: this only has to push one back, not hide it.
+            //
+            // INSIDE bodyArea, so the layer above cuts it to the panel's corners
+            // along with everything else. Being blurred with them costs nothing --
+            // a blurred flat colour is the same flat colour.
+            Rectangle {
+                id: ctxScrim
                 anchors.fill: bodyRow
-                // ONE STATE, ONE ANIMATION, owned by the layer that is actually
-                // being opened. Repeating the condition here would be a second
-                // thing to keep in agreement with it.
-                opacity: ctxLayer.opacity
+                color: Qt.rgba(0, 0, 0, 0.45)
+                opacity: panel.veil
                 visible: opacity > 0
-                ShaderEffectSource {
-                    id: bodyShot
-                    anchors.fill: parent
-                    sourceItem: bodyRow
-                    live: true
-                    hideSource: false
-                    visible: false
-                }
-                MultiEffect {
-                    anchors.fill: parent
-                    source: bodyShot
-                    blurEnabled: true
-                    blur: 1.0
-                    blurMax: 40
-                    autoPaddingEnabled: false
-                }
-                // ...and darkened over the blur, because a blurred dark list is
-                // still a dark list and the card needs somewhere to sit. Lighter
-                // than the art viewer's 0.62: that scrim hides a menu behind a
-                // picture, and this one only has to push one back.
-                Rectangle {
-                    anchors.fill: parent
-                    color: Qt.rgba(0, 0, 0, 0.45)
-                }
             }
             }
 
             // --- notification -----------------------------------------------------
             // Above the now-playing strip when there is a track, at the very foot of
             // the panel when there is not -- it is the last thing in the column
-            // either way, and nowBar collapses to nothing on its own with nothing
-            // playing. So this needs no rule about where to sit; the column already
-            // has one.
+            // either way. So this needs no rule about where to sit; the column
+            // already has one -- and with the now-playing strip gone from the foot
+            // it is simply the last thing in it.
             //
             // It grows the panel rather than overlaying it. A toast that floats over
             // the rows would hide whichever one it landed on, and the row it lands on
@@ -4427,6 +4646,12 @@ Window {
                 visible: height > 0
                 clip: true
                 color: zenon.messageBg
+                // ...AND THE PANEL'S BOTTOM CORNERS when nothing is playing, for
+                // the reason the body wears them when there is no notice: whatever
+                // is last in this column is the bottom of the panel. See
+                // panel.footCorner.
+                bottomLeftRadius:  panel.noticeAtFoot ? panel.footCorner : 0
+                bottomRightRadius: panel.noticeAtFoot ? panel.footCorner : 0
                 Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
                 Rectangle {
                     anchors { left: parent.left; right: parent.right; top: parent.top }
@@ -4445,249 +4670,12 @@ Window {
                 }
             }
 
-            // --- now playing ------------------------------------------------------
-            // The progress IS the bar: a fill that sweeps under the text rather than
-            // a separate rule below it. Ahead of the fill the line is green on grey;
-            // behind it, black on green. Two layers of the same content -- the lower
-            // one plain, the upper one inverted and clipped to the fill -- so the
-            // letters line up exactly and the colour change happens mid-glyph.
-            Item {
-                id: nowBar
-                width: parent.width
-                // ACTIVE means a track is loaded, playing OR paused -- a paused
-                // track is still the thing you are on, and hiding it would make
-                // pause look like stop. Nothing loaded at all collapses the bar.
-                readonly property bool active: !!(root.playback && root.playback.name)
-                readonly property string trackText: {
-                    var p = root.playback
-                    if (!p || !p.name) return ""
-                    // The transport glyph and separator are the engine's own, so
-                    // this strip reads as the same program as the message bar.
-                    // NO TRANSPORT GLYPH. It used to open this string, which
-                    // meant it travelled with the name, elided away on a long one,
-                    // and could not be pressed. It is a control beside the title
-                    // now -- see NowContent's modes row.
-                    return p.name + (p.artists ? zenon.sep + p.artists : "")
-                }
-                // NOT WHILE LISTENING. The card floating above the panel is the
-                // only thing spoot is doing at that moment, and a strip naming
-                // whatever happens to be playing underneath answers a question
-                // nobody asked -- the listener is about a track that is NOT that
-                // one. Collapsed rather than hidden, so the panel closes the gap
-                // instead of leaving a band of nothing.
-                height: (active && !root.listenMode) ? zenon.nowBarHeight : 0
-                visible: height > 0
-                clip: true
-                Behavior on height { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-
-                // THE BOTTOM OF THE PANEL is this strip, so it wears the panel's
-                // bottom corners. Square, it painted over them and the rounding
-                // showed as two notches of desktop. Inset by the border, which
-                // this sits inside of.
-                readonly property int corner: zenon.radius - zenon.borderWidth
-
-                // WHERE THE PLAYHEAD IS, as a FRACTION rather than a width -- and
-                // that is the whole of why this moves smoothly now.
-                //
-                // Every layer below is drawn at the FULL width of the bar and
-                // made to end at the right place by its gradient. A gradient stop
-                // is a float and the gradient is rasterised continuously, so the
-                // edge lands between pixels and stays there: it slides. What
-                // stood here instead was an Item sized to `width * progress` with
-                // `clip: true`, and a clip is a scissor rectangle -- integers, no
-                // fractions. On a 1000px bar under a six-minute track the fill
-                // advances 2.7 pixels a SECOND, so the scissor sat still for a
-                // third of a second and then jumped a whole pixel. That is the
-                // stutter, and no amount of driving it faster could have fixed it.
-                readonly property real head: Math.max(0, Math.min(1, root.progress))
-                // How far the leading edge is softened over. In pixels, converted
-                // once: a fixed fraction would be a hard edge on a narrow bar and
-                // a wide smear on the details sheet.
-                readonly property real feather:
-                    width > 0 ? Math.min(head, 34 / width) : 0
-                readonly property real headStart: head - feather
-                // The bloom around the playhead: where it starts, and where it
-                // peaks. Both clamped the same way, and never past the head.
-                readonly property real bloomFrom:
-                    width > 0 ? Math.max(0, head - Math.min(head, 130 / width)) : 0
-                readonly property real bloomPeak:
-                    width > 0 ? Math.max(bloomFrom, head - Math.min(head, 34 / width)) : 0
-                // HOW FAR THE BAR'S CORNER HAS COME IN at the height the rule
-                // sits at. The corner is an arc of radius r whose centre is r up
-                // from the bottom, so at a height y below that centre the edge is
-                // r - sqrt(r^2 - (r-y)^2) in from the corner.
-                //
-                // Measured at the rule's LOWEST edge, which is where the curve has
-                // come furthest in -- taking its top edge instead would leave the
-                // bottom row of the line poking out, which is the whole artifact
-                // this exists to avoid. Rounded up for the same reason.
-                readonly property int ruleLift: nowBar.corner > 1 ? 1 : 0
-                readonly property int ruleInset: {
-                    var r = nowBar.corner, y = nowBar.ruleLift
-                    if (r <= 0 || y >= r) return 0
-                    return Math.ceil(r - Math.sqrt(r * r - (r - y) * (r - y)))
-                }
-
-                // The unplayed remainder.
-                Rectangle {
-                    anchors.fill: parent
-                    color: zenon.messageBg
-                    bottomLeftRadius: nowBar.corner
-                    bottomRightRadius: nowBar.corner
-                    Rectangle {
-                        anchors { left: parent.left; right: parent.right; top: parent.top }
-                        height: 1
-                        color: zenon.separator
-                    }
-                }
-                // THE PLAYED PORTION, in three layers, each of them the full width
-                // of the bar and each ending where its gradient says. See
-                // nowBar.head.
-                //
-                // 1 -- THE WASH. A dark green ground behind the line rather than an
-                // inverted copy of it, so the track and the clock stay one colour
-                // and the fill reads as progress instead of as the text changing
-                // colour mid-word.
-                //
-                // It used to end in a hard vertical cut, because it was clipped:
-                // opaque green on one side of a single pixel column and the empty
-                // bar on the other, which is the seam that made this look unfinished.
-                // Now it fades out over 34px, and there is no edge to see at all.
-                Rectangle {
-                    anchors.fill: parent
-                    bottomLeftRadius: nowBar.corner
-                    bottomRightRadius: nowBar.corner
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: zenon.progressFill }
-                        GradientStop { position: nowBar.headStart
-                                       color: zenon.progressFill }
-                        GradientStop { position: nowBar.head
-                                       color: zenon.fade(zenon.progressFill, 0) }
-                        GradientStop { position: 1.0
-                                       color: zenon.fade(zenon.progressFill, 0) }
-                    }
-                }
-                // 2 -- THE BLOOM. A lens of light gathered around the playhead and
-                // falling away on BOTH sides, so the brightest part of the strip is
-                // the place the music has got to. What stood here brightened all the
-                // way up to the hard edge and stopped dead against it, which is what
-                // read as a smear rather than a light.
-                Rectangle {
-                    anchors.fill: parent
-                    // THE SAME CORNERS THE WASH TURNS. Without them this painted a
-                    // square bottom-left over the rounded bar and stuck out past
-                    // the panel's own curve -- nowBar clips, but a clip is a
-                    // rectangle and cannot round anything.
-                    bottomLeftRadius: nowBar.corner
-                    bottomRightRadius: nowBar.corner
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: zenon.fade(zenon.playing, 0) }
-                        GradientStop { position: nowBar.bloomFrom
-                                       color: zenon.fade(zenon.playing, 0) }
-                        GradientStop { position: nowBar.bloomPeak
-                                       color: zenon.fade(zenon.playing, 0.16) }
-                        GradientStop { position: nowBar.head
-                                       color: zenon.fade(zenon.playing, 0) }
-                        GradientStop { position: 1.0; color: zenon.fade(zenon.playing, 0) }
-                    }
-                    // Breathing while the track plays and still when it does not, so
-                    // the strip has a pulse exactly as long as there is something to
-                    // have one. Slow, and never all the way down: this sits on screen
-                    // for the length of every track, so it breathes at the pace of
-                    // breathing rather than of a spinner.
-                    SequentialAnimation on opacity {
-                        loops: Animation.Infinite
-                        running: root.playback.playing === true && nowBar.active
-                        NumberAnimation { from: 0.55; to: 1.0; duration: 1400
-                                          easing.type: Easing.InOutSine }
-                        NumberAnimation { from: 1.0; to: 0.55; duration: 1400
-                                          easing.type: Easing.InOutSine }
-                    }
-                }
-                // 3 -- THE RULE, along the very bottom edge, which is the part that
-                // is actually READ as progress: a wash has no scale, and a line
-                // drawn the whole width of the bar does -- you can see how much
-                // track is left without doing arithmetic on a gradient.
-                //
-                // The unplayed half of it first, dim, the full width.
-                Rectangle {
-                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                    // INSIDE THE CURVE. A radius cannot help here -- Qt clamps a
-                    // rectangle's corner to half its height, and this is 2px tall
-                    // -- so the rule is held clear of the corner instead. `inset`
-                    // is how far in the bar's own curve has come by the height
-                    // this line sits at, and both rules take it so their gradients
-                    // still measure the same span.
-                    anchors.leftMargin: nowBar.ruleInset
-                    anchors.rightMargin: nowBar.ruleInset
-                    anchors.bottomMargin: nowBar.ruleLift
-                    height: 2
-                    color: zenon.fade(zenon.playing, 0.10)
-                }
-                // ...and the played half over it, brightening toward the head and
-                // then feathering out on the same 34px the wash does, so the two
-                // end together.
-                Rectangle {
-                    anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                    anchors.leftMargin: nowBar.ruleInset
-                    anchors.rightMargin: nowBar.ruleInset
-                    anchors.bottomMargin: nowBar.ruleLift
-                    height: 2
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: zenon.fade(zenon.playing, 0.45) }
-                        GradientStop { position: nowBar.headStart
-                                       color: zenon.fade(zenon.playing, 0.85) }
-                        GradientStop { position: nowBar.head
-                                       color: zenon.fade(zenon.playing, 0) }
-                        GradientStop { position: 1.0; color: zenon.fade(zenon.playing, 0) }
-                    }
-                }
-                NowContent {
-                    anchors.fill: parent
-                    theme: zenon
-                    fg: zenon.playing
-                    track: nowBar.trackText
-                    icons: root.playback.icons || ""
-                    elapsed: root.clock(root.positionMs)
-                    total: root.clock(root.playback.duration || 0)
-                shuffle: root.playback.shuffle === true
-                playing: root.playback.playing === true
-                repeatMode: root.playback.repeat_ || "off"
-                onControlRequested: function (a) { root.control(a) }
-                // The playing track's verbs -- the same card Shift+Return reaches
-                // from any row of it, and the same one Main's Playback tile opens.
-                onTitleClicked: root.openCard("track-actions")
-                }
-
-                // THE WHEEL OVER THE STRIP SEEKS. The bar is the widest target in
-                // the window and did nothing at all -- and it is already a picture
-                // of the position, so moving the position is the gesture it was
-                // asking for. Anywhere on the strip, not just on the fill: aiming
-                // at a 3px rule is not a gesture anyone would make twice.
-                //
-                // Five seconds a notch rather than the keyboard's ten. A wheel is
-                // spun, so the small step is the one that can still be aimed --
-                // three notches is fifteen seconds and costs no more effort.
-                //
-                // NoButton, and declared last so it is on top: presses fall straight
-                // through to the title underneath, exactly as msgWheel lets a crumb
-                // step stay clickable.
-                MouseArea {
-                    anchors.fill: parent
-                    acceptedButtons: Qt.NoButton
-                    onWheel: function (e) {
-                        var d = e.angleDelta.y !== 0 ? e.angleDelta.y : e.angleDelta.x
-                        if (d === 0) return
-                        root.control("seek", d > 0 ? 5 : -5)
-                        e.accepted = true
-                    }
-                }
-            }
+            // A NOW-PLAYING STRIP STOOD HERE, at the foot of the panel, and it
+            // has moved to the TOP -- see nowRow, which took the row the title
+            // used to have. Nothing replaces it down here: the column ends with
+            // the notice bar, and whatever is last in it wears the panel's bottom
+            // corners (see panel.footCorner).
         }
-
         // (the sheet card is declared after the floating cards, below)
 
 
@@ -4716,7 +4704,7 @@ Window {
             // blurred and pushed back, a card with the panel's own ground, a shadow
             // under it -- so they share this layer rather than the prompt growing a
             // second one that would have to be kept in agreement with it.
-            opacity: (root.ctxUp || root.promptFor.length > 0) ? 1 : 0
+            opacity: (root.ctxUp || root.fieldUp) ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
             // NOT CLIPPED, and this is the whole point of moving out here: a card
@@ -4768,25 +4756,27 @@ Window {
                 }
                 Rectangle {
                     id: promptCard
-                    visible: root.promptFor.length > 0
+                    visible: root.fieldUp
                     x: root.cardX(width)
                     y: root.cardY(height)
                     // As wide as what is being typed, within reason: wide enough
                     // to look like a field on an empty one, and never wider than
                     // the panel it floats over.
                     width: Math.max(420, Math.min(parent.width - zenon.rowPadH * 4,
-                                                  promptText.implicitWidth
-                                                  + zenon.rowPadH * 3 + caretW))
-                    height: promptLabel.implicitHeight + promptText.implicitHeight
-                            + zenon.messagePadV * 8
-                    readonly property int caretW: 2
+                                                  promptQuery.implicitWidth
+                                                  + zenon.rowPadH * 3))
+                    // Bar, field, and the same padding above and below it. Built
+                    // from the bar's own height rather than the label's, so the two
+                    // cannot disagree about how tall it is.
+                    height: promptTitleBar.height + promptQuery.implicitHeight
+                            + zenon.messagePadV * 4 + zenon.borderWidth
                     radius: zenon.radius
                     color: zenon.ground
                     border.width: zenon.borderWidth
                     border.color: zenon.borderCol
                     // The panel's gesture at the size of a card, exactly as
                     // ctxCard takes it.
-                    scale: root.promptFor.length ? 1 : 0.955
+                    scale: root.fieldUp ? 1 : 0.955
                     Behavior on scale {
                         NumberAnimation { duration: zenon.popCard
                                           easing.type: Easing.OutBack
@@ -4813,42 +4803,24 @@ Window {
                                   leftMargin: zenon.rowPadH; rightMargin: zenon.rowPadH }
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
-                        text: root.promptFor
+                        text: root.fieldLabel
                         color: zenon.playing
                         font { family: zenon.fontFamily; pointSize: zenon.fontSize; bold: true }
                     }
-                    // ...AND WHAT YOU HAVE TYPED, with a caret against its end.
-                    // Sized to the text rather than anchored across the card, so
-                    // the caret sits where the words stop -- the same shape the
-                    // search box's entry has, for the same reason.
-                    Text {
-                        id: promptText
-                        anchors { top: promptTitleBar.bottom
-                                  topMargin: zenon.messagePadV * 3
-                                  horizontalCenter: parent.horizontalCenter
-                                  horizontalCenterOffset: -promptCard.caretW }
-                        width: Math.min(implicitWidth,
-                                        promptCard.width - zenon.rowPadH * 2 - promptCard.caretW)
+                    // ...AND WHAT YOU HAVE TYPED. The same field the search card
+                    // wears in its header -- see QueryField, which is why there is
+                    // one caret and one placeholder rule in the app rather than
+                    // two. Centred here: a prompt asks a short question and is read
+                    // as a label with its answer under it.
+                    QueryField {
+                        id: promptQuery
+                        anchors { left: parent.left; right: parent.right
+                                  top: promptTitleBar.bottom
+                                  topMargin: zenon.messagePadV * 2 }
+                        theme: zenon
                         text: root.filter
-                        color: zenon.foreground
-                        elide: Text.ElideLeft
-                        font { family: zenon.fontFamily; pointSize: zenon.entrySize
-                               weight: Font.DemiBold }
-                    }
-                    Rectangle {
-                        anchors { left: promptText.right; leftMargin: 2
-                                  verticalCenter: promptText.verticalCenter }
-                        width: promptCard.caretW
-                        height: promptText.implicitHeight - 2
-                        color: zenon.playing
-                        SequentialAnimation on opacity {
-                            loops: Animation.Infinite
-                            running: promptCard.visible
-                            NumberAnimation { from: 1; to: 0; duration: 500
-                                              easing.type: Easing.InOutQuad }
-                            NumberAnimation { from: 0; to: 1; duration: 500
-                                              easing.type: Easing.InOutQuad }
-                        }
+                        centered: true
+                        blinking: promptCard.visible
                     }
                 }
                 Rectangle {
@@ -4899,11 +4871,36 @@ Window {
                         anchors { left: parent.left;  leftMargin:  zenon.borderWidth
                                   right: parent.right; rightMargin: zenon.borderWidth
                                   top: parent.top;    topMargin:   zenon.borderWidth }
-                        height: root.ctxMesgLines.length * zenon.rowHeight
-                                + zenon.messagePadV * 2 - zenon.borderWidth
-                        color: zenon.messageBg
+                        height: root.ctxHeaderH - zenon.borderWidth
+                        // BLACK UNDER A FIELD, the message ground under a caption.
+                        // A caption is a label ABOUT the card and sits on the same
+                        // grey every caption in spoot sits on; a field is somewhere
+                        // to type, and a box you type into is dark. Transparent
+                        // rather than a black of its own, for the reason the top
+                        // bar is: the card's ground is already black at whatever
+                        // the opacity setting says, and a second black over it
+                        // compounds the two alphas.
+                        color: root.ctxField ? "transparent" : zenon.messageBg
                         topLeftRadius:  zenon.radius - zenon.borderWidth
                         topRightRadius: zenon.radius - zenon.borderWidth
+                    }
+                    // SOMEWHERE TO TYPE, where a card usually says what it is
+                    // about. The search box: its history is the card's rows, so
+                    // the field belongs in the same card rather than floating over
+                    // it -- see Util.serve_draw's `field`.
+                    QueryField {
+                        id: ctxQuery
+                        visible: root.ctxField
+                        anchors { left: parent.left; right: parent.right
+                                  verticalCenter: ctxTitleBar.verticalCenter }
+                        theme: zenon
+                        // liveFilter, not root.filter: typing into a card goes to
+                        // ctxFilter (see setFilter), so the field bound to the
+                        // panel's own filter showed nothing at all while you typed.
+                        text: root.liveFilter
+                        glyph: zenon.glyphSearch
+                        placeholder: "Search Spotify"
+                        blinking: root.ctxUp
                     }
                     // CENTRED IN THE BAR, not laid out from the card's top edge.
                     // Anchoring it to the top with the same padding the bar's
@@ -4912,6 +4909,7 @@ Window {
                     // reads as sunken because it is.
                     Column {
                         id: ctxCaption
+                        visible: !root.ctxField
                         anchors { verticalCenter: ctxTitleBar.verticalCenter
                                   left: parent.left; right: parent.right
                                   leftMargin: zenon.rowPadH; rightMargin: zenon.rowPadH }
@@ -4944,9 +4942,27 @@ Window {
                     // own. See Util.serve_card_art, which answers nothing rather
                     // than reaching for a substitute.
                     //
-                    // Inset by the same margins the list keeps, so it never
-                    // reaches the card's rounded corners and needs no mask of its
-                    // own to stay inside them.
+                    // THE SHAPE OF THE CORNER IT SITS IN. See CornerMask.
+                    CornerMask {
+                        id: ctxCoverFoot
+                        width: ctxCover.width
+                        height: ctxCover.height
+                        bottomLeft: zenon.radius - zenon.borderWidth
+                    }
+                    // A COMMENT HERE CLAIMED THIS NEVER REACHED THE CARD'S
+                    // CORNERS, "inset by the same margins the list keeps, so it
+                    // needs no mask of its own". It is inset on the LEFT and at the
+                    // TOP -- where the title bar covers the corners anyway -- and
+                    // not at the bottom: the cover is as tall as the list beside
+                    // it, and the list runs to the foot of the card. So it drew a
+                    // hard square into the bottom-left arc and over the border with
+                    // it, which is the backdrop overstepping a floating card.
+                    //
+                    // Masked only while it actually IS at the foot, measured rather
+                    // than assumed -- a rounded corner in the middle of a card
+                    // would be a worse artefact than the one being fixed, and a
+                    // layer is an offscreen texture nobody should pay for when
+                    // there is nothing to cut.
                     Image {
                         id: ctxCover
                         x: zenon.borderWidth
@@ -4954,6 +4970,13 @@ Window {
                         width: Math.max(0, root.ctxCoverW - zenon.borderWidth)
                         height: ctxList.height
                         visible: root.ctxCoverW > 0
+                        readonly property bool atFoot: visible && Math.abs(
+                            (y + height) - (ctxCard.height - zenon.borderWidth)) <= 1
+                        layer.enabled: ctxCover.atFoot
+                        layer.effect: MultiEffect {
+                            maskEnabled: true
+                            maskSource: ctxCoverFoot.texture
+                        }
                         source: root.cardArt.length ? zenon.fileUrl(root.cardArt) : ""
                         fillMode: Image.PreserveAspectCrop
                         asynchronous: true
@@ -4994,6 +5017,7 @@ Window {
                         flashSrc: root.ctxFlashSrc
                         flashSeq: root.ctxFlashSeq
                         playingId: root.liveId
+                        playingAltId: root.liveAltId
                         paused: root.playback.playing !== true
                         // Straight from the theme the menu named, exactly as the body
                         // reads its own. Both themes an action menu can draw with --
@@ -5482,25 +5506,14 @@ Window {
             // top two are under the title bar; only the bottom two are exposed,
             // so only those are cut.
             //
-            // Same capture-and-effect pair the shadows use, and the shape is
-            // hidden the same way -- rendered into the texture, never into the
-            // scene.
-            Rectangle {
-                id: artMaskShape
-                width: artImage.width
-                height: artImage.height
-                color: "white"
-                bottomLeftRadius:  zenon.radius - zenon.artBorder
-                bottomRightRadius: zenon.radius - zenon.artBorder
-            }
-            ShaderEffectSource {
+            // Through CornerMask, which is the rounded-rectangle-into-a-texture
+            // pair written once. This was a third hand-rolled copy of it.
+            CornerMask {
                 id: artMask
                 width: artImage.width
                 height: artImage.height
-                sourceItem: artMaskShape
-                hideSource: true
-                live: true
-                visible: false
+                bottomLeft:  zenon.radius - zenon.artBorder
+                bottomRight: zenon.radius - zenon.artBorder
             }
             Image {
                 id: artImage
@@ -5547,7 +5560,7 @@ Window {
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     maskEnabled: true
-                    maskSource: artMask
+                    maskSource: artMask.texture
                 }
                 // A slow breath while listening, so the icon is alive too.
                 SequentialAnimation on scale {

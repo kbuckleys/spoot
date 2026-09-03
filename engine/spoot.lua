@@ -70,6 +70,18 @@ local P = {
     -- was out of date.
     ttl_stale = 20,
     ttl_lyrics = 7 * 24 * 3600,  -- 1 week
+    -- THE SHARED FALLBACK REGISTRATION, and the reason Util.client_id exists.
+    --
+    -- One Spotify app id, written into the source, used by every copy of spoot on
+    -- every machine -- so Spotify's rate limit for it is not yours, it is
+    -- everyone's, spent by whoever happened to be listening. That is the whole of
+    -- "I am rate limited almost 100% of the time, even before playing a track"
+    -- and of getting a 429 on a cold start having done nothing at all: the quota
+    -- was gone before spoot started, and no amount of asking less on this machine
+    -- can get it back.
+    --
+    -- Kept only so a fresh install has something to authenticate against. See
+    -- Util.client_id and `spoot --client-id`, which is how you stop sharing.
     spotify   = "d420a117a32841c2b3474932e49fb54b"
 }
 -- Named rather than folded into P.cache below because spotifyd's own default
@@ -110,6 +122,14 @@ P.recent_log    = P.run .. "/recent-watch.log"
 P.prefetch_pid  = P.run .. "/art-prefetch.pid"
 P.plindex_pid   = P.run .. "/plindex.pid"
 P.art_spool     = P.run .. "/art-spool"
+-- YOUR OWN SPOTIFY APP ID, if you have made one. One line, no JSON: it is a
+-- single value a person pastes in, and the file not existing is the answer for
+-- everybody who has not. See Util.client_id.
+--
+-- In the CACHE rather than in P.run, because it has to outlive a reboot -- and
+-- beside P.token, because the two belong together: a token is issued BY a client
+-- and means nothing under a different one.
+P.client        = P.cache .. "/client_id"
 P.rate_cooldown = P.run .. "/rate-cooldown"
 -- WHEN WE LAST SAID SO, which is not the same clock as the gate above. A rolling
 -- limit outlives one cooldown: the window closes, the next request walks into the
@@ -120,6 +140,13 @@ P.rate_said     = P.run .. "/rate-said"
 -- one interruption rather than twenty, short enough that a limit an hour later is
 -- news again.
 P.rate_say_every = 600
+-- NO COOLDOWN OF SPOOT'S OWN. A back-off lived here briefly -- a streak file and
+-- a doubling multiplier, on the theory that a limit is escaped by asking less --
+-- and it made spoot the thing standing in the way: Spotify asked for 9 seconds
+-- and spoot sat out 288 of them while the person who pressed the key watched.
+-- The gate below waits exactly as long as the server asked and not a second
+-- longer, and the way spoot avoids limits is by not EARNING them -- see
+-- Util.curl_batch's window and parallel_fetch_library's retry walk.
 P.last_notify   = P.run .. "/last-notify"
 P.oauth_code    = P.run .. "/oauth-code"
 P.oauth_pid     = P.run .. "/oauth.pid"
@@ -706,6 +733,52 @@ function Util.rate_arm(secs, headers)
     Util.secure_write(P.rate_said, os.time())
     return secs, "Spotify API rate limit reached (429)" .. SEP
                  .. "using cache for " .. secs .. "s"
+end
+
+-- WHY THAT DID NOTHING, when the answer is "Spotify said later".
+--
+-- A read that finds the gate shut returns nil, and every caller then says its own
+-- generic failure: "Failed to load playlist" for a playlist that is perfectly
+-- fine, "Failed to skip" for a player that is working. That is the whole of
+-- "selecting a playlist can sometimes do nothing and print the failed to load
+-- playlist message" -- the playlist was never the problem and the message named
+-- it anyway.
+--
+-- The gate knows the real reason and how long it has left, so it says so; the
+-- caller's own sentence is kept for the case that really is a failure. Wrapped
+-- around the message rather than replacing it, so a site that gains a new failure
+-- mode still says something true.
+function Util.rate_why(fallback)
+    local left = Util.rate_cool()
+    if left <= 0 then return fallback end
+    return "Spotify is rate limiting" .. SEP .. "using cache -- retrying in " .. left .. "s"
+end
+
+-- WHICH SPOTIFY APP SPOOT IS SPEAKING AS.
+--
+-- Yours if you have registered one, and the shared fallback if you have not. A
+-- rate limit belongs to the APP, not to the account, so a single id compiled into
+-- every copy of spoot means one pool of requests split between everyone running
+-- it -- and there is nothing a well-behaved client can do about that from its own
+-- side. Registering your own takes two minutes at
+-- developer.spotify.com/dashboard (redirect URI http://127.0.0.1:8989/login) and
+-- hands you the whole quota.
+--
+-- Validated rather than trusted: a Spotify app id is 32 hex characters, and a
+-- file holding a pasted-in newline, a URL or half a word would otherwise turn
+-- every request into a 400 with nothing saying why. Anything that is not an id
+-- falls back, so a bad paste degrades to the old behaviour instead of breaking
+-- authentication.
+--
+-- Read fresh each time rather than memoised: it changes about once in the life of
+-- an install, and the three callers are the OAuth handshake and the token
+-- refresh -- none of them hot, all of them ruined by a stale answer.
+function Util.client_id()
+    local raw = trim(read_file(P.client) or "")
+    if raw:match("^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$") then
+        return raw
+    end
+    return P.spotify
 end
 
 function Util.http(req)
@@ -1359,8 +1432,30 @@ local function safe_decode(s)
     return strip_nulls(data)
 end
 
+-- WHAT SPOTIFYD WILL ACTUALLY COME BACK AT.
+--
+-- TWO FILES ANSWER THIS AND ONLY ONE OF THEM DECIDES. spoot writes P.volume
+-- whenever the level is set through it (see Util.set_volume), and librespot keeps
+-- a cache of its own -- `<cache>/volume`, one integer on the 0..65535 scale --
+-- which it writes on every change and reads at startup IN PREFERENCE to the
+-- --initial-volume this function feeds. So that flag is honoured only on a
+-- spotifyd that has never run here, and a level read out of P.volume alone could
+-- disagree with the one the daemon is about to restore.
+--
+-- That is "volume doesn't always persist". Nothing was being lost: spoot was
+-- reporting its own record of a decision librespot had already overruled -- and
+-- the disagreement shows up exactly when the daemon is down, which is when
+-- get_playerctl_volume falls back to this and has no player to check against.
+--
+-- So the daemon's own cache is asked first, and P.volume is the fallback for the
+-- case it cannot answer: a fresh install, or a cache cleared out from under it.
 local function get_saved_volume()
-    local raw = read_file(P.volume)
+    local raw = read_file(P.spotifyd .. "/volume")
+    local n = raw and tonumber(trim(raw))
+    -- 65535 is full. Rounded rather than truncated so a level set at 50 comes
+    -- back as 50 and not as 49.
+    if n then return math.max(0, math.min(100, math.floor(n / 655.35 + 0.5))) end
+    raw = read_file(P.volume)
     if not raw then return 100 end
     local d = safe_decode(raw)
     if d and d.volume and tonumber(d.volume) then
@@ -2640,7 +2735,7 @@ get_token = function()
                     url = "https://accounts.spotify.com/api/token",
                     headers = {"Content-Type: application/x-www-form-urlencoded"},
                     body = "grant_type=refresh_token&refresh_token=" .. data.refresh_token
-                           .. "&client_id=" .. P.spotify,
+                           .. "&client_id=" .. Util.client_id(),
                     compressed = true, timeout = 10}.body)
                 if rd and rd.access_token then
                     data.access_token = rd.access_token
@@ -2693,7 +2788,7 @@ local function oauth_get_token()
         .. " | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='"))
     local scopes = OAUTH_SCOPES
     local auth_url = "https://accounts.spotify.com/authorize"
-        .. "?client_id=" .. P.spotify
+        .. "?client_id=" .. Util.client_id()
         .. "&response_type=code"
         .. "&redirect_uri=http://127.0.0.1:8989/login"
         .. "&code_challenge_method=S256"
@@ -2763,7 +2858,7 @@ local function oauth_get_token()
         headers = {"Content-Type: application/x-www-form-urlencoded"},
         body = "grant_type=authorization_code&code=" .. code
                .. "&redirect_uri=http://127.0.0.1:8989/login"
-               .. "&client_id=" .. P.spotify
+               .. "&client_id=" .. Util.client_id()
                .. "&code_verifier=" .. verifier,
         compressed = true, timeout = 10}.body)
     if not (d and d.access_token) then return nil end
@@ -2793,6 +2888,34 @@ function Util.reauth()
     mem_bust("token")
     ensure_auth()
     return get_token() ~= nil
+end
+
+-- SETTING WHICH APP SPOOT SPEAKS AS. The reader is Util.client_id, hundreds of
+-- lines above beside the fallback id it explains; this half lives down HERE
+-- because it drops the cached token with mem_bust, and that is a file local
+-- declared between the two -- written any higher it resolves as a global, which
+-- is nil, and the call dies at the one moment somebody is trying to fix their
+-- rate limiting.
+--
+-- Dropping the token is not housekeeping, it is the point: a token is issued BY a
+-- client and means nothing under a different one, so the next launch has to log
+-- in again. Answers the id in force, so `--client-id` with no argument is "which
+-- one am I using".
+function Util.client_set(id)
+    id = trim(id or "")
+    if #id > 0 then
+        if not id:match("^%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x$") then
+            return nil, "not a Spotify client id (expected 32 hex characters)"
+        end
+        Util.secure_write(P.client, id)
+    else
+        -- An empty argument is "go back to sharing", which is a thing someone may
+        -- genuinely want -- it is the only id that works without registering.
+        os.remove(P.client)
+    end
+    os.remove(P.token)
+    mem_bust("token")
+    return Util.client_id()
 end
 
 -- NOTIFY
@@ -3070,7 +3193,14 @@ function Util.curl_batch(jobs, opts)
     -- r:match, and one site tests r.code == "429"). Converted here, once, rather
     -- than teaching the shim a shape that suits only this caller.
     if Util.host and Util.host.http and not os.getenv("SPOOT_FORCE_CURL") then
+        -- `parallel` GOES ACROSS. It did not, and the host fired every job in the
+        -- batch at once -- so the bound every caller here writes down was curl's
+        -- alone and the embedded path, which is the one that actually runs, had
+        -- none. See l_http_batch: a 32-page me/tracks sweep asking Spotify 32
+        -- times in the same millisecond is what earned the standing 429 on that
+        -- endpoint.
         local res = Util.host.http{jobs = jobs, timeout = opts.timeout or 10,
+                                   parallel = opts.parallel or 8,
                                    headers = opts.header and {opts.header} or nil}
         if not res then return nil end
         -- One answer is enough to know the link is alive; one failure is not
@@ -3870,10 +4000,44 @@ end
 -- flag is always present and only the value moves -- no conditional string
 -- building, and the running process names the setting either way, which is what
 -- makes `pgrep -a spotifyd` a straight answer to "is caching on?".
+-- A NAME IN THE MIXER, AND ONE NAME. spoot's stream showed up in wiremix as a
+-- bare ":" -- librespot's pulseaudio sink reads PULSE_PROP_application.name and
+-- PULSE_PROP_stream.description out of the environment and defaults both to
+-- nothing, so what the mixer had to draw was the separator between two empty
+-- strings. Nothing in spoot was setting them, because spoot starts spotifyd and
+-- spotifyd is the thing holding the sink.
+--
+-- BOTH HALVES SAY THE SAME WORD, and that is the best a mixer's label allows.
+--
+-- What wiremix draws is composed from TWO properties -- application.name and
+-- media.name -- with a separator between them, which is why an unnamed stream
+-- appeared as a bare ":" in the first place. librespot fills the first from
+-- PULSE_PROP_application.name and the second from PULSE_PROP_stream.description,
+-- and there is no third state: leave the description out and the label is
+-- "spoot:" with nothing after the separator; put a different word there and it is
+-- "spoot: Spotify". A single bare word is not reachable through a two-field
+-- template, so both fields are given the same one and the label says spoot
+-- whichever half is being read.
+--
+-- The other two are libpulse's own: it reads any PULSE_PROP_<key> into the
+-- stream's property list, so the icon is the same `spoot` name the .desktop entry
+-- and the toast's desktop-entry hint use, and the role is what a mixer needs to
+-- know this is music rather than an alert.
+--
+-- Through `env` rather than as a `NAME=value cmd` prefix: these names contain
+-- dots, which is not a valid shell name, and the shells differ on whether that is
+-- an error or an assignment.
+-- Spelled out at its one use rather than hoisted to a file local: the chunk body
+-- is at Lua's 200-local cap, and a constant with a single reader is exactly the
+-- thing that does not need one.
 local function ensure_spotifyd()
     local pid = trim(shell("pgrep -x spotifyd 2>/dev/null") or "")
     if pid == "" then
-        os.execute("spotifyd --no-daemon --device-name spoot --backend pulseaudio --use-mpris --volume-normalisation --initial-volume " .. get_saved_volume() .. " --bitrate " .. get_saved_bitrate()
+        os.execute("env 'PULSE_PROP_application.name=spoot'"
+            .. " 'PULSE_PROP_application.icon_name=spoot'"
+            .. " 'PULSE_PROP_stream.description=spoot'"
+            .. " 'PULSE_PROP_media.role=music'"
+            .. " spotifyd --no-daemon --device-name spoot --backend pulseaudio --use-mpris --volume-normalisation --initial-volume " .. get_saved_volume() .. " --bitrate " .. get_saved_bitrate()
             .. " --no-audio-cache=" .. (Util.track_cache_on() and "false" or "true")
             .. " -c " .. shell_quote(P.spotifyd) .. " > /dev/null 2>&1 &")
     end
@@ -4134,11 +4298,42 @@ local function parallel_fetch_library()
     -- One curl for the whole batch, the same transport the covers and
     -- Util.paged_fetch use. This was `cmd1 & cmd2 & … & wait` -- N processes,
     -- each paying its own TCP+TLS -- which measured 0.81s against 0.63s for six
-    -- pages, and the concurrency bound is now --parallel-max rather than a hand
+    -- pages, and the concurrency bound is the batch's own rather than a hand
     -- rolled BATCH loop.
+    --
+    -- THE RESULT WAS THROWN AWAY, and that is most of "I am rate limited almost
+    -- all the time". This is the biggest burst in the file -- a 1,578-track
+    -- library is 31 pages of me/tracks alone, all on ONE endpoint -- and the
+    -- answer was not even read, so a 429 here armed nothing, told nobody, and the
+    -- retry walk below then asked for all 31 pages again one per second, each one
+    -- landing inside the window the burst had just closed and extending it. That
+    -- is how a single rate limit becomes a standing one that outlives the process.
+    --
+    -- Four in flight rather than six: every job here hits the same endpoint, which
+    -- is the shape a per-endpoint limiter punishes hardest, and this is a
+    -- background sweep nobody is watching a spinner for. Util.paged_fetch keeps
+    -- six because a person is waiting on that one.
     local function fire_batch(jobs)
-        if #jobs == 0 then return end
-        Util.curl_batch(jobs, {compressed = true, parallel = 6, timeout = 10, header = auth})
+        if #jobs == 0 then return true end
+        -- Before, because an earlier phase may have shut the window while this
+        -- one was parsing, and a wave sent into it is a wave spent.
+        if Util.rate_cool() > 0 then return false end
+        local got = Util.curl_batch(jobs, {compressed = true, parallel = 4, timeout = 10,
+                                           header = auth})
+        if got then
+            for _, j in ipairs(jobs) do
+                local r = got[j.out]
+                if r and r.code == "429" then
+                    -- Silent: this runs on a background sweep, and Util.rate_arm
+                    -- says the notice belongs to whoever is looking at a screen.
+                    -- The GATE is the point, and every reader of it now stands
+                    -- down instead of walking into the same wall.
+                    Util.rate_arm()
+                    return false
+                end
+            end
+        end
+        return true
     end
 
     local function page_valid(file)
@@ -4180,20 +4375,31 @@ local function parallel_fetch_library()
     -- RETRY: check each page file, retry failures one at a time with delay.
     -- Through fire_batch with a single job rather than a second command builder
     -- -- one URL is just the smallest batch.
-    for i = 1, tracks_pages - 1 do
-        local f = tmpdir .. "/lk_" .. i .. ".json"
-        if not page_valid(f) then
-            os.execute("sleep 1")
-            fire_batch({{url = base .. "me/tracks?limit=50&offset=" .. (i * 50) .. mkt, out = f}})
+    --
+    -- STOPS RATHER THAN SLOWS DOWN. A page that is missing because Spotify said
+    -- "later" cannot be fetched by asking again inside the window it said that
+    -- in: asking is what extends a rolling limit, and there are thirty of these.
+    -- fire_batch answers false the moment the gate is shut or the wave came back
+    -- limited, and one false ends the walk -- what is left is a list that is one
+    -- revalidation stale, which is what every caller here already tolerates.
+    --
+    -- One walk for both lists. Two copies stood here and would have had to learn
+    -- that together or not at all.
+    local function retry_pages(pages, prefix, path)
+        for i = 1, pages - 1 do
+            local f = tmpdir .. "/" .. prefix .. "_" .. i .. ".json"
+            if not page_valid(f) then
+                -- Util.wait, not os.execute("sleep 1"): embedded that is a timer
+                -- that keeps the bus dispatching, and outside it is the same
+                -- sleep without the fork.
+                Util.wait(1)
+                if not fire_batch({{url = base .. path .. "?limit=50&offset=" .. (i * 50) .. mkt,
+                                    out = f}}) then return end
+            end
         end
     end
-    for i = 1, albums_pages - 1 do
-        local f = tmpdir .. "/al_" .. i .. ".json"
-        if not page_valid(f) then
-            os.execute("sleep 1")
-            fire_batch({{url = base .. "me/albums?limit=50&offset=" .. (i * 50) .. mkt, out = f}})
-        end
-    end
+    retry_pages(tracks_pages, "lk", "me/tracks")
+    retry_pages(albums_pages, "al", "me/albums")
 
     -- ARTISTS: cursor-based, must be sequential via curl
     local artists = {}
@@ -4203,6 +4409,12 @@ local function parallel_fetch_library()
         artist_after = ar0.artists.cursors and ar0.artists.cursors.after
     end
     while artist_after and artist_after ~= "" do
+        -- Straight through Util.http, which knows about a dead link but not about
+        -- the rate gate -- that lives in api_get, because a WRITE must never be
+        -- gated and Util.http carries both. So the gate is read here instead: a
+        -- walk that cannot get its next page must not spend a request finding
+        -- that out once per page.
+        if Util.rate_cool() > 0 then break end
         -- Cursor-paginated, so these cannot be batched the way the offset pages
         -- above are -- each `after` is only known once the page before it lands.
         -- Straight to memory now; the scratch file it round-tripped through was
@@ -4553,8 +4765,40 @@ end
 
 local inv_playback  -- forward declaration
 
+-- HOW LONG BETWEEN LIVE POLLS, and it must not be a constant.
+--
+-- THIS IS THE ONE THAT THROTTLES AN ACCOUNT. Five seconds is right while
+-- something is playing -- the marker, the clock and the backdrop all follow this
+-- and a stale answer shows. It is badly wrong when nothing is, which is most of
+-- the day: spoot is resident, the UI polls once a second, Util.fast_now_track
+-- finds no player, and this asks me/player every five seconds for as long as the
+-- machine is on. 720 requests an hour, ~17,000 a day, against the endpoint
+-- Spotify guards hardest, to be told "nothing" every single time.
+--
+-- That is not an app-quota problem and no client id fixes it: measured with a
+-- brand-new Spotify app and spoot stopped, one request in six was still being
+-- refused, while an invalid token answered 401 -- so the limit follows the
+-- authenticated USER. Sustained polling is what earns it.
+--
+-- So an empty answer widens the gap and anything real closes it at once:
+--
+--   * a track appears     -- reset, back to five seconds (below).
+--   * the user does       -- reset, because someone looking at the panel wants it
+--     anything            current. See Util.serve_run.
+--   * nothing, repeatedly -- open out to a minute.
+--
+-- Nothing is lost. Playback started HERE never reaches this at all
+-- (Util.adopt_playing makes fast_now_track succeed immediately), and playback
+-- started on another device is noticed by this within a minute and by the
+-- recorder in Util.recent_tick regardless.
+function Util.playback_wait()
+    local n = Util.pb_idle or 0
+    if n < 3 then return 5 end
+    return math.min(5 * n, 60)
+end
+
 get_playback = function()
-    if os.time() - last_playback < 5 then return end
+    if os.time() - last_playback < Util.playback_wait() then return end
     -- me/player takes a market too, so the now-playing item arrives carrying
     -- is_playable; api_get collapses it on the way out, so now_track.json never
     -- persists the field and anything downstream that reads current_track --
@@ -4568,6 +4812,17 @@ get_playback = function()
     local d = api_get("me/player", Util.with_market("additional_types=episode"))
     last_playback = os.time()
     if not d or not d.item then
+        -- NOTHING CAME BACK, and the next poll is worth less than this one was.
+        -- Capped, because past a minute the extra patience buys nothing.
+        --
+        -- COUNTED WHATEVER THE REASON -- nothing playing, or the gate shut before
+        -- the request left. This skipped the gated case at first, reasoning that
+        -- no request means no evidence; that is exactly backwards. A shut gate is
+        -- Spotify saying "ask less", so it is the strongest reason of all to widen
+        -- the gap -- and leaving the counter frozen there meant the poll came
+        -- straight back the moment each cooldown expired, once per Retry-After,
+        -- for as long as the throttle lasted. Measured at ~3 a minute doing that.
+        Util.pb_idle = math.min((Util.pb_idle or 0) + 1, 12)
         -- Rate limited is not "the player went away", and recover_playback below
         -- would start a track over the podcast you are listening to on the
         -- strength of it.
@@ -4582,6 +4837,22 @@ get_playback = function()
         if not recent then inv_playback() end
         return
     end
+    -- SOMETHING IS PLAYING, so this poll earned its place and the next one is
+    -- worth making on time. See Util.playback_wait.
+    Util.pb_idle = 0
+    -- ...AND WHERE IN IT, which nothing else keeps. now_track.json holds the item
+    -- and whether it is playing; the position is the one field the recorder needs
+    -- and would otherwise have to fetch a second copy of this whole response to
+    -- get. See Util.recent_record.
+    --
+    -- STAMPED WITH THE TRACK IT MEASURES. A bare number outlives the thing it was
+    -- about: this poll only runs when nothing is playing locally, so the value can
+    -- be minutes old and belong to a different item by the time the recorder reads
+    -- it -- and Util.eresume_put treats a wrong position as a real one and a
+    -- missing one as "start from the top", so a stale read either moves a saved
+    -- episode or erases it.
+    Util.pb_progress = d.progress_ms
+    Util.pb_progress_for = d.item.id
     current_track = d.item
     current_id    = d.item.id
     is_playing    = d.is_playing == true
@@ -5445,6 +5716,34 @@ end
 -- current_track is adopted only when the request actually went out: do_play
 -- refuses an unavailable track and answers false with no token, and claiming it
 -- playing anyway moved the marker to a row that never started.
+-- A TRACK JUST STARTED, recorded in ONE place.
+--
+-- Five facts and they have to move together: what is playing, its id, that it is
+-- playing at all, that THIS process is what started it -- `played_here` is what
+-- makes the poll's answer count as live, which is what earns the green marker
+-- (see Util.serve_playback's `live`) -- and that the redraw about to follow is
+-- the one moment the backdrop may cost a download (see Util.serve_draw_cover).
+--
+-- The action menu's Play verb kept a copy of this with the last two lines
+-- missing. So a track started with Return was fine and the SAME track started
+-- with Shift+Return > Play came up with no green marker and the previous track's
+-- cover behind it -- which is the backdrop flash that does not happen every time
+-- and had no obvious trigger. It had one; it was which key you pressed.
+function Util.adopt_playing(item)
+    if not item then return end
+    Util.played_here = true
+    current_track = item
+    current_id = item.id
+    is_playing = true
+    Util.serve_played = item.id
+    -- ...AND THE LIVE POLL IS WORTH ITS FIVE SECONDS AGAIN. The back-off in
+    -- Util.playback_wait widens while nothing is playing, and something just
+    -- started -- so the next thing that asks must not be answered on an idle
+    -- clock. Cheap insurance: fast_now_track will usually answer from the
+    -- daemon's snapshot from here on and get_playback will not run at all.
+    Util.pb_idle = 0
+end
+
 function Util.play_or_toggle(item, ctx_type, ctx_id, all_items, idx)
     if not item then return false end
     -- TOGGLING NEEDS SOMETHING TO TOGGLE. Straight after a cold start current_id
@@ -5468,13 +5767,7 @@ function Util.play_or_toggle(item, ctx_type, ctx_id, all_items, idx)
         return true
     end
     if do_play(item, ctx_type, ctx_id, all_items, idx) then
-        Util.played_here = true
-        current_track = item
-        current_id = item.id
-        is_playing = true
-        -- THIS REQUEST STARTED THIS TRACK, which is the one moment the backdrop
-        -- is allowed to cost a download. See Util.serve_draw_cover.
-        Util.serve_played = item.id
+        Util.adopt_playing(item)
         return true
     end
     return false
@@ -6266,7 +6559,7 @@ end
 Util.view_album_details = function(album)
     local d = api_get_album(album.id)
     if not d then
-        ui_say("Could not load album details")
+        ui_say(Util.rate_why("Could not load album details"))
         return
     end
     local s = Util.detail_sheet(nil, "Album Details")
@@ -6301,7 +6594,7 @@ end
 Util.view_track_details = function(item)
     local d = Util.api_get_track_detail(item.id)
     if not d then
-        ui_say("Could not load track details")
+        ui_say(Util.rate_why("Could not load track details"))
         return
     end
     local s = Util.detail_sheet(nil, "Track Details")
@@ -6326,7 +6619,7 @@ end
 Util.view_show_details = function(show)
     local d = Util.api_get_show(show.id)
     if not d then
-        ui_say("Could not load podcast details")
+        ui_say(Util.rate_why("Could not load podcast details"))
         return
     end
     local s = Util.detail_sheet(Util.THEME_PODS, "Podcast Details")
@@ -6364,7 +6657,7 @@ end
 Util.view_episode_details = function(item)
     local d = Util.api_get_episode_detail(item.id)
     if not d then
-        ui_say("Could not load episode details")
+        ui_say(Util.rate_why("Could not load episode details"))
         return
     end
     local s = Util.detail_sheet(Util.THEME_PODS, "Episode Details")
@@ -7268,7 +7561,13 @@ end
 
 -- VIEW: BROWSE
 
-view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, art_path)
+-- `as_card` DRAWS THIS LIST AS A FLOATING CARD rather than as a place you went
+-- to. Ninth and optional, so every existing caller is untouched: the ones that
+-- want it are the lists that are about the moment rather than about a shelf --
+-- see Util.view_listen_history. Everything else about the list is unchanged; it
+-- is the same rows, the same picks and the same action menus, drawn over
+-- whatever you were looking at instead of replacing it.
+view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, art_path, as_card)
     local is_track = ctx == "liked" or ctx == "top-tracks"
                   or ctx == "your-queue"
                   or ctx == "liked-by-artist" or ctx == "top-by-artist"
@@ -7434,6 +7733,12 @@ view_browse = function(entries, items, mesg, ctx, ctx_type, ctx_id, no_status, a
         -- and had already missed shows: a show's episode list passes no ctx_type
         -- at all, deliberately, so it was never going to match.
         local idx = ui_menu(entries, {prompt=ctx or "Browse", mesg=mesg, by_index=true, theme=view_theme, thumbs=is_album_grid or is_playlist_list or is_show_grid or is_artist_list or is_search_grid, items=items, entries=entries, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild, own_art=(art_path ~= nil or is_search_art) or nil,
+            -- A CARD, where the caller asked for one. `art=false` beside it for
+            -- the reason every other card sets it: a card floats OVER a list that
+            -- is still wearing its own backdrop, and this is not a second way of
+            -- saying the card has no picture -- it resolves one of its own
+            -- through Util.serve_card_art exactly as an action menu does.
+            context = as_card or nil, art = (as_card and false) or nil,
             -- is_show_grid claims Shift+Return for the show action menu. The
             -- EPISODE list deliberately does not: it is is_track, and a track
             -- list must leave Shift+Return to ui_menu's default handler,
@@ -7629,7 +7934,7 @@ browse_album = function(album_id, mesg)
     -- Reported HERE rather than at the call sites: 6 of the 8 ignored the false
     -- return, so pasting a URL for a dead or restricted album used to do nothing
     -- at all -- no view, no message. The two causes are worth telling apart.
-    if not ad then ui_say("Failed to load album"); return false end
+    if not ad then ui_say(Util.rate_why("Failed to load album")); return false end
     if not ad.tracks or #ad.tracks == 0 then
         local mk = Util.market()
         ui_say("Album has no available tracks" .. (mk and (" in " .. mk) or ""))
@@ -7704,7 +8009,7 @@ function Util.open_show(show_id, show_name)
     if type(show_id) == "table" then show_id, show_name = show_id.id, show_id.name end
     if not show_id then return false end
     local sd = Util.api_get_show(show_id)
-    if not sd then ui_say("Failed to load podcast"); return false end
+    if not sd then ui_say(Util.rate_why("Failed to load podcast")); return false end
     local eps = sd.episodes or {}
     if #eps == 0 then
         local mk = Util.market()
@@ -8199,9 +8504,7 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             Util.transport(true)
         elseif key == "play" then
             if do_play(item, ctx_type, ctx_id, all_items, cidx) then
-                current_track = item
-                current_id = item.id
-                is_playing = true
+                Util.adopt_playing(item)
             end
         elseif key == "pause" then
             Util.transport(false)
@@ -8414,20 +8717,22 @@ function Util.search_page_pick(results, page)
     end
     -- Opens on the page you are already on, which is more useful here than a
     -- remembered cursor: the menu exists to move you off it.
-    -- NO BACKDROP. This menu is a list of counts, not a thing you can picture,
-    -- so the cover of whatever happens to be playing beside it is decoration in
-    -- the way of the choice. Said by the menu rather than tested for by name in
-    -- Util.serve_art_after, so the next one that wants this costs a key.
     -- A CARD, not a menu you go to. Picking a type does not take you anywhere --
     -- it changes which slice of the results you were already looking at is shown
     -- -- so the results stay on screen behind it and the picker floats over them.
-    -- `hide_art` and `no_cover` are what `art=false` alone could not carry: the
-    -- first takes the results' own backdrop down while this is up, the second
-    -- keeps the card from resolving a picture of its own from whatever row the
-    -- step in picked. See Util.serve_draw's hideArt.
+    --
+    -- `no_cover` AND NOT A PICTURE MORE. This menu is a list of counts, so it
+    -- resolves no cover of its own -- that is what the flag says, and it is the
+    -- whole of what "no backdrop here" can honestly mean for a card.
+    --
+    -- A `hide_art` STOOD BESIDE IT and reached too far: it took the backdrop off
+    -- the RESULTS behind this, which did not change and are not what the card is
+    -- about. A card floats over a list that is still wearing its own picture --
+    -- every other card in spoot works that way -- and this one is no different
+    -- for being about counts.
     local idx = ui_menu(rows, {prompt="Type", mesg="Filter results by type", by_index=true,
                                   theme=THEME_SUB, art=false, context=true,
-                                  hide_art=true, no_cover=true})
+                                  no_cover=true})
     if not idx or idx < 1 or idx > #Util.SEARCH_PAGES then return nil end
     if Util.search_page_count(results, idx) == 0 then
         ui_say("No " .. Util.SEARCH_PAGES[idx].label:lower() .. " results")
@@ -8449,7 +8754,7 @@ function Util.open_playlist(pl)
     -- own, category shelves, Featured, search results -- so the common path never
     -- has to guess whether its cached tracks are current.
     local tracks = api_get_playlist_tracks(pl.id, pl.snapshot_id)
-    if not tracks then ui_say("Failed to load playlist"); return false end
+    if not tracks then ui_say(Util.rate_why("Failed to load playlist")); return false end
     if #tracks == 0 then ui_say("Playlist is empty"); return false end
     -- A playlist WITH a cover gets the album.rasi backdrop showing its own art;
     -- one without falls through to menu.rasi, which needs no code -- view_browse
@@ -8997,11 +9302,12 @@ view_lyrics = function(item)
                             -- coincidence between sync_now's suppression window
                             -- and the status memo's TTL.
                             Util.playerctl_bust()
-                            current_track = item
-                            current_id = item.id
-                            is_playing = true
+                            -- The third copy of this, and the third to be short
+                            -- of it: playing from a lyric line is a track
+                            -- starting like any other. See Util.adopt_playing.
+                            Util.adopt_playing(item)
                         else
-                            ui_say("Failed to play from timestamp")
+                            ui_say(Util.rate_why("Failed to play from timestamp"))
                         end
                     end
                 else
@@ -9178,8 +9484,22 @@ local function view_search()
         -- so typing a new query still works exactly as before -- the history is
         -- a suggestion list, not a menu you are confined to.
         local hist = Util.hist_get(hkey)
+        -- A CARD, WITH THE FIELD IN ITS HEADER. The search box used to replace
+        -- the menu you were on with a view whose only content was your past
+        -- queries -- so asking to search threw away what you were looking at, and
+        -- an empty history left a panel with nothing in it at all.
+        --
+        -- As a card it floats over that menu and takes the history WITH it: `field`
+        -- tells the UI to draw the query box where a card's title bar goes, so the
+        -- history is inside the card rather than behind it. See ctxField in
+        -- main.qml.
+        --
+        -- Only this half is a card. Submitting a query is a step into a real place
+        -- -- the results -- and applyWhere adopts the card's steps onto the trail
+        -- when that answer arrives, which is what keeps Search in the breadcrumb.
         local query = ui_menu(hist, {prompt="Search",
             mesg="Search", theme=P.THEME_SEARCH,
+            context=true, art=false, field=true,
             hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
         if not query then break end
         -- rofi echoes a SELECTED row back pango-escaped (markup is on), so a
@@ -9955,7 +10275,11 @@ view_seek = function(item)
     --
     -- Seek is a ruler, not a portrait. It says `no_cover` below, so
     -- Util.serve_card_art is never asked and the recording had nobody left to
-    -- read it -- and `hide_art` beside it takes the list's backdrop down too.
+    -- read it.
+    --
+    -- It said `hide_art` too, and that was the over-reach: the card wearing no
+    -- picture is one thing, the LIST behind it losing the one it already had is
+    -- another, and only the first is Seek's business.
     Util.scope({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0}, function()
     local seeks = {"+10s", "-10s", "+30s", "-30s", Util.markup('<span foreground="#20242a">────────────────────</span>'), "+1:00", "-1:00", "0:00"}
     while true do
@@ -9981,7 +10305,7 @@ view_seek = function(item)
         -- writing a file to feed a variable nobody read.
         local si = ui_menu(seeks, {prompt="Seek", theme=THEME_SUB,
                                       context=true, art=false, sticky=true,
-                                      hide_art=true, no_cover=true})
+                                      no_cover=true})
         if not si then
             if jump_to_track_pending then return end
             break
@@ -10260,7 +10584,9 @@ local function view_playback()
             end
         end
     end
-    Util.scope({view="playback"}, function()
+    -- NO Util.scope, because a card is not a place -- same as view_actions and
+    -- the artist hub. Nothing else read this scope; it existed only to put a
+    -- breadcrumb step there, which is the thing being removed.
     -- Rebuilding rows from live state only helps if that state was refreshed on
     -- the way in; without this, reopening Playback showed the transport as it
     -- stood when this process last looked.
@@ -10324,7 +10650,19 @@ local function view_playback()
     Util.serve_cover(Util.ensure_art_med(pb_art, true), pb_art)
     while true do
         build_items()
+        -- A CARD. Playback is a handful of verbs about the track that is playing
+        -- -- resume it, seek in it, see what it is -- which is exactly what an
+        -- action menu is, and it is the one menu of that shape that was drawn as
+        -- a PLACE. So it took a trail step, put "Playback" in the breadcrumb, and
+        -- replaced whatever you were looking at to tell you about the thing you
+        -- were already listening to.
+        --
+        -- `art=false` beside it as every card sets it: that is about the LIST
+        -- behind, which keeps its own backdrop. This card still resolves the
+        -- playing track's cover for itself through Util.serve_card_art, the same
+        -- way Track Actions does.
         local si = ui_menu(items, {prompt="Playback", theme=THEME_SUB,
+            context=true, art=false,
             refresh=build_items, alt_select=true})
         local alt = Util.alt_pressed
         Util.alt_pressed = false
@@ -10357,9 +10695,9 @@ local function view_playback()
             -- ONE ROW, ONE KEY, and which way it goes comes from the state the
             -- row was DRAWN from rather than from reading its word back.
             if is_playing then
-                if not Util.transport(false) then ui_say("Failed to pause") end
+                if not Util.transport(false) then ui_say(Util.rate_why("Failed to pause")) end
             else
-                if not Util.transport(true) then ui_say("Failed to resume") end
+                if not Util.transport(true) then ui_say(Util.rate_why("Failed to resume")) end
             end
         elseif key == "next" then
             local prev_id = current_id
@@ -10367,7 +10705,7 @@ local function view_playback()
             if Util.is2xx(r) then
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
-            elseif not recover_playback(1) then ui_say("Failed to skip")
+            elseif not recover_playback(1) then ui_say(Util.rate_why("Failed to skip"))
             else
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
@@ -10378,7 +10716,7 @@ local function view_playback()
             if Util.is2xx(r) then
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
-            elseif not recover_playback(-1) then ui_say("Failed to go back")
+            elseif not recover_playback(-1) then ui_say(Util.rate_why("Failed to go back"))
             else
                 Util.wait_playback_change(prev_id)
                 sync_queue_idx()
@@ -10410,11 +10748,10 @@ local function view_playback()
         end
         ::pb_next::
     end
-end)
 end
 
--- WHAT THE LISTENER HAS FOUND, as a place you can go back to. Reached by
--- Shift+Return on the Listen row, which wears ALT_MARK to say so.
+-- WHAT THE LISTENER HAS FOUND. Reached by Shift+Return on the Listen row, which
+-- wears ALT_MARK to say so -- and a card like the menu it is opened from.
 --
 -- A real scoped view rather than a card: it is a list of tracks you can browse,
 -- scroll and act on, which is a place -- and the same shape every other track
@@ -10436,11 +10773,15 @@ function Util.view_listen_history()
         end
     end
     if #tracks == 0 then ui_say("Nothing identified yet"); return end
-    Util.scope({view = "listen-history"}, function()
-        view_browse(entries, tracks,
-                    "Heard" .. SEP .. #tracks .. (#tracks == 1 and " track" or " tracks"),
-                    "listen-history", nil, nil)
-    end)
+    -- A CARD, AND SO NOT A SCOPE. What the listener has heard is a note about
+    -- this session, not a shelf you navigated to -- it belongs over whatever you
+    -- were looking at, the way the action menus and Seek do. Unscoped for the
+    -- reason every other card is (see view_actions): a scope is a trail step, and
+    -- a card is not a place, so leaving one behind put "Heard" in the breadcrumb
+    -- of a menu you never went to.
+    view_browse(entries, tracks,
+                "Heard" .. SEP .. #tracks .. (#tracks == 1 and " track" or " tracks"),
+                "listen-history", nil, nil, nil, nil, true)
 end
 
 -- VIEW: SYSTEM
@@ -11398,6 +11739,18 @@ function Util.setup_report()
     L[#L+1] = "account:  " .. (st.token and "signed in" or "NOT signed in")
     L[#L+1] = "device:   " .. (st.device and "authorised"
                                or "NOT authorised (spotifyd has no credentials, so nothing plays)")
+    -- WHOSE RATE LIMIT THIS INSTALL SPENDS, which is the first thing to know when
+    -- everything answers 429 and you have done nothing. See Util.client_id.
+    local cid = Util.client_id()
+    L[#L+1] = "client:   " .. cid .. (cid == P.spotify
+        and "  (SHARED -- every spoot install uses this one, so its rate limit is\n"
+            .. "                                        split between all of them."
+            .. " Register your own app at\n"
+            .. "                                        developer.spotify.com/dashboard"
+            .. " with redirect URI\n"
+            .. "                                        http://127.0.0.1:8989/login,"
+            .. " then: spoot --client-id <id>)"
+        or "  (your own)")
     if #st.lack > 0 then
         L[#L+1] = "blocked:  cannot sign in without " .. table.concat(st.lack, ", ")
     end
@@ -12143,6 +12496,36 @@ end
 -- Util.daemon_snap was: the standalone `--recent-watch` loop below calls it on
 -- its own timer, and the embedded host calls it as a `recent-tick` request from
 -- a QTimer, so the recorder itself exists once.
+-- WHAT THE RECORDER ACTUALLY DOES, given a track and where in it we are.
+--
+-- Split out from Util.recent_tick because the polling and the recording are two
+-- different jobs and only one of them needs a request. Whatever found the track
+-- -- this file's own poll, or get_playback, or the daemon's MPRIS snapshot --
+-- hands it here, and the record is the same either way.
+function Util.recent_record(item, progress_ms)
+    if type(item) ~= "table" or not item.id then return false end
+    -- Free where the caller already had it: recording where you are in an episode
+    -- costs no request of its own. The poll interval is the most this can lose,
+    -- and it is that against "always from the beginning".
+    --
+    -- AND NEVER A POSITION THAT IS NOT THIS EPISODE'S. `progress_ms` comes from
+    -- whatever last polled me/player, which may have been about something else --
+    -- see Util.pb_progress_for. Where it does not match, the player itself is
+    -- asked: that is a local D-Bus read, no network, and always current.
+    -- Recording NOTHING is not an option here: eresume_put reads a zero as "back
+    -- to the top" and deletes the position you were at.
+    if item.type == "episode" then
+        local ms = progress_ms
+        if ms == nil then ms = math.floor((get_playerctl_position() or 0) * 1000) end
+        if ms and ms > 0 then Util.eresume_put(item.id, ms, item.duration_ms) end
+    end
+    if item.id ~= Util.recent_id then
+        record_recent_play(item)
+        Util.recent_id = item.id
+    end
+    return true
+end
+
 function Util.recent_tick()
     -- additional_types for the same reason get_playback carries it: without
     -- it me/player answers item: null while an episode plays, so a podcast
@@ -12150,27 +12533,51 @@ function Util.recent_tick()
     -- land in Recently Played too -- which is more than Spotify's own
     -- recently-played endpoint offers, since that one is tracks-only.
     local d = api_get("me/player", Util.with_market("additional_types=episode"))
-    if not d or type(d) ~= "table" or not d.item or not d.item.id then return false end
-    local id = d.item.id
-    -- Free: progress_ms rides on the response this poll already makes, so
-    -- recording where you are in an episode costs no request and no second
-    -- process. 25s granularity is the poll interval, which is the most this
-    -- can lose -- and it is 25s against "always from the beginning".
-    if d.item.type == "episode" then
-        Util.eresume_put(id, d.progress_ms, d.item.duration_ms)
-    end
-    if id ~= Util.recent_id then
-        record_recent_play(d.item)
-        Util.recent_id = id
-    end
-    return true
+    if not d or type(d) ~= "table" then return false end
+    return Util.recent_record(d.item, d.progress_ms)
+end
+
+-- HOW LONG BEFORE THE NEXT POLL IS WORTH A REQUEST.
+--
+-- THIS IS THE BACKGROUND TRAFFIC. The recorder polls me/player so that a play
+-- started anywhere -- another device, the web player, a phone -- lands in
+-- Recently Played even while spoot's window is shut. That is worth a request
+-- while something is actually playing and worth almost nothing when nothing is:
+-- at a flat 25 seconds it is 144 requests an hour, every hour spoot is resident,
+-- against one of the tightest endpoints Spotify has. Nothing else in the app
+-- comes close, and it runs whether or not anyone is listening or looking.
+--
+-- That is "something is running in the background sucking up the quota". Found by
+-- measuring: spoot idle and closed made a request every 25 seconds and nothing
+-- else made any.
+--
+-- So the interval opens out as the answers stay empty -- 25s while there is
+-- something to follow, stretching to five minutes once there plainly is not, and
+-- snapping straight back the moment anything plays. Nothing is lost: a play
+-- started elsewhere is noticed within one interval, and Recently Played is a
+-- Spotify-side list that this only enriches.
+--
+-- ONE ANSWER, TWO CALLERS. The standalone `--recent-watch` loop had a version of
+-- this (three empty answers, then 60s) and the embedded host, which is what
+-- actually runs, had NONE -- a flat 25s timer with no idea whether it was
+-- achieving anything. That is the drift this closes.
+function Util.recent_wait()
+    local n = Util.recent_idle or 0
+    if n < 3 then return 25 end
+    return math.min(25 * n, 300)
+end
+
+-- ...and the bookkeeping that feeds it, so both callers count the same way.
+function Util.recent_note(got)
+    Util.recent_idle = got and 0 or math.min((Util.recent_idle or 0) + 1, 12)
+    Util.recent_last = os.time()
+    return got
 end
 
 function Util.recent_watch_mode()
     Util.detached = true
     local mypid = Util.get_own_pid()
     if mypid then Util.secure_write(P.recent_pid, tostring(mypid)) end
-    local nil_strikes = 0
     while true do
         local left = Util.rate_cool()
         if left > 0 then
@@ -12180,8 +12587,8 @@ function Util.recent_watch_mode()
             if not ok then
                 io.stderr:write("spoot recent-watch error: " .. tostring(got) .. "\n")
             end
-            nil_strikes = (ok and got) and 0 or (nil_strikes + 1)
-            Util.wait(nil_strikes >= 3 and 60 or 25)
+            Util.recent_note(ok and got)
+            Util.wait(Util.recent_wait())
         end
     end
 end
@@ -13014,7 +13421,7 @@ function Util.serve_keep(menu)
     return #answered
 end
 
-function Util.serve_draw(name, d, raw)
+function Util.serve_draw(name, d)
     if not d then return {view = name, rows = {}, empty = true} end
     local o = d.opts or {}
     -- ONE PICTURE, ONE STATEMENT. `cover` and `coverFor` below are the two halves
@@ -13028,6 +13435,13 @@ function Util.serve_draw(name, d, raw)
     -- without the whole cannot be sent.
     local cover = Util.serve_draw_cover(d)
     return {
+        -- DELIBERATELY UNREAD. Nothing consumes this -- not the UI, not the host,
+        -- not smoke.sh or views.sh -- and it stays because the ndjson between the
+        -- engine and the UI is the debugging surface for the whole app, and a
+        -- payload that does not say which view it is makes reading a session log
+        -- guesswork. Named here so an audit finds the answer rather than the
+        -- question. (`raw` sat beside it and really was dead: a parameter threaded
+        -- through three functions to fill a field nobody read. That one went.)
         view   = name,
         -- opts.thumbs is precisely how the rofi build decides grid vs list, so
         -- the UI inherits that decision rather than keeping its own table.
@@ -13048,7 +13462,11 @@ function Util.serve_draw(name, d, raw)
             return type(m) == "string" and Util.strip_markup(m) or nil
         end)(),
         rows   = Util.serve_rows(d.entries, o.items),
-        raw    = raw and d.entries or nil,
+        -- A `raw` FIELD STOOD HERE -- the unformatted entry strings, sent when a
+        -- request asked for them. Nothing ever asked: not the UI, not the host,
+        -- not smoke.sh or views.sh. It was a parameter threaded through
+        -- serve_view, serve_open and the segment loop to fill a field with no
+        -- reader, so all four went with it.
         -- Util.parts_from_stack's own output: "Main", then one part per step,
         -- with a qualified sub-view spending two. The UI draws the arrows; the
         -- naming rule stays in one place, where the rofi build already has it.
@@ -13152,16 +13570,6 @@ function Util.serve_draw(name, d, raw)
         -- thumbnail. On a miss this stays absent and the event answers as before.
         cover = cover,
         coverFor = (cover and Util.serve_shelf(d) and current_track and current_track.id) or nil,
-        -- A CARD THAT WANTS THE BACKDROP GONE WHILE IT IS UP.
-        --
-        -- `art=false` cannot say this and must not be made to. Every action menu
-        -- sets it, and a card floats OVER a list that is still wearing its own
-        -- backdrop -- honouring it there would strip the picture off something
-        -- that did not change, which is why applyContext ignores the field
-        -- outright. So the two menus that really are about nothing you can
-        -- picture -- Seek and the search type filter -- say the stronger thing
-        -- separately, and only they carry it.
-        hideArt = o.hide_art and true or nil,
         -- HOW MANY COLUMNS THE ROWS FLOW INTO, for a card that is a shape rather
         -- than a list. Absent everywhere else, which the UI reads as one.
         cols = (type(o.cols) == "number" and o.cols > 1) and o.cols or nil,
@@ -13169,6 +13577,10 @@ function Util.serve_draw(name, d, raw)
         -- window-position picker sends one -- "anchor", nine pictures of the
         -- screen -- and absent everywhere else, which the UI reads as words.
         cells = (type(o.cells) == "string" and #o.cells > 0) and o.cells or nil,
+        -- THIS CARD IS A FIELD. Its header is somewhere to type rather than a
+        -- caption -- the search box, and nothing else. Absent everywhere else,
+        -- which the UI reads as an ordinary title bar.
+        field = o.field and true or nil,
         -- WHICH ROW IS THE LIVE VALUE, 1-based, as opposed to which row the
         -- cursor is on. A settings picker has both and they are usually not the
         -- same row -- the same distinction a lyrics view draws between the line
@@ -13198,6 +13610,12 @@ function Util.serve_run(name, fn, args)
     -- by the time the view reads it -- which is the request that then answers
     -- with fresh rows and no `stale`, and that is where the asking stops.
     Util.draw_stale = false
+    -- SOMEONE IS HERE AND LOOKING, so the live poll goes back to being worth its
+    -- five seconds. Every menu request in the app comes through this function, so
+    -- it is the one honest signal for "the panel is being used" -- and without it
+    -- an idle back-off built up overnight would still be an idle back-off when you
+    -- opened spoot in the morning. See Util.playback_wait.
+    Util.pb_idle = 0
     Util.reval_sweep()
     -- args.path walks INTO the view: each index is the row that gets selected at
     -- that depth, dispatched by the view's own handler. An empty path just draws.
@@ -13258,7 +13676,7 @@ function Util.serve_run(name, fn, args)
     -- resolving their covers would spend real fetches on rows nobody sees --
     -- and would stream art events the UI would patch onto the wrong model.
     if not Util.serve_art_skip then Util.serve_art_after(name, d) end
-    return Util.serve_draw(name, d, args.raw)
+    return Util.serve_draw(name, d)
 end
 
 -- THE TRAIL, replayed. A trail is a flat list of HOPS: a root hop names an
@@ -13421,10 +13839,10 @@ function Util.serve_nav(args)
         Util.serve_art_skip = not last
         local ok, res = pcall(function()
             if sg.cmd == "open" then
-                return Util.serve_open({tile = sg.key, path = sg.path, raw = args.raw,
+                return Util.serve_open({tile = sg.key, path = sg.path,
                                         keepCtx = (i >= tail_from) and keep_ctx or nil})
             elseif sg.cmd == "view" then
-                return Util.serve_view({name = sg.key, path = sg.path, raw = args.raw,
+                return Util.serve_view({name = sg.key, path = sg.path,
                                         mode = sg.mode,
                                         keepCtx = (i >= tail_from) and keep_ctx or nil,
                                         stack = from, tip = tip, tipRoots = tip_roots})
@@ -14073,7 +14491,7 @@ function Util.serve_playback()
     -- night's song after the setting had been told to forget the session.
     --
     -- Answered here, once, so nothing downstream needs to know the setting exists:
-    -- with no track in the payload the strip collapses on its own (nowBar.active
+    -- with no track in the payload the strip collapses on its own (message.hasNow
     -- reads `name`), the backdrop has nothing to draw and the dock stays empty.
     --
     -- `live` is the same test used below -- is there a player behind any of this --
@@ -14101,6 +14519,23 @@ function Util.serve_playback()
         -- would be a second copy of that knowledge. A boolean is the fact.
         liked    = (t and t.id and Util.is_liked(t.id)) or false,
         id       = t and t.id or nil,
+        -- ...AND THE OTHER ID THIS TRACK ANSWERS TO.
+        --
+        -- Spotify RELINKS tracks per market: ask for a playlist with a `market`
+        -- and the rows come back carrying the id that is playable where you are,
+        -- while the player reports the pair -- `id` for what is actually playing
+        -- and `linked_from.id` for what was asked for. The two are the same track
+        -- and different strings, so a row matched on one and a poll answering
+        -- with the other simply never agree: the green marker never lights, on
+        -- exactly the lists whose tracks got relinked and nowhere else. That is
+        -- an editorial playlist in a small market -- daylist, Discover Weekly --
+        -- looking broken while every list of your own looks fine.
+        --
+        -- Sent beside the id rather than instead of it, because either one may be
+        -- the string a row is carrying. The UI matches a row against both; see
+        -- RowList's `playing`. nil for the overwhelming majority of tracks, which
+        -- are not relinked at all.
+        altId    = (t and t.linked_from and t.linked_from.id) or nil,
         name     = t and t.name or nil,
         artists  = t and artist_names(t) or nil,
         album    = t and t.album and t.album.name or nil,
@@ -14337,7 +14772,25 @@ Util.SERVE = {
         -- A rate-limit cooldown is the one thing that must still be honoured:
         -- polling through it is what earns the next one.
         if Util.rate_cool() > 0 then return {skipped = true} end
-        return {recorded = Util.recent_tick()}
+        -- ONE POLLER ON me/player, AND IT IS NOT THIS ONE.
+        --
+        -- Inside the host, the UI's own once-a-second playback poll already keeps
+        -- current_track fresh -- through the daemon's MPRIS snapshot while
+        -- something is playing (no network at all) and through get_playback when
+        -- it is not. So there is nothing here for a request of its own to find.
+        --
+        -- It used to make one anyway, on a flat 25s timer, and that is half of
+        -- what throttled the account: measured on an idle, CLOSED spoot,
+        -- me/player was leaving every ~15 seconds -- the sum of two independent
+        -- timers each of which believed it was the only one. This records from
+        -- what the other has already fetched; Util.recent_record is the half that
+        -- was worth keeping, and get_playback stashes the position it saw.
+        --
+        -- The standalone `--recent-watch` process still polls for itself through
+        -- Util.recent_tick, because there it IS the only witness.
+        return {recorded = Util.recent_note(Util.recent_record(current_track,
+            (current_track and Util.pb_progress_for == current_track.id)
+                and Util.pb_progress or nil))}
     end,
     -- THE THIRD OF THE THREE. Starting a listen is an act with no menu, so it is
     -- a command like stopping and polling it -- see the note where the `listen`
@@ -14547,11 +15000,17 @@ function Util.serve_mode()
             -- in the rofi build at all -- there was no third mouse button to bind
             -- -- so this is the one of the four with no keyboard ancestor.
             Util.queue_pressed = false
+            local want_id = nil
             if type(ans) == "table" then
                 Util.alt_pressed = ans.alt and true or false
                 Util.del_pressed = ans.del and true or false
                 Util.tab_pressed = ans.tab and true or false
                 Util.queue_pressed = ans.queue and true or false
+                -- WHAT THE ROW WAS, where the UI could name it. Checked below,
+                -- once the entries for this menu exist; absent for every row that
+                -- has no id of its own (a verb in a card, a settings value), and
+                -- those replay by position exactly as they always have.
+                want_id = type(ans.id) == "string" and #ans.id > 0 and ans.id or nil
                 ans = ans.i
                 -- TAB AND DELETE REDRAW THE MENU YOU ARE STANDING IN, and that
                 -- redraw has to be addressable or the step after it goes
@@ -14600,6 +15059,58 @@ function Util.serve_mode()
                 Util.del_pressed = false
                 Util.tab_pressed = false
                 Util.queue_pressed = false
+            end
+            -- ...AND THE SHAPE OF IT THAT IS NOT PROVABLE FROM AN INDEX ALONE.
+            --
+            -- An index inside the list is still the wrong row the moment the list
+            -- is not the one it was picked from -- a revalidation landed, the
+            -- playlist was edited elsewhere, a shelf refreshed underneath. The
+            -- index fits, so the guard above passes it, and the cascade runs
+            -- anyway. That is the half of the bleed-through that survived it.
+            --
+            -- The step now carries the row's id beside its index (see main.qml's
+            -- rowStep), so this can ASK: is the row I am about to take still the
+            -- row that was picked? Three answers, in order of how much they cost:
+            --
+            --   * yes -- the common case, one string compare, nothing happens.
+            --   * it moved -- take it where it is now. Reordering a playlist or
+            --     unliking a track above the one you picked used to spend the
+            --     answer on its neighbour; now it lands on the row you chose.
+            --   * it is gone -- drop the answer, which ENDS the replay here. The
+            --     capture below draws this menu instead, so you arrive at the
+            --     place the path really reaches and see the list, rather than
+            --     having an index spent on whatever took the row's place.
+            --
+            -- Only where the menu was drawn from `items`, which is the pairing
+            -- Util.serve_rows uses to put ids on the wire in the first place: if
+            -- the UI could name the row, this can find it.
+            if want_id and type(ans) == "number" and type(opts.items) == "table"
+               and type(entries) == "table" and #opts.items == #entries then
+                local at = opts.items[ans]
+                if type(at) ~= "table" or at.id ~= want_id then
+                    -- ONE MATCH OR NONE. A track can sit in a playlist twice, and
+                    -- an id is then not a name for a row -- so a second copy makes
+                    -- the index the only thing that can still tell them apart, and
+                    -- moving the answer to the first of them would be inventing a
+                    -- pick. Ambiguity keeps the index; only an unambiguous move is
+                    -- followed, and only a genuine absence ends the replay.
+                    local moved, seen = nil, 0
+                    for i, it in ipairs(opts.items) do
+                        if type(it) == "table" and it.id == want_id then
+                            seen = seen + 1
+                            if seen == 1 then moved = i end
+                        end
+                    end
+                    if seen == 1 then
+                        ans = moved
+                    elseif seen == 0 then
+                        ans = nil
+                        Util.alt_pressed = false
+                        Util.del_pressed = false
+                        Util.tab_pressed = false
+                        Util.queue_pressed = false
+                    end
+                end
             end
             -- The SEARCH HISTORY list is the one menu whose Delete ui_menu
             -- handled itself: view_search only ever passes hist_key and never
@@ -14882,6 +15393,20 @@ if arg and arg[1] == "--doctor" then
     print(Util.setup_report())
     local st = Util.setup_state()
     os.exit((st.token and st.device) and 0 or 1)
+elseif arg and arg[1] == "--client-id" then
+    -- WHOSE RATE LIMIT SPOOT SPENDS. With no argument it reports; with one it
+    -- switches and drops the token, so the next launch logs in against the new
+    -- app. See Util.client_id for why this exists at all.
+    if arg[2] then
+        local id, err = Util.client_set(arg[2])
+        if not id then print("spoot: " .. err); os.exit(2) end
+        print("client id: " .. id)
+        print("token cleared -- spoot will ask you to log in again on the next launch")
+    else
+        local id = Util.client_id()
+        print("client id: " .. id
+              .. (id == P.spotify and "  (the shared one -- see --help)" or "  (yours)"))
+    end
 elseif arg and arg[1] == "--serve" then
     Util.serve_mode()
 elseif arg and arg[1] == "--daemon" then

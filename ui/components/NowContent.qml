@@ -82,7 +82,12 @@ Item {
     }
     Text {
         id: elapsedClock
-        anchors { left: parent.left; leftMargin: content.theme.messagePadH
+        // CLOSER IN THAN THE MESSAGE BAR'S OWN PADDING. messagePadH is the inset
+        // for a caption CENTRED in the bar, and these two are pinned to the ends
+        // of it -- at 30 they sat well short of the corners with nothing between,
+        // which reads as the line being narrower than the bar it is in. rowPadH is
+        // what the rows below are inset by, so the clocks line up with the list.
+        anchors { left: parent.left; leftMargin: content.theme.rowPadH
                   verticalCenter: parent.verticalCenter }
         text: content.elapsed
         color: content.fg
@@ -92,7 +97,7 @@ Item {
     }
     Text {
         id: totalClock
-        anchors { right: parent.right; rightMargin: content.theme.messagePadH
+        anchors { right: parent.right; rightMargin: content.theme.rowPadH
                   verticalCenter: parent.verticalCenter }
         text: content.total
         color: content.fg
@@ -106,7 +111,14 @@ Item {
     Text {
         id: title
         anchors { horizontalCenter: parent.horizontalCenter
-                  verticalCenter: parent.verticalCenter }
+                  verticalCenter: parent.verticalCenter
+                  // THE GROUP IS CENTRED, NOT THE TITLE. The transport marks hang
+                  // off this title's LEFT edge (see the modes Row), so centring
+                  // the title alone put the pair of them off to the left and the
+                  // line read as sitting right of centre by half the marks' width.
+                  // Shifted by half of what hangs there -- the marks and the gap
+                  // between -- so what is centred is everything you can see.
+                  horizontalCenterOffset: Math.round((modes.width + 14) / 2) }
         // BOUNDED BY WHAT IS ACTUALLY BESIDE IT, not by a guess. This was six
         // pad-widths of margin, which had nothing to do with the things it was
         // supposed to clear: the transport modes hang off this title's left
@@ -120,7 +132,7 @@ Item {
         readonly property real sideRoom: Math.min(
             content.width / 2 - (elapsedClock.width + modes.width
                                  + content.theme.messagePadH + 10 + 8),
-            content.width / 2 - (totalClock.width + content.theme.messagePadH + 8))
+            content.width / 2 - (totalClock.width + content.theme.rowPadH + 8))
         width: Math.min(implicitWidth, Math.max(60, sideRoom * 2))
         elide: Text.ElideRight
         horizontalAlignment: Text.AlignHCenter
