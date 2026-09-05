@@ -59,22 +59,6 @@ It's a breeze. ```bash setup``` will automatically install the required core dep
 - Everything is stored in the spoot directory where you extracted it and in ```~/.cache/spoot/```
 - spoot also generates a ```.desktop``` file that lives in ```~/.local/share/applications/```
 
-# Building it yourself
-If you prefer building spoot manually, although the install script does exactly the same thing
-
-**Prerequisites:**
-- ```CMake 3.21+``` and a ```C++17``` compiler
-- ```Qt 6 — Gui```, ```Qml```, ```Quick```, ```Network``` (development packages)
-- ```LayerShellQt``` (development package)
-- ```lua 5.4+``` and ```lua-cjson```
-
-```
-cmake -S . -B build
-cmake --build build -j"$(nproc)"
-```
-
-> ```bin/spoot``` lands beside ```ui/``` and ```engine/``` — it resolves the project root from its own location, so it works as a keybind target from anywhere, and must stay where it lands. A second invocation hands its request to the first over a socket and exits, so binding the same command to a key toggles rather than starting a second copy
-
 # Controls
 Keybinds can also be viewed from ```Main > System > Keybinds```
 
