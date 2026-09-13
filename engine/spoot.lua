@@ -4279,7 +4279,21 @@ local function api_get(path, params, _retry)
         -- way to REACH this line is with the window already open -- so `was` was
         -- 0 every time and the notice fired on every re-arm.
         local _, note = Util.rate_arm(nil, r.headers)
-        if note then ui_say(note) end
+        -- ...BUT A POLL DOES NOT GET TO INTERRUPT YOU.
+        --
+        -- Util.rate_arm already refuses to speak for a detached job, on the
+        -- grounds that "the gate is about the ACCOUNT, the notice is about the
+        -- person looking at the screen". The live playback poll is the same
+        -- category and was not covered: it runs in-process, so it spoke. Skip a
+        -- track with playerctl, the track plays, the poll behind it is refused --
+        -- and spoot announces a rate limit about something you did not ask for
+        -- and which did not fail. That is the "429 message even though the track
+        -- actually played".
+        --
+        -- The gate is still armed, which is the part that matters; only the
+        -- sentence is withheld. Anything you are actually waiting on -- a search,
+        -- a playlist, a play -- still says why it did nothing.
+        if note and not Util.polling then ui_say(note) end
         return nil
     end
     if status == 401 then
@@ -5080,7 +5094,10 @@ get_playback = function()
     -- reads as spotifyd having dropped out -- and recover_playback then starts
     -- a TRACK over the podcast you are listening to. Every me/player read in
     -- this file carries it for that reason.
+    -- A POLL, so a refusal arms the gate quietly; see api_get's 429 branch.
+    Util.polling = true
     local d = api_get("me/player", Util.with_market("additional_types=episode"))
+    Util.polling = false
     last_playback = os.time()
     if not d or not d.item then
         -- NOTHING CAME BACK, and the next poll is worth less than this one was.
@@ -5292,6 +5309,13 @@ end
 
 local function record_recent_play(track)
     if not track or not track.id then return end
+    -- NOT FROM THE PROVISIONAL SNAPSHOT. Util.daemon_snap writes a `_thin` track
+    -- built from MPRIS so the now-playing pair agrees without a request; it has
+    -- no artwork, no `explicit` and no album id. This list is PERSISTED and
+    -- capped at 100, so a thin entry would sit in Recently Played wearing none of
+    -- those until it aged out. The full object arrives from --notify or from
+    -- Util.recent_tick's own me/player read, and the play is recorded then.
+    if track._thin then return end
     Util.recent_reload()
     for i = #recent_tracks, 1, -1 do
         if recent_tracks[i].id == track.id then
@@ -6102,6 +6126,116 @@ function Util.adopt_playing(item)
     -- clock. Cheap insurance: fast_now_track will usually answer from the
     -- daemon's snapshot from here on and get_playback will not run at all.
     Util.pb_idle = 0
+    -- ...AND WRITE IT DOWN, BECAUSE THE FILES ARE WHAT THE NEXT TICK BELIEVES.
+    --
+    -- Setting the three locals above is not enough, and this is the whole of "it
+    -- plays, but spoot does not reflect it for a few seconds". The UI polls once
+    -- a second; every poll runs Util.fast_now_track, which reads now.json and
+    -- now_track.json and OVERWRITES current_track from them whenever those two
+    -- agree with each other. A moment after this they still do -- on the track
+    -- that was playing BEFORE. So the adoption was undone by the very next tick
+    -- and the old track came back, and it stayed back until the daemon noticed
+    -- the MPRIS change and something refreshed the rich half.
+    --
+    -- That refresh is the expensive part: every writer of now_track.json goes
+    -- through the Web API (get_playback's me/player, --notify's tracks/{id},
+    -- --prefetch-track). So the catch-up was waiting on a request, which on a
+    -- throttled credential is exactly the "few seconds" -- or longer.
+    --
+    -- Written from the item already in hand: no request, and the two files agree
+    -- by construction, so the next tick reads back what actually happened. The
+    -- daemon and the notify helper still overwrite both later with the fuller
+    -- objects they fetch; this only removes the gap in front of them.
+    Util.snap_write(item, true)
+end
+
+-- THE TWO SNAPSHOT FILES, WRITTEN TOGETHER OR NOT AT ALL.
+--
+-- They are read as a pair -- fast_now_track refuses them unless they name the
+-- same track -- so writing one without the other is what produces the window
+-- this exists to close. One writer, so the pair cannot drift.
+--
+-- `now.json` is the thin summary the daemon produces from MPRIS; `now_track`
+-- carries the whole object. Given a full track both are derivable, which is why
+-- this can run with no network at all.
+-- THE RICH HALF, UPGRADED IN PLACE -- but only while it is still the right
+-- track.
+--
+-- --notify and --prefetch-track fetch the full object and overwrite now_track,
+-- and both are detached: the fetch can outlive the track that started it. Skip
+-- twice quickly and the reply for the FIRST track lands after the daemon has
+-- already recorded the second, which puts the pair back into exactly the
+-- disagreement Util.daemon_snap now exists to prevent -- and this time nothing
+-- corrects it, because the daemon has no further event to fire.
+--
+-- So the upgrade is conditional on now.json, which is the freshest thing there
+-- is: it is written the instant MPRIS fires and needs no network.
+function Util.snap_upgrade(item, playing)
+    if not (item and item.id) then return false end
+    local now = safe_decode(read_file(P.now))
+    if not (now and now.id == item.id) then return false end
+    return write_file(P.now_track, json.encode({item = item, playing = playing}))
+end
+
+-- THE FULL TRACK, IF WE ALREADY HAVE IT ON DISK.
+--
+-- Util.daemon_snap builds a `_thin` track from MPRIS so a skip is visible with no
+-- request. Thin is enough to name what is playing and to draw the backdrop, and
+-- not enough for anything that needs the ALBUM: Util.current_album_id answers nil,
+-- so Go to Album and Alt+c quietly do nothing, and the explicit mark is missing.
+--
+-- That was tolerable while the gap lasted a second. It does not: the rich half is
+-- upgraded by --notify, which is a request, and on a throttled credential that
+-- request may never land -- so the track stays thin for its entire duration.
+--
+-- But spoot usually HAS the full object already. What you play is mostly what you
+-- have saved, and liked_tracks alone is hundreds of complete track objects off
+-- me/tracks, with album ids and explicit flags intact. Looked up by id before
+-- falling back to thin: no request, no network, and for anything in the library
+-- the provisional window disappears entirely rather than being merely short.
+--
+-- Ordered by how likely a hit is and how cheap the read: memory, then the library
+-- on disk, then the two lists that track what has been playing lately.
+function Util.track_from_cache(id)
+    if not id or #id == 0 then return nil end
+    local function scan(list)
+        if type(list) ~= "table" then return nil end
+        for _, t in ipairs(list) do
+            -- `linked_from` matters as much as `id`: a saved track that Spotify
+            -- relinks is stored under the relinked id, and the PLAYER reports the
+            -- one that was actually loaded. Matching both is what makes a
+            -- re-released album hit rather than miss. See Util.liked_twin.
+            if type(t) == "table"
+               and (t.id == id or (t.linked_from and t.linked_from.id == id)) then
+                return t
+            end
+        end
+        return nil
+    end
+    local hit = scan(mem_get("liked_tracks")) or scan(disk_get(P.liked))
+             or scan(disk_get(P.recent))
+    if hit and hit.album and hit.album.id then return hit end
+    return hit
+end
+
+function Util.snap_write(item, playing)
+    if not (item and item.id) then return false end
+    local artists = item.artists
+    if type(artists) ~= "table" or #artists == 0 then
+        artists = {{name = ""}}
+    end
+    local ok = write_file(P.now, json.encode({
+        id = item.id, name = item.name, type = item.type,
+        artists = artists,
+        album = {name = (item.album and item.album.name) or ""},
+        duration_ms = tonumber(item.duration_ms) or 0,
+        playing = playing and true or false}))
+    -- The rich half second: if the first write failed there is no pair to make,
+    -- and leaving a fresh now.json beside a stale now_track is the exact
+    -- disagreement fast_now_track reads as "fall back to the network".
+    if not ok then return false end
+    return write_file(P.now_track, json.encode({item = item,
+                                                playing = playing and true or false}))
 end
 
 -- IS THE LOCAL PLAYER ALREADY HOLDING THIS TRACK, loaded and ready, whatever
@@ -6353,7 +6487,101 @@ function Util.clean_exit(code)
     os.exit(code or 0)
 end
 
+-- THE SAME RECORDING, ALREADY SAVED UNDER A DIFFERENT ID.
+--
+-- Spotify's catalogue carries a release per distribution, so one recording can
+-- exist as several tracks: "Tales Of Us" (Mute, sold in CA and US) and "Tales of
+-- Us" (Mute, sold in 181 markets) are two albums with two track ids for the same
+-- 4:11 of Goldfrapp. Like both and Liked Tracks shows the song twice, the two
+-- entries unlike independently, and one of them leads to an album that does not
+-- appear on the artist's page here -- because it is not sold here.
+--
+-- You reach the foreign one without trying: /me/top/tracks is built from
+-- listening history and is NOT relinked, so it hands back whichever release the
+-- history recorded. Playing it works -- Spotify relinks at playback and you hear
+-- the edition licensed here -- so nothing looks wrong until the duplicate
+-- appears in your library.
+--
+-- Caught from the liked list itself, which costs no request: same normalised
+-- title, same primary artist, and the same duration TO THE MILLISECOND, under a
+-- different id. Strict on purpose -- a remaster or a live take is a different
+-- recording and its length says so -- so this finds re-releases and not versions.
+local function norm_title(s)
+    s = tostring(s or ""):lower()
+    -- Punctuation and spacing differ between deliveries far more often than the
+    -- words do; the casing difference between the two "Tales of Us" is the same
+    -- kind of drift one level up.
+    return (s:gsub("[%p%s]", ""))
+end
+
+function Util.liked_twin(item)
+    if not (item and item.id and item.duration_ms) then return nil end
+    local tracks = mem_get("liked_tracks")
+    if type(tracks) ~= "table" then tracks = disk_get(P.liked) end
+    if type(tracks) ~= "table" then return nil end
+    local name = norm_title(item.name)
+    local who  = norm_title(item.artists and item.artists[1] and item.artists[1].name)
+    if name == "" then return nil end
+    for _, t in ipairs(tracks) do
+        if t.id ~= item.id
+           and tonumber(t.duration_ms) == tonumber(item.duration_ms)
+           and norm_title(t.name) == name
+           and norm_title(t.artists and t.artists[1] and t.artists[1].name) == who then
+            return t
+        end
+    end
+    return nil
+end
+
+-- A PROVISIONAL TRACK IS NOT SOMETHING TO WRITE TO THE LIBRARY WITH.
+--
+-- Util.daemon_snap builds the now-playing pair from MPRIS so a skip shows up
+-- without a request, and marks it `_thin`. Its id is whatever the PLAYER reports
+-- -- which is the release librespot resolved, and not necessarily the one
+-- Spotify's API answers with for this market. Spotify relinks: ask for a track
+-- that is not sold here and you get the local equivalent back, with `linked_from`
+-- naming what you asked for. The two ids are different rows in the catalogue.
+--
+-- Liking the player's id therefore saves a DIFFERENT release of the same
+-- recording: a second entry in Liked Tracks, independently likeable, pointing at
+-- an album that does not appear on the artist's page here because it is not sold
+-- here. That is not hypothetical -- it is exactly the duplicate "Stranger" this
+-- account now carries, saved minutes after the thin snapshot was introduced.
+--
+-- So a thin subject is resolved through the API first, at the cost of one
+-- request, and only on the rare press that lands inside the provisional window.
+-- If it cannot be resolved the like is REFUSED rather than guessed: an unwanted
+-- entry in a library is far more annoying to undo than pressing the key again.
+local function resolve_thin(item)
+    if not (item and item._thin and item.id) then return item end
+    local kind = item.type == "episode" and "episodes/" or "tracks/"
+    local t = api_get(kind .. item.id, Util.with_market())
+    if t and t.id then return t end
+    return nil
+end
+
 local function do_like(item, unlike)
+    item = resolve_thin(item)
+    if not item then
+        ui_say(Util.rate_why("Cannot confirm which release that is"))
+        return false
+    end
+    -- ...AND NOT A SECOND COPY OF SOMETHING ALREADY SAVED. See Util.liked_twin:
+    -- this is the one moment the duplicate can be prevented, and it is far easier
+    -- to prevent than to notice later -- the two entries are identical on screen
+    -- and only one of them leads anywhere.
+    --
+    -- Unliking is exempt: if two are somehow already there, both must be
+    -- removable.
+    if not unlike then
+        local twin = Util.liked_twin(item)
+        if twin then
+            local alb = twin.album and twin.album.name or ""
+            ui_say("Already in Liked Tracks"
+                   .. SEP .. "saved as another release" .. (alb ~= "" and (" (" .. alb .. ")") or ""))
+            return false
+        end
+    end
     local token = get_token()
     if not token then ui_say("Cannot like: no token"); return false end
     local verb = unlike and "DELETE" or "PUT"
@@ -6421,6 +6649,14 @@ end
 -- Takes the ITEM, not an id: the endpoint wants a URI and the local mirror now
 -- stores one, and neither can be built from an id alone once episodes exist.
 local function do_add_queue(item)
+    -- Same reason do_like resolves first: a provisional subject carries the
+    -- PLAYER's id, and queueing the wrong release of a track is the same
+    -- catalogue mix-up one step further on -- it would play, from an album you
+    -- cannot otherwise reach here.
+    item = resolve_thin(item)
+    if not item then
+        ui_say(Util.rate_why("Cannot confirm which release that is")); return
+    end
     local uri = Util.item_uri(item)
     if not uri then ui_say("Nothing to queue"); return end
     local token = get_token()
@@ -13014,10 +13250,50 @@ function Util.daemon_snap(snap)
         -- episode to its own action menu rather than the track one. For an
         -- episode MPRIS reports the show in {{artist}}, so it lands in
         -- `artists` here and Util.subtitle reads it back out unchanged.
-        write_file(P.now, json.encode({ id=track_id, name=title, type=track_kind,
-            artists={{name=artist or ""}}, album={name=album or ""},
-            duration_ms=math.floor((duration or 0) * 1000),
-            playing=(Util.mpris{op = "status"}.value or "") == "Playing" }))
+        --
+        -- BOTH HALVES, and this is what makes an external skip visible at once.
+        --
+        -- This wrote now.json alone. Util.fast_now_track reads now.json AND
+        -- now_track.json and refuses the pair unless they name the same track --
+        -- and every writer of the rich half goes through the Web API
+        -- (get_playback's me/player, --notify's tracks/{id}, --prefetch-track).
+        -- So `playerctl next` moved the player, the daemon recorded it here in
+        -- milliseconds, and spoot went on showing the PREVIOUS track until a
+        -- request landed. With the gate shut that is not a delay, it is a stall:
+        -- get_playback backs off to a minute while refused, so spoot sat on the
+        -- old track indefinitely and said "rate limited" about a track that was
+        -- playing perfectly well.
+        --
+        -- MPRIS already carries everything the pair needs to AGREE -- id, title,
+        -- artist, album, length -- so the rich half is written from the same
+        -- metadata rather than waited for. It is marked `_thin`: it is a real
+        -- track and correct about what is playing, but it has no `explicit`, no
+        -- `is_playable` and no album id, so the things that need those can tell.
+        -- --notify overwrites it with the full object moments later.
+        -- THE COVER RIDES ALONG TOO. Util.serve_playback resolves the backdrop
+        -- from t.album.images[1].url and nothing else, so a snapshot carrying the
+        -- album NAME but no images left the backdrop wearing the previous track's
+        -- art -- instant everywhere else, stale in the one place you are looking.
+        --
+        -- MPRIS hands us the same CDN url spoot fetches anyway
+        -- (i.scdn.co/image/ab67616d0000b273...), and Util.art_url rewrites the
+        -- size code in it exactly as it does for one off the Web API, so this
+        -- needs no special handling downstream. One entry rather than Spotify's
+        -- three: the size in the url is rewritten per use, so the others were
+        -- never read.
+        local images = nil
+        if type(art_url) == "string" and art_url:match("^https?://") then
+            images = {{url = art_url}}
+        end
+        local snap = { id=track_id, name=title, type=track_kind,
+            artists={{name=artist or ""}},
+            album={name=album or "", images=images},
+            duration_ms=math.floor((duration or 0) * 1000), _thin=true }
+        -- ...unless the whole thing is already on disk, in which case there is
+        -- nothing provisional about it. See Util.track_from_cache.
+        local full = Util.track_from_cache(track_id)
+        if full and full.album and full.album.id then snap = full end
+        Util.snap_write(snap, (Util.mpris{op = "status"}.value or "") == "Playing")
         Util.snap_id = track_id
     end
     if title and title ~= "" then Util.snap_title = title end
@@ -13166,7 +13442,12 @@ function Util.recent_tick()
     -- would record nothing and count as a dropout strike. With it, episodes
     -- land in Recently Played too -- which is more than Spotify's own
     -- recently-played endpoint offers, since that one is tracks-only.
+    -- A POLL TOO, and the same rule applies: the recorder runs on its own timer
+    -- inside the host, where Util.detached is false, so without this a refused
+    -- tick spoke to whoever happened to be looking. See api_get's 429 branch.
+    Util.polling = true
     local d = api_get("me/player", Util.with_market("additional_types=episode"))
+    Util.polling = false
     if not d or type(d) ~= "table" then return false end
     return Util.recent_record(d.item, d.progress_ms)
 end
@@ -13289,10 +13570,8 @@ function Util.run_notify()
             -- `playing` is written here as well; run_prefetch_track omitted it
             -- while get_playback includes it, which left fast_now_track reading
             -- transport state from the daemon's one-shot snapshot instead.
-            write_file(P.now_track, json.encode({
-                item = track,
-                playing = (Util.mpris{op = "status"}.value or "") == "Playing"
-            }))
+            Util.snap_upgrade(track,
+                (Util.mpris{op = "status"}.value or "") == "Playing")
         end
         -- Episodes have no lyrics to look up, and asking spends a request plus a
         -- negative-cache entry on every one that plays.
@@ -13381,10 +13660,8 @@ local function run_prefetch_track()
     if not id or not id:match("^[A-Za-z0-9]+$") then os.exit(0) end
     local track = api_get("tracks/" .. id, Util.with_market())
     if track then
-        write_file(P.now_track, json.encode({
-            item = track,
-            playing = (Util.mpris{op = "status"}.value or "") == "Playing"
-        }))
+        Util.snap_upgrade(track,
+            (Util.mpris{op = "status"}.value or "") == "Playing")
     end
     os.exit(0)
 end
