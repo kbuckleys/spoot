@@ -30,14 +30,6 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
  
 - **Lyrics use LRCLIB**
   - While I'd love to use Spotify's own database, it's currently reserved to the official client's internal use. Possible to implement, but breaks the ToS
- 
-- **Rate limits are the shared app's, and a private id costs you features**
-  - A Spotify rate limit belongs to the *app*, not the account. spoot ships one client id, so every install draws on the same pool -- which is why 429s can appear when you personally have done almost nothing
-  - Registering your own app at `developer.spotify.com/dashboard` (redirect URI `http://127.0.0.1:8989/login`, then `spoot --client-id <id>`) gives you a pool of your own. It is **not** a free upgrade: in November 2024 Spotify closed a set of endpoints to every app created after that date, and the bundled id predates the cutoff
-  - **How much it buys, measured.** Same account, same endpoint, same rate of one request every 20s: the bundled id refused **8 of 12**, with the successes arriving about one a minute; a freshly registered id refused **0 of 12**, then absorbed 60 requests twelve at a time in 1.7s without a single refusal. The account was the constant, so the refusals are the shared app's pool and not your account. (A short burst against a development-mode app says nothing about sustained load over hours)
-  - An app registered today answers 403/404 for **eleven** endpoints, measured against a real new app rather than taken from the announcement: the whole `browse/` prefix (`new-releases`, `categories`, `categories/{id}/playlists`, `featured-playlists`), `recommendations` and `available-genre-seeds`, `artists/{id}/related-artists`, `artists/{id}/top-tracks`, `me/player/recently-played`, and `playlists/{id}` plus `playlists/{id}/tracks` for playlists owned by Spotify
-  - In spoot that is **New Releases, Categories, Made For You, Discover Weekly, Charts, Featured Playlists, Discover by Genre, Related Artists, an artist's Top Tracks, and every editorial or algorithmic playlist** -- the last one being the sharp edge, since a playlist you *follow* rather than made is Spotify's. (Whether a playlist you created yourself still works was not tested; this account owns none)
-  - So it is a trade. A quota you do not share, against a smaller spoot. An id registered *before* the cutoff keeps both
 
 - **Crossfade**
   - `librespot` -which is what ```spotifyd``` wraps- can only decode one stream at a time, so a true overlapping crossfade isn't possible. However, an implementation of a pseudo alternative is doable but it won't realistically make for a positive addition. The overall value of such implementation simply doesn't justify the added complexity and costly bloat
