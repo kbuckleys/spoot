@@ -775,6 +775,26 @@ end
 function Util.rate_why(fallback)
     local left = Util.rate_cool()
     if left <= 0 then return fallback end
+    -- SAID IN FULL NOW AND THEN, NOT FIFTEEN TIMES A MINUTE.
+    --
+    -- Util.rate_arm learned this for its own notice -- "a limit that lasts ten
+    -- minutes is one sentence rather than twenty" -- and this function, which is
+    -- reached by every failed read in the app, never did. On a shared client id
+    -- the gate is shut a good fraction of the time, so every list, every search
+    -- and every detail sheet that missed its cache announced the rate limit
+    -- again. The information is worth having once; after that it is the app
+    -- telling you the same thing about itself over and over while you try to use
+    -- it.
+    --
+    -- The repeat still SAYS something -- a read that did nothing must never look
+    -- like a read that worked -- but it leads with what you were doing and tags
+    -- the reason in two words. Same clock as Util.rate_arm's notice, so the long
+    -- explanation and the short one do not both fire for the same window.
+    local said = tonumber((read_file(P.rate_said) or ""):match("%d+"))
+    if said and os.time() - said < P.rate_say_every then
+        return fallback .. SEP .. "rate limited"
+    end
+    Util.secure_write(P.rate_said, os.time())
     return "Spotify is rate limiting" .. SEP .. "using cache -- retrying in " .. left .. "s"
 end
 
@@ -824,6 +844,34 @@ function Util.client_id()
     return P.spotify
 end
 
+-- EVERY REQUEST, WRITTEN DOWN, when asked for.
+--
+-- Util.http is the ONE way out of this process on both transports, so it is the
+-- only place that can answer "what is spoot actually asking for". Off unless
+-- SPOOT_REQLOG names a file, so it costs a single getenv on a path that is
+-- already doing network I/O.
+--
+-- It exists because every measurement of request volume so far was taken against
+-- the curl path, and the app people actually run is the embedded one -- which
+-- goes through Util.host.http above and was invisible to all of it.
+-- On Util, not as locals: the chunk body is at Lua's 200-local cap, which is why
+-- the file says so in half a dozen places.
+Util.REQLOG = os.getenv("SPOOT_REQLOG")
+function Util.req_log(req, code)
+    if not Util.REQLOG then return end
+    local f = io.open(Util.REQLOG, "a")
+    if not f then return end
+    -- The BODY too, for writes: a play is entirely described by its body -- which
+    -- context, which offset -- and without it the log says a play happened but
+    -- not what it asked for.
+    local body = req.body
+    if type(body) == "table" then body = "(table)" end
+    f:write(string.format("%s\t%s\t%s\t%s\t%s\n", tostring(Util.mono and Util.mono() or os.time()),
+        tostring(code or "-"), tostring(req.method or "GET"), tostring(req.url or "?"),
+        tostring(body or "")))
+    f:close()
+end
+
 function Util.http(req)
     -- Nothing goes out while the gate is shut; see NET_DOWN_SECS. `bg` included:
     -- a fire-and-forget write is exactly the kind of thing there is no point
@@ -838,6 +886,7 @@ function Util.http(req)
     -- than the two lines it costs.
     if Util.host and Util.host.http and not os.getenv("SPOOT_FORCE_CURL") then
         local r = Util.host.http(req)
+        Util.req_log(req, r and r.code)
         -- `bg` answers 0 by design -- it waits for nothing -- so it must not be
         -- read as the link being down.
         if not req.bg then Util.net_note(r and r.code) end
@@ -2293,7 +2342,30 @@ local function cached_fetch(key, disk_path, ttl, fetch_fn, opts)
             -- path is a pure read decorating a menu, it is on the draw path, and
             -- a twenty-second lease there would put a disk read on every redraw.
             -- So it keeps the full lease it always had.
-            mem_set(key, v, Util.cache_only and ttl or P.ttl_stale)
+            -- ...BUT NOT SOONER THAN THE WINDOW REOPENS.
+            --
+            -- A flat twenty seconds turned one refusal into a retry every twenty
+            -- seconds for as long as the gate kept shutting: fetch is refused,
+            -- stale is served on a short lease, the lease expires, the next draw
+            -- fetches again, earns another 429, and re-arms the gate. For a
+            -- playlist that retry is a PAGED BATCH, so it is not one request but
+            -- several -- which is the shape Util.rate_arm's note calls walking
+            -- into the same wall a few times a second.
+            --
+            -- Spotify has already said how long to wait; the cooldown it armed is
+            -- sitting right there. Retrying before it expires cannot succeed
+            -- anyway -- api_get refuses at the gate without sending -- so the
+            -- lease is held to whichever is longer. Transient failures that armed
+            -- nothing still retry in twenty seconds, which is what the short lease
+            -- was for.
+            local lease = P.ttl_stale
+            if not Util.cache_only then
+                local shut = Util.rate_cool()
+                if shut > lease then lease = shut end
+            else
+                lease = ttl
+            end
+            mem_set(key, v, lease)
         end
     end
     return v
@@ -5929,21 +6001,57 @@ local function do_play(item, ctx_type, ctx_id, all_items, idx)
     -- its own string, which meant position_ms -- orthogonal to every one of them
     -- -- could only be added four times over.
     local b
-    if context_uri and idx then
-        b = {context_uri=context_uri, offset={position=idx-1}}
-    elseif context_uri and item and item.id then
-        -- Context known, position NOT known. This used to fall into the branch
-        -- above as `(idx or 1)-1`, i.e. position 0, so it silently played the
-        -- album or playlist from its FIRST track instead of the one asked for.
-        -- Reached whenever a warm start replays a track's action menu: the stack
-        -- entry carries ctx_type/ctx_id but all_items/cidx cannot be restored,
-        -- so Play started the wrong track.
-        --
-        -- offset accepts a uri as well as a position, which keeps the context --
-        -- playback still continues through the album afterwards -- while landing
-        -- on the right track. Better than dropping to a bare uris play, which
-        -- would start the correct track but strand it with no context.
+    -- BY URI, NOT BY POSITION, whenever the track can name itself.
+    --
+    -- offset={position=n} means "the nth row of the context AS SPOTIFY HAS IT
+    -- RIGHT NOW". spoot sends the position from the list it drew, and the two are
+    -- the same thing only while the two lists agree. For an album they always do.
+    -- For a playlist they routinely do not: Made For You, Discover Weekly, Charts
+    -- and every algorithmic list are re-ordered and re-populated server-side
+    -- whenever Spotify feels like it, and spoot draws from a cache that is
+    -- allowed to be stale (api_get_playlist_tracks takes stale_ok, so a refetch
+    -- refused by the rate gate leaves the previous ordering on screen).
+    --
+    -- The failure is silent and total: you press Return on a row and a completely
+    -- different song plays -- whatever now occupies that position. Not a
+    -- different RELEASE of the right song, a different song.
+    --
+    -- offset={uri=...} asks for the track by identity instead, and Spotify keeps
+    -- the context either way -- playback still continues through the playlist
+    -- afterwards. The branch below already used it for the case where the
+    -- position is unknown; there was never a reason position should win when both
+    -- are available.
+    --
+    -- The one thing position knows that a uri does not is WHICH COPY, for a track
+    -- sitting in a playlist twice. That degrades to starting the first copy --
+    -- the right song, in the right context, one entry early -- which is a far
+    -- better worst case than playing something unrelated.
+    -- A PLAYLIST'S CONTEXT IS NOT SOMETHING WE CAN TRUST TO CONTAIN THE TRACK.
+    --
+    -- offset -- by position OR by uri -- only means anything if the track is
+    -- still IN the context. When it is not, Spotify does not refuse: it plays the
+    -- context from the top. Measured on this account: a cached mix showed "Berger"
+    -- at position 7, the live playlist no longer contained it at all, and pressing
+    -- Return produced track 1 -- "Roll On" by Sneaker Pimps. Nothing about that
+    -- looks like an error from the outside; the player simply plays a different
+    -- song than the one you picked.
+    --
+    -- Albums do not do this. They are fixed: what spoot cached is what Spotify
+    -- has, so the context is safe and worth keeping for continuation. Playlists
+    -- are the opposite -- Made For You, Discover Weekly, the daily mixes and every
+    -- algorithmic list are re-populated server-side, and spoot draws them from a
+    -- cache that is allowed to be stale.
+    --
+    -- So a playlist plays from OUR list instead: the exact track, followed by the
+    -- tracks that follow it ON SCREEN. Continuation still works -- Util.save_queue
+    -- has already stored the queue and spoot drives it -- and what plays next is
+    -- what you were looking at, which is the more honest answer anyway.
+    local ctx_trusted = context_uri and ctx_type ~= "playlist"
+    if ctx_trusted and item and item.id then
         b = {context_uri=context_uri, offset={uri=Util.item_uri(item)}}
+    elseif ctx_trusted and idx then
+        -- Context trusted, and the track cannot name itself -- an id-less row.
+        b = {context_uri=context_uri, offset={position=idx-1}}
     elseif all_items and idx then
         -- queue_tracks, not all_items: save_queue above has just built it, and
         -- the idx it handed back indexes THAT array -- the filtered one, with
@@ -9191,6 +9299,9 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             {prompt="Action", mesg=function() return track_mesg(item) end, theme=action_theme, refresh=rebuild_actions,
              context=true, art=no_art,
              ctx_type=ctx_type, ctx_id=ctx_id, items=all_items, entries=entries,
+             -- The verbs, named. See Util.serve_rows: this is what lets a
+             -- replayed step prove it landed on the row that was picked.
+             keys=akeys,
              alt_select=true})
         local alt = Util.alt_pressed
         Util.alt_pressed = false
@@ -10287,7 +10398,16 @@ local function view_search()
         -- when that answer arrives, which is what keeps Search in the breadcrumb.
         local query = ui_menu(hist, {prompt="Search",
             mesg="Search", theme=P.THEME_SEARCH,
-            context=true, art=false, field=true,
+            -- `no_cover` LIKE THE TRAIL MENU, and for the same reason.
+            --
+            -- `art=false` says the LIST behind keeps its backdrop; it says nothing
+            -- about the card. A card resolves its own picture through
+            -- Util.serve_card_art, which falls back to Util.serve_ctx_item -- the
+            -- row that was last picked. The search box is not opened by picking a
+            -- row, so it inherited whatever you happened to be standing on and
+            -- wore it inside the card: "Alt+F shows the backdrop of the list I am
+            -- in". A field you type a query into is not about a track.
+            context=true, art=false, field=true, no_cover=true,
             hist_key=hkey, refresh=function() return Util.hist_get(hkey) end})
         if not query then break end
         -- rofi echoes a SELECTED row back pango-escaped (markup is on), so a
@@ -14114,9 +14234,24 @@ end
 -- `items` are the objects the rows were built from, when the caller has them.
 -- Their ids travel with the rows so the UI can mark the playing one itself --
 -- see display_track, which no longer writes that into the text.
-function Util.serve_rows(entries, items)
+-- `keys` NAMES THE VERBS, and it is what makes a card's rows identifiable.
+--
+-- A list row is identified by its track id, which is how a replayed step can
+-- check it landed on the row that was picked (see ui_menu's want_id guard). A
+-- CARD's rows have no id -- they are verbs, not things -- and that guard also
+-- requires #items == #entries, which is never true for a card: its `items` is
+-- the list it was opened FROM. So every action menu was exempt from the check,
+-- and a step whose index had shifted could land on any verb and run it. The end
+-- of that cascade is the one this comment exists for: opening an album, pressing
+-- Return on a track, and getting Add to Playlist.
+--
+-- The verbs already have stable keys -- view_actions builds them beside the
+-- labels -- they were simply never sent. With them on the wire the UI can name
+-- the verb it picked and ui_menu can refuse anything else.
+function Util.serve_rows(entries, items, keys)
     local out = {}
     local paired = type(items) == "table" and #items == #(entries or {})
+    local keyed = type(keys) == "table" and #keys == #(entries or {})
     for i, e in ipairs(entries or {}) do
         local text, icon, meta = Util.serve_unpack(e)
         local it = paired and items[i] or nil
@@ -14136,6 +14271,7 @@ function Util.serve_rows(entries, items)
         if meta then mk, dur = meta:match("^([^\x1f]*)\x1f(.*)$") end
         out[i] = {label = Util.strip_markup(text or e), icon = icon,
                   rich = Util.rich_markup(text or e), id = id,
+                  key = keyed and keys[i] or nil,
                   marks = (mk and #mk > 0) and mk or nil,
                   meta  = (dur and #dur > 0) and dur or nil}
     end
@@ -14431,7 +14567,7 @@ function Util.serve_draw(name, d)
             end
             return type(m) == "string" and Util.strip_markup(m) or nil
         end)(),
-        rows   = Util.serve_rows(d.entries, o.items),
+        rows   = Util.serve_rows(d.entries, o.items, o.keys),
         -- A `raw` FIELD STOOD HERE -- the unformatted entry strings, sent when a
         -- request asked for them. Nothing ever asked: not the UI, not the host,
         -- not smoke.sh or views.sh. It was a parameter threaded through
@@ -16096,7 +16232,7 @@ function Util.serve_mode()
             -- in the rofi build at all -- there was no third mouse button to bind
             -- -- so this is the one of the four with no keyboard ancestor.
             Util.queue_pressed = false
-            local want_id = nil
+            local want_id, want_key = nil, nil
             if type(ans) == "table" then
                 Util.alt_pressed = ans.alt and true or false
                 Util.del_pressed = ans.del and true or false
@@ -16107,6 +16243,9 @@ function Util.serve_mode()
                 -- has no id of its own (a verb in a card, a settings value), and
                 -- those replay by position exactly as they always have.
                 want_id = type(ans.id) == "string" and #ans.id > 0 and ans.id or nil
+                -- ...and what the row WAS, where it is a verb rather than a
+                -- thing. See the card guard below.
+                want_key = type(ans.key) == "string" and #ans.key > 0 and ans.key or nil
                 ans = ans.i
                 -- TAB AND DELETE REDRAW THE MENU YOU ARE STANDING IN, and that
                 -- redraw has to be addressable or the step after it goes
@@ -16200,6 +16339,39 @@ function Util.serve_mode()
                     if seen == 1 then
                         ans = moved
                     elseif seen == 0 then
+                        ans = nil
+                        Util.alt_pressed = false
+                        Util.del_pressed = false
+                        Util.tab_pressed = false
+                        Util.queue_pressed = false
+                    end
+                end
+            end
+            -- ...AND THE SAME QUESTION FOR A CARD, which has no ids to ask it of.
+            --
+            -- Identical in shape to the want_id guard above and for the identical
+            -- reason -- is the row I am about to take still the row that was
+            -- picked -- but asked of the verb's key, because a card's rows are
+            -- verbs. Three answers, same order: it is where it was (nothing
+            -- happens), it moved (take it where it is now, which is what a
+            -- relabelled Like/Unlike does), or it is gone (drop the answer, which
+            -- ends the replay and draws this card instead of running something
+            -- nobody asked for).
+            --
+            -- This is the guard that was missing when opening an album, pressing
+            -- Return on a track, and getting Add to Playlist.
+            if want_key and type(ans) == "number" and type(opts.keys) == "table"
+               and type(entries) == "table" and #opts.keys == #entries then
+                if opts.keys[ans] ~= want_key then
+                    local moved, seen = nil, 0
+                    for i, k in ipairs(opts.keys) do
+                        if k == want_key then seen = seen + 1
+                            if seen == 1 then moved = i end
+                        end
+                    end
+                    if seen == 1 then
+                        ans = moved
+                    else
                         ans = nil
                         Util.alt_pressed = false
                         Util.del_pressed = false

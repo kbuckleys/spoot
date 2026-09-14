@@ -348,6 +348,13 @@ Window {
         st.i = inRange ? m.get(i).src : (i + 1)
         var rid = inRange ? (m.get(i).id || "") : ""
         if (rid.length) st.id = rid
+        // ...AND THE VERB, where the row is one. A card's rows carry no id -- they
+        // are actions, not things -- so `id` alone leaves every action menu unable
+        // to prove a replayed step landed where it was aimed. The engine sends a
+        // stable key per verb (see Util.serve_rows) and checks it the same way it
+        // checks an id; an ordinary list row has no key and is unaffected.
+        var rkey = inRange ? (m.get(i).key || "") : ""
+        if (rkey.length) st.key = rkey
         return st
     }
 
