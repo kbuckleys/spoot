@@ -3156,6 +3156,25 @@ Window {
             // wheel gesture with no feedback is a gesture you cannot tell worked.
             if (action === "volume" && p && p.volume !== undefined)
                 root.notify("Volume " + p.volume + "%")
+            // ...AND A LIKE CHANGES THE ROWS, not just the strip.
+            //
+            // The reply refreshes the now-playing bar, so the heart flips at once
+            // -- and the LIST kept the marks it was drawn with. Like the playing
+            // track from the bar while standing in the album it came from and the
+            // row for that very track went on showing it unsaved, until something
+            // else happened to redraw the menu.
+            //
+            // A redraw is the honest way to fix it rather than editing the row
+            // here: the mark is the engine's answer (display_track builds it
+            // beside the explicit glyph), and rebuilding that in QML would be a
+            // second copy of it waiting to disagree.
+            //
+            // Direction 0, so this is not a new place: the draw comes back as the
+            // same menu, sameMenu() matches, and applyDraw patches the rows in
+            // place -- the cursor, the scroll and any filter all stay put. It
+            // costs one round trip and no network: do_like has already updated
+            // the liked set in this process, so the re-serve reads it from memory.
+            if (action === "like") root.refresh(0)
         })
     }
     // Named so a keymap test says which phase a binding is waiting on, instead
