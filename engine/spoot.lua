@@ -184,12 +184,24 @@ P.eresume_end_ms  = 30 * 1000
 P.eresume_min_ms  = 5 * 1000
 P.eresume_max     = 200
 
--- Util.view_listen. songrec's own --request-interval defaults to 10s, so this
--- has to allow at least two attempts to be worth calling a timeout; 30 is two
--- with headroom. The poll is what makes the window dismissable -- it is how
--- often the loop asks whether a match landed or the user closed the window, so
--- it wants to be short enough to feel instant and long enough not to spin.
+-- Util.view_listen. The WHOLE budget: the recording below, plus the round trip
+-- to Shazam, plus room for a slow one. Measured here at about sixteen seconds
+-- end to end, so thirty is roughly double what a good run needs.
+--
+-- It used to be reasoned from songrec's own --request-interval, which defaults
+-- to 10s: the timeout had to allow two attempts. That applied to
+-- `songrec recognize -d`, which spoot no longer uses -- see Util.listen_start
+-- for why it could never capture anything here. There is one attempt now, on one
+-- deliberate capture, and the interval does not enter into it.
+--
+-- The poll is what makes the window dismissable -- it is how often the loop asks
+-- whether a match landed or the user closed the window, so it wants to be short
+-- enough to feel instant and long enough not to spin.
 P.listen_timeout = 30
+-- How long the listener RECORDS before asking Shazam, inside that budget. Twelve
+-- seconds is what a recognition actually needs; the rest of the window is the
+-- request. See Util.listen_start.
+P.listen_record  = 12
 -- EVERYTHING THE LISTENER HAS EVER IDENTIFIED. A recognition is a small piece of
 -- work with a real cost -- thirty seconds of held microphone -- and until now its
 -- result lived exactly as long as the card that showed it. Kept newest-first and
@@ -2075,8 +2087,10 @@ end
 -- so the Playlists tile can still read a head and repaint. See Util.shelf_splice
 -- for why deleting it was what left that tile wearing stale artwork.
 --
--- Called bare from do_save_playlist, which holds only an id -- there is no object
--- to splice there, so it takes the bust below exactly as every caller used to.
+-- Called bare only when there is genuinely nothing to splice. Every caller now
+-- has an object and passes it, because the bust is expensive in the currency
+-- that is scarce here: it deletes the shelf, and the next open of Playlists
+-- re-pages me/playlists to rebuild it.
 local function bust_my_playlists(item, add)
     -- Spotify's own ordering, so no sort: a spliced playlist lands at the end
     -- until the next fetch puts it where the API says.
@@ -6853,16 +6867,21 @@ function Util.lib_has(kind, id)
     return type(r) == "table" and r[1] == true
 end
 
-local function do_save_playlist(playlist_id)
+-- `playlist` is the object `playlist_id` names, when the caller has it -- and the
+-- one caller does. Passing it is the difference between splicing the saved
+-- playlist onto the cached shelf and DELETING the shelf: a bare bust makes the
+-- next open of Playlists re-page me/playlists, which is one API call at best and
+-- several for a long list, spent against a pool that is already refusing about
+-- half of everything. Same reason do_follow_artist takes its artist.
+local function do_save_playlist(playlist_id, playlist)
     local token = get_token()
     if not token then ui_say("Cannot save playlist: no token"); return false end
     local url = Util.api_url("playlists/" .. playlist_id .. "/followers")
     local r = Util.api_write("PUT", url, token, {len0=true})
     if Util.is2xx(r) then
-        -- Bare on purpose: this path has a playlist ID and nothing else, so
-        -- there is no object to splice into the shelf and the bust is the
-        -- honest answer. Every other caller passes one.
-        bust_my_playlists()
+        -- Still bare when there is genuinely nothing to splice, which is the
+        -- honest answer for a caller that holds only an id.
+        bust_my_playlists(playlist, true)
         return true
     end
     return false
@@ -6883,7 +6902,11 @@ local function album_action_menu(album)
                    "Albumart", "Copy Web Link", "Album Details"}
     local akeys = {"open", "save", "art", "url", "details"}
     if (album.artists or {})[1] then
-        table.insert(acts, 2, "Go to Artist")
+        -- ALT_MARK for the reason the System menu's Listen row wears it: this row
+        -- has a SECOND gesture -- Return opens the discography, Shift+Return the
+        -- artist's hub -- and nothing else in the menu says so. Leading, so every
+        -- marked row in the app shares one column.
+        table.insert(acts, 2, ALT_MARK .. " Go to Artist")
         table.insert(akeys, 2, "artist")
     end
     -- A CURSOR MEMORY STOOD HERE: pos_row on the way in, pos_put on the way out,
@@ -6901,6 +6924,11 @@ local function album_action_menu(album)
     -- this menu passes neither `current` nor `items`.
     local action = ui_menu(acts,
         {prompt=album.name or "Album", mesg=mesg, theme=THEME_SUB,
+         -- The verbs, named, so a replayed step can prove it landed on the row
+         -- it was aimed at. See Util.serve_rows: without this a card's rows have
+         -- no identity at all and a shifted index runs whatever sits at that
+         -- position. Dispatch here is by LABEL (below); this is only the guard.
+         keys=akeys,
          context=true, art=false, alt_select=true})
     local alt = Util.alt_pressed
     Util.alt_pressed = false
@@ -6963,6 +6991,11 @@ function Util.show_action_menu(show)
     -- no one would ever read.
     local action = ui_menu(acts,
         {prompt=show.name or "Podcast", mesg=Util.display_show(show),
+         -- The verbs, named, so a replayed step can prove it landed on the row
+         -- it was aimed at. See Util.serve_rows: without this a card's rows have
+         -- no identity at all and a shifted index runs whatever sits at that
+         -- position. Dispatch here is by LABEL (below); this is only the guard.
+         keys=akeys,
          theme=THEME_SUB, context=true, art=false})
     -- ON THE KEY, not the label. Two of the six rows are state -- Follow flips to
     -- Unfollow, and the Watch row is named by Util.watch_label -- so a branch
@@ -7009,7 +7042,7 @@ local function playlist_action_menu(pl)
     if action == "Playlist Art" then
         view_art(pl)
     elseif action == "Save Playlist" then
-        ui_say(do_save_playlist(pl.id) and "Playlist saved" or "Failed to save playlist")
+        ui_say(do_save_playlist(pl.id, pl) and "Playlist saved" or "Failed to save playlist")
     elseif action == "Copy Web Link" then
         copy_spotify_url("playlist", pl.id)
         Util.copied_link()
@@ -8017,6 +8050,22 @@ local function api_get_artist_top_tracks(artist_id)
     end, {revalidate = "artist_top", revalidate_arg = artist_id})
 end
 
+-- THE ARTIST, IN FULL. An artist reached from a track carries the SIMPLIFIED
+-- object Spotify embeds in `artists[]`: id, name, uri, and no `images` at all.
+-- Everything in the artist card works from the id, so the thinness is invisible
+-- -- until Artist Impression, which is the one row that needs the pictures and
+-- answered "No artist image available" for artists that plainly have one.
+--
+-- Cached like the rest of the artist fetches, so the price is one request per
+-- artist ever rather than one per look. On Util, not a local: the chunk body is
+-- at Lua's 200-local cap.
+function Util.api_get_artist(artist_id)
+    if not artist_id or #artist_id == 0 then return nil end
+    return cached_fetch("artist_obj_" .. artist_id, P.mass .. "/artist_obj_" .. artist_id .. ".json", CACHE_TTL_LONG, function()
+        return api_get("artists/" .. artist_id)
+    end, {stale_ok = true})
+end
+
 local function api_get_artist_related(artist_id)
     return cached_fetch("artist_related_" .. artist_id, P.mass .. "/artist_related_" .. artist_id .. ".json", CACHE_TTL_LONG, function()
         return api_get("artists/" .. artist_id .. "/related-artists")
@@ -8064,7 +8113,7 @@ function Util.view_top_artists()
     Util.scope({view="top-artists"}, function()
         local entries = {}
         for i, a in ipairs(ar) do entries[i] = display_artist(a) end
-        view_browse(entries, ar, "Top Artists" .. SEP .. #ar .. " artists", "artist-list", nil, nil, true)
+        view_browse(entries, ar, "Top Artists Monthly" .. SEP .. #ar .. " artists", "artist-list", nil, nil, true)
     end)
 end
 
@@ -8919,6 +8968,17 @@ view_art = function(item)
     -- Impression.
     local noun = is_artist and "artist image" or "album art"
     local imgs = item and ((item.album and item.album.images) or item.images)
+    -- ...UNLESS THIS ARTIST SIMPLY ARRIVED THIN. See api_get_artist: an artist
+    -- picked out of a track carries no `images`, so the guard below refused a
+    -- picture that exists. Resolved before giving up rather than after, and only
+    -- for the case that can be rescued -- an album with no art really has none.
+    if is_artist and not (imgs and imgs[1] and imgs[1].url) and item.id then
+        local full = Util.api_get_artist(item.id)
+        if full and full.images and full.images[1] then
+            item = full
+            imgs = full.images
+        end
+    end
     if not (imgs and imgs[1] and imgs[1].url) then
         ui_say("No " .. noun .. " available"); return
     end
@@ -8981,6 +9041,32 @@ end
 -- makes a warm start replay it as an EPISODE menu -- reg("action") rebuilds a
 -- stub with no `type`, so a replayed episode would otherwise come back as a
 -- track.
+-- THE SCAFFOLD EVERY ACTION MENU IS BUILT ON, in one place.
+--
+-- Two menus -- view_actions and Util.view_episode_actions -- had a byte-identical
+-- copy of this: the two parallel arrays, the dim-span prefix, and the adder that
+-- keeps them in step. The parallelism is the whole point of them (akeys[i] names
+-- actions[i], which is what the dispatch runs on and now what a replayed step is
+-- checked against, see Util.serve_rows), so two copies is two chances for the
+-- arrays to fall out of step in different ways.
+--
+-- Answers the two tables, an `add`, and a `clear` -- a rebuild empties them in
+-- place rather than reallocating, because the menu holds the same table across
+-- every redraw.
+function Util.action_list()
+    local actions, akeys = {}, {}
+    local function add(label, key)
+        actions[#actions+1] = label; akeys[#akeys+1] = key
+    end
+    local function clear()
+        for i = #actions, 1, -1 do actions[i] = nil; akeys[i] = nil end
+    end
+    return actions, akeys, add, clear
+end
+
+-- The opening tag for a dimmed label, built from the one colour that defines it.
+Util.DIM_OPEN = '<span foreground="' .. Util.DIM .. '">'
+
 function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
     return Util.scope({view="episode-action", episode_id=item.id,
                   episode_name=item.name or "",
@@ -8993,14 +9079,11 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
     -- Same contract as view_actions' rebuild_actions, and now the same shape:
     -- the whole list is built on every draw, so a row that cannot act is left out
     -- rather than drawn dead. Nothing here holds a position any more.
-    local actions, akeys = {}, {}
-    local DIM = '<span foreground="' .. Util.DIM .. '">'
-    local function add(label, key)
-        actions[#actions+1] = label; akeys[#akeys+1] = key
-    end
+    local actions, akeys, add, clear = Util.action_list()
+    local DIM = Util.DIM_OPEN
     local function rebuild_actions()
         local playing_this = item.id ~= nil and item.id == current_id
-        for i = #actions, 1, -1 do actions[i] = nil; akeys[i] = nil end
+        clear()
         add(playing_this and (is_playing and "Pause" or "Resume")
             or (item.unavail and Util.markup(DIM .. 'Play</span>') or "Play"), "play")
         -- See view_actions: one playhead, in the loaded episode and nowhere else.
@@ -9032,7 +9115,7 @@ function Util.view_episode_actions(item, ctx_type, ctx_id, all_items, cidx)
         -- here, since no row of this one does anything different on alt, but
         -- harmless (Backspace pops the one level) and consistent with the track
         -- menu, which is worth more than special-casing the key away.
-        local sel = ui_menu(actions, {prompt="Episode", mesg=function() return track_mesg(item) end, theme=THEME_SUB, context=true, art=false, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild_actions})
+        local sel = ui_menu(actions, {prompt="Episode", mesg=function() return track_mesg(item) end, theme=THEME_SUB, context=true, art=false, ctx_type=ctx_type, ctx_id=ctx_id, refresh=rebuild_actions, keys=akeys})
         if not sel then return end
         local clean = Util.strip_markup(sel)
         local key
@@ -9198,11 +9281,8 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- about and the row explains why nothing happens. Everything else that cannot
     -- act is simply not drawn: Seek on a track that is not loaded, Lyrics on one
     -- known to have none, Remove from Playlist on one that is in none of yours.
-    local actions, akeys = {}, {}
-    local DIM = '<span foreground="' .. Util.DIM .. '">'
-    local function add(label, key)
-        actions[#actions+1] = label; akeys[#akeys+1] = key
-    end
+    local actions, akeys, add, clear = Util.action_list()
+    local DIM = Util.DIM_OPEN
     -- The volatile labels are derived from live state on every draw rather than
     -- patched by hand in the selection branches, so they stay right when a nested
     -- action menu (Alt+Return from here) plays or likes this same track and
@@ -9211,8 +9291,9 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         local playing_this = item.id ~= nil and item.id == current_id
         is_liked = item.id and liked[item.id]
         -- Emptied in place, never replaced: the loop below holds a reference to
-        -- this very table and hands it to ui_menu on every pass.
-        for i = #actions, 1, -1 do actions[i] = nil; akeys[i] = nil end
+        -- this very table and hands it to ui_menu on every pass. See
+        -- Util.action_list, which is where that emptying now lives.
+        clear()
         -- playing_this is tested first for the same reason display_track puts the
         -- green marker ahead of the dim one: if it IS playing, whatever the cache
         -- says about availability, that wins.
@@ -9230,8 +9311,16 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
         if playing_this then add("Seek", "seek") end
         add("Add to Queue", "queue")
         add(is_liked and "Unlike" or "Like", "like")
-        add("Go to Album", "album")
-        add("Go to Artist", "artist")
+        -- BOTH WEAR ALT_MARK, and both have earned it: Shift+Return on Go to
+        -- Album opens the album's own action menu where Return opens the album
+        -- outright, and Shift+Return on Go to Artist opens the hub where Return
+        -- opens the discography. Same mark, same leading column, as the Listen
+        -- row -- see the note there for why it goes in front of the words.
+        --
+        -- The label is decoration only: this menu dispatches on `akeys` (see the
+        -- `key ==` arms below), so the glyph cannot reach the branch that runs.
+        add(ALT_MARK .. " Go to Album", "album")
+        add(ALT_MARK .. " Go to Artist", "artist")
         add("Add to Playlist", "addpl")
         if #rm_targets > 0 then add("Remove from Playlist", "rmpl") end
         -- `~= false`, not `== true`: nil means "never looked up", and treating
@@ -10462,7 +10551,7 @@ local function view_top_tracks()
     -- look like it was simply wrong. The view key, the cache file and the trail
     -- id are all still `top-tracks`: this is a label, and renaming any of the
     -- others would strand every saved trail that names it.
-    view_browse(entries, tracks, "This Month's Top" .. SEP .. #tracks .. " tracks", "top-tracks", nil, nil)
+    view_browse(entries, tracks, "Top Monthly" .. SEP .. #tracks .. " tracks", "top-tracks", nil, nil)
     if jump_to_track_pending then return end
 end)
 end
@@ -10723,7 +10812,7 @@ end
 Util.LIBRARY_ROWS = {
     {key = "liked",     label = "Liked Tracks",     open = function() view_liked_tracks() end,
      art = function() return Util.shelf_head(load_liked_tracks) end},
-    {key = "top",       label = "This Month's Top",  open = function() view_top_tracks() end,
+    {key = "top",       label = "Top Monthly",        open = function() view_top_tracks() end,
      art = function() return Util.shelf_head(api_get_top_tracks) end},
     {key = "albums",    label = "Saved Albums",     open = function() view_saved_albums() end,
      art = function() return Util.shelf_head(load_saved_albums) end},
@@ -10783,7 +10872,7 @@ Util.COLLECTION_TILES = {
     {key = "discoverweekly", label = "Discover Weekly",
      open = function() Util.open_discover_weekly() end,
      art = function() return Util.shelf_head(api_get_category_playlists, Util.PICK_CATEGORIES.discover) end},
-    {key = "topartists",     label = "Top Artists",
+    {key = "topartists",     label = "Top Artists Monthly",
      open = function() Util.view_top_artists() end,
      art = function() return Util.shelf_head(Util.api_get_top_artists) end},
     {key = "featured",       label = "Featured Playlists",
@@ -11355,10 +11444,15 @@ function Util.listen_stop()
     if not st then return {state = "idle"} end
     local pid = trim(read_file(st.pidf) or ""):match("^%d+$")
     if pid then os.execute("kill " .. pid .. " 2>/dev/null") end
-    -- Scoped to our own invocation, device and all: a bare `pkill songrec` would
-    -- take down an unrelated one the user started themselves.
-    os.execute("pkill -f " .. shell_quote("songrec recognize -d " .. st.device) .. " 2>/dev/null")
-    for _, f in ipairs({st.out, st.pidf}) do os.remove(f) end
+    -- Scoped to our own invocation -- by the temp path this run is using, which
+    -- no other process can be holding -- so a recogniser or a recorder the user
+    -- started themselves is left alone. Both halves are named because the pid
+    -- above is the subshell's: killing it does not reach the child that is
+    -- actually holding the monitor.
+    if st.wav then
+        os.execute("pkill -f " .. shell_quote(st.wav) .. " 2>/dev/null")
+    end
+    for _, f in ipairs({st.out, st.pidf, st.wav}) do if f then os.remove(f) end end
     return {state = "idle"}
 end
 
@@ -11370,22 +11464,49 @@ function Util.listen_start()
     if trim(shell("command -v songrec 2>/dev/null") or "") == "" then
         ui_say("songrec is not installed"); return
     end
-    -- The first sink, so this follows whatever the machine's default output is
-    -- rather than naming a card. `.monitor` is the loopback of that sink: what
-    -- is being PLAYED, not what a microphone hears.
-    local sink = trim(shell("pactl list short sinks 2>/dev/null | awk 'NR==1{print $2}'") or "")
-    if sink == "" then ui_say("No audio output device found"); return end
-    local device = sink .. ".monitor"
+    -- parec comes with the same package as pactl, which this feature already
+    -- needs, so it is not a new dependency -- but say so plainly if it is absent
+    -- rather than producing a silent non-match.
+    if trim(shell("command -v parec 2>/dev/null") or "") == "" then
+        ui_say("parec is not installed" .. SEP .. "it ships with pulseaudio-utils"); return
+    end
+    -- @DEFAULT_MONITOR@ IS THE LOOPBACK OF WHATEVER IS PLAYING, and PulseAudio
+    -- resolves it for us. This used to take the FIRST sink from `pactl list short
+    -- sinks` and call it the default, which those two are not: index order is not
+    -- preference order, so a machine with a dummy or an idle HDMI sink ahead of
+    -- the real one listened to silence.
+    local device = "@DEFAULT_MONITOR@"
 
     local out_tf = Util.tmpfile("listen.out")
+    local wav_tf = Util.tmpfile("listen.wav")
     local sr_pidf = Util.tmpfile("listen.sr.pid")
-    -- Backgrounded bare rather than inside a { } group: `$!` has to be songrec's
-    -- own pid, because killing a wrapping subshell would leave the recorder
-    -- holding the monitor. Its exit is also what marks the output file complete,
-    -- so nothing ever reads a half-written response.
-    os.execute("songrec recognize -d " .. shell_quote(device) .. " -j > " .. shell_quote(out_tf)
-        .. " 2>/dev/null & echo $! > " .. shell_quote(sr_pidf))
-    Util.listen = {out = out_tf, pidf = sr_pidf, device = device,
+    -- RECORD FIRST, THEN RECOGNISE -- because songrec cannot open the monitor
+    -- itself here.
+    --
+    -- `songrec recognize -d <monitor>` is the obvious call and it is what this
+    -- did. Measured on this machine, with audio flowing and the sink RUNNING, it
+    -- fails every time:
+    --
+    --   Audio error: stream error: StreamInvalidated - no target node available
+    --
+    -- songrec's own capture does not survive PipeWire's node handling, so the
+    -- listener could never match anything -- it recorded nothing for thirty
+    -- seconds and reported "no match", which is indistinguishable from a song
+    -- Shazam does not know.
+    --
+    -- parec captures the same monitor without complaint, and songrec's FILE mode
+    -- is a plain HTTP request against the fingerprint. Verified end to end: a
+    -- twelve-second capture of a track playing here came back matched.
+    --
+    -- The two halves keep the contract the poll already relies on -- one pid to
+    -- watch, one output file that exists only once the answer is complete -- so
+    -- Util.listen_poll is unchanged. The wav goes as soon as it has been read.
+    os.execute("{ timeout " .. P.listen_record .. " parec --file-format=wav -d "
+        .. shell_quote(device) .. " --rate=44100 --channels=1 " .. shell_quote(wav_tf)
+        .. " >/dev/null 2>&1; songrec audio-file-to-recognized-song " .. shell_quote(wav_tf)
+        .. " > " .. shell_quote(out_tf) .. " 2>/dev/null; rm -f " .. shell_quote(wav_tf)
+        .. "; } & echo $! > " .. shell_quote(sr_pidf))
+    Util.listen = {out = out_tf, pidf = sr_pidf, device = device, wav = wav_tf,
                    deadline = os.time() + P.listen_timeout}
     -- NO ASSET. This used to name a 300px speaker glyph for the card to draw,
     -- from the rofi build where a message with a picture was the only way to
@@ -11669,12 +11790,20 @@ local function view_playback()
 end
 
 -- WHAT THE LISTENER HAS FOUND. Reached by Shift+Return on the Listen row, which
--- wears ALT_MARK to say so -- and a card like the menu it is opened from.
+-- wears ALT_MARK to say so.
 --
 -- A real scoped view rather than a card: it is a list of tracks you can browse,
 -- scroll and act on, which is a place -- and the same shape every other track
 -- list in the app has, so Return plays and Shift+Return opens the action menu
 -- without any of that being written again here.
+--
+-- It WAS a card, on the reasoning that what the listener heard is a note about
+-- this session rather than a shelf you navigated to. That reasoning describes
+-- how it is reached, not what it is: a card is a short question you answer and
+-- dismiss, and this is a list of tracks with the full run of track actions on
+-- every row. Everything it needs to be a place was already here -- reg() names
+-- it "Heard" for the crumb, and view_browse already counts `listen-history`
+-- among its track lists.
 function Util.view_listen_history()
     local hist = Util.listen_hist()
     if #hist == 0 then
@@ -11693,15 +11822,15 @@ function Util.view_listen_history()
         end
     end
     if #tracks == 0 then ui_say("Nothing identified yet"); return end
-    -- A CARD, AND SO NOT A SCOPE. What the listener has heard is a note about
-    -- this session, not a shelf you navigated to -- it belongs over whatever you
-    -- were looking at, the way the action menus and Seek do. Unscoped for the
-    -- reason every other card is (see view_actions): a scope is a trail step, and
-    -- a card is not a place, so leaving one behind put "Heard" in the breadcrumb
-    -- of a menu you never went to.
+    -- SCOPED, so it is a trail step like any other list: "Heard" belongs in the
+    -- breadcrumb of a menu you DID go to, and Backspace walks out of it the way
+    -- it walks out of Recently Played.
+    Util.scope({view="listen-history"}, function()
     view_browse(entries, tracks,
                 "Heard" .. SEP .. #tracks .. (#tracks == 1 and " track" or " tracks"),
-                "listen-history", nil, nil, nil, nil, true)
+                "listen-history", nil, nil)
+    if jump_to_track_pending then return end
+end)
 end
 
 -- VIEW: SYSTEM
@@ -12308,7 +12437,7 @@ reg("related", "Related", function(s)
 end, nil, true)
 reg("search", "Search", function() view_search() end)
 reg("liked",            "Liked Tracks",     function() view_liked_tracks() end)
-reg("top-tracks",       "This Month's Top", function() view_top_tracks() end)
+reg("top-tracks",       "Top Monthly",      function() view_top_tracks() end)
 reg("your-queue",       "Your Queue",       function() view_your_queue() end)
 reg("recently-played",  "Recently Played",  function() view_recently_played() end)
 reg("saved-albums",     "Saved Albums",     function() view_saved_albums() end)
@@ -12325,7 +12454,7 @@ end)
 reg("followed-artists", "Followed Artists", function() view_followed_artists() end)
 reg("new-releases",     "New Releases",     function() view_new_releases() end)
 reg("spotify-picks",    "Collections",      function() Util.view_collections() end)
-reg("top-artists",      "Top Artists",      function() Util.view_top_artists() end)
+reg("top-artists",      "Top Artists Monthly", function() Util.view_top_artists() end)
 reg("discover-genre",   "Genre",            function() Util.view_discover_genre() end)
 reg("genre-tracks", "Genre", function(s)
     if s.genre then Util.open_genre_tracks(s.genre) end
@@ -13461,7 +13590,10 @@ local function daemon_mode()
         local c = Util.proc_cmdline(pid)
         return c:find("spoot", 1, true) ~= nil and c:find("--daemon", 1, true) ~= nil
     end
-    local claimed = trim(shell("mkdir " .. claim .. " 2>/dev/null && echo ok") or "") == "ok"
+    -- QUOTED like every other path this file hands a shell. `claim` is built from
+    -- P.tmp, which is $TMPDIR -- a value spoot does not choose -- so a space in it
+    -- would have mkdir create two directories and the lock would never be held.
+    local claimed = trim(shell("mkdir " .. shell_quote(claim) .. " 2>/dev/null && echo ok") or "") == "ok"
     if not claimed then
         local holder = tonumber((read_file(claim .. "/pid") or ""):match("(%d+)"))
         local holder_alive = holder and holder ~= mypid

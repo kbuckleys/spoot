@@ -1493,7 +1493,25 @@ Window {
         // Named on its own, artBehind is true for exactly the one poll interval
         // the engine is ahead by, and the album's sleeve -- already correct on
         // screen -- simply stays put until playback agrees with it.
-        root.contextArtFor = d.coverFor || ""
+        // ...BUT ONLY WHERE THE DRAW IS ACTUALLY AHEAD OF THE POLL.
+        //
+        // The claim this field makes is "I have just navigated or played, so the
+        // engine knows the new track before the poll does -- trust my cover for
+        // one interval". A QUIET draw is the opposite of that: same scope, same
+        // crumb, nobody went anywhere. It is a redraw of the menu you are already
+        // standing in -- a like refreshing its row marks, a stale shelf being
+        // re-served -- and nothing about it is ahead of anything.
+        //
+        // Adopting it there re-armed artBehind on every such redraw, and since
+        // the engine's current_track legitimately leads the UI's poll by up to a
+        // second, `coverFor !== playback.id` held just long enough to swap the
+        // backdrop to the shelf's cover and back. That is "liking a song makes
+        // its backdrop flash with every new track": the like redraws, the stale
+        // playlist redraws again on each track, and each one re-armed the window.
+        //
+        // The picture itself still updates below -- a shelf's cover may genuinely
+        // change on a redraw. It is only the claim to be AHEAD that is withheld.
+        if (!quiet) root.contextArtFor = d.coverFor || ""
         // ...and whether to ask again. A draw that is NOT stale is the refresh
         // having landed, so it also puts the counter back for the next shelf.
         if (d.stale === true) {
