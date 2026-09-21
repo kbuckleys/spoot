@@ -234,34 +234,41 @@ QtObject {
     // A DROP SHADOW IS THREE SEPARATE THINGS, and folding them into one number
     // is why asking for a bigger one made it fainter: a blur REDISTRIBUTES what
     // it is given, so widening it alone spreads the same ink thinner until there
-    // is nothing left to see. Measured: at a 28px blur the shadow peaked at 43/255
-    // just outside the panel; at 64px, 8.
+    // is nothing left to see.
     //
     //   grow  -- how far the shape is inflated BEFORE blurring. This is what
-    //            makes a shadow big and PRESENT rather than merely soft, and it
-    //            is the piece that was missing. CSS calls it spread.
-    //   blur  -- the softness of the edge. MultiEffect's useful ceiling is 64.
+    //            makes a shadow big and PRESENT rather than merely soft. CSS
+    //            calls it spread.
+    //   blur  -- the softness of the edge.
     //   drop  -- how far below the object it sits, because the light is above.
-    // Softer and further out: the blur is now wide RELATIVE to the grow, which is
-    // what makes a shadow read as gentle rather than as a dark edge -- a big grow
-    // with a small blur is just a bigger hard shape. 64 is MultiEffect's useful
-    // ceiling for blurMax, so the softness comes from spending less on grow.
     //
-    // SOFTER AGAIN. Blur was already at its ceiling, so the only way left to
-    // gentle it is to give the blur less to work with: 20px of grow put a band of
-    // near-solid ink right against the panel that no amount of blur could reach
-    // into, and that band is what reads as a hard edge. Halving the grow and
-    // taking a third off the alpha leaves the same reach -- grow + blur is still
-    // most of 74px -- with nothing opaque in it.
-    readonly property int  shadowGrow:  10
-    readonly property int  shadowBlur:  64
-    readonly property int  shadowDrop:  14
+    // ── WHY THESE ARE BACK UP WHERE THEY WERE ────────────────────────────────
+    // They were 10 / 64 / 14 at a third of this alpha, and the comment they
+    // replace explains why: 20px of grow "put a band of near-solid ink right
+    // against the panel that no amount of blur could reach into, and that band
+    // is what reads as a hard edge". Every number here was bent around that
+    // band, and the shadow came out weak everywhere to keep one part of it from
+    // looking hard.
+    //
+    // THE BAND WAS NEVER OUTSIDE THE PANEL. It was the shadow's own interior --
+    // a filled shape lying under an object that does not quite hide it. Shadow
+    // now punches the object's footprint out and keeps only the falloff, so
+    // there is no interior left to show through, and grow costs nothing again.
+    // The numbers are the ones the quickshell suite settled on for the same
+    // shape: full strength 20px out, then a long 50px fall.
+    readonly property int  shadowGrow:  20
+    readonly property int  shadowBlur:  50
+    readonly property int  shadowDrop:  10
     // ONE GATE FOR EVERY SHADOW. The panel's and the context card's both
     // multiply by this, so turning them off is this going to zero rather than a
     // flag threaded through two effect stacks. The layers are also made
     // invisible where they are drawn, so nothing blurs a texture nobody sees.
     readonly property bool shadows:     cfgVal("shadows", true)
-    readonly property real shadowAlpha: shadows ? 0.34 : 0
+    // 0.48, and not by taste: Hyprland blurs anything whose alpha clears its
+    // ignore_alpha threshold, which is 0.5 on this desktop. A shadow above the
+    // line stops being a shadow and becomes frosted glass with the desktop
+    // swimming in it. This is the same ceiling the quickshell suite caps at.
+    readonly property real shadowAlpha: shadows ? 0.48 : 0
     // What the capture has to be padded by for none of it to be clipped: the blur
     // cannot paint outside the texture it is given, and a clipped blur comes out
     // as a hard rectangle -- which is exactly how this first went wrong.
