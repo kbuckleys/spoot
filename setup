@@ -32,7 +32,9 @@ set -eu
 # WHERE THIS SCRIPT IS, not where you ran it from. `cd ~/somewhere && sh
 # /path/to/setup` has to work, and so does ./setup -- and neither may write into
 # whatever directory happened to be current.
-here=$(cd -- "$(dirname -- "$0")" && pwd)
+# -P: the physical path, which is what CMake records -- a checkout reached
+# through a symlink would otherwise never match its own build directory.
+here=$(cd -- "$(dirname -- "$0")" && pwd -P)
 cd "$here"
 
 DRY=${SPOOT_SETUP_DRYRUN:-0}
@@ -152,7 +154,7 @@ ask() {
     # worse than one that fails: the shell it returns to is unusable.
     trap 'if [ -n "$stty_saved" ]; then stty "$stty_saved" 2>/dev/null || true; fi' EXIT
     trap 'if [ -n "$stty_saved" ]; then stty "$stty_saved" 2>/dev/null || true; fi
-          printf "\n"; exit 130' INT
+          printf "\n"; exit 130' INT TERM HUP
     # -icanon rather than raw: raw would also turn off ISIG, and a menu is
     # not worth a terminal where Ctrl-C does nothing.
     stty -echo -icanon min 1 time 0 2>/dev/null || true
@@ -171,14 +173,21 @@ ask() {
         draw_choice "$sel"
     done
     if [ -n "$stty_saved" ]; then stty "$stty_saved" 2>/dev/null || true; fi
-    trap - INT
+    trap - INT TERM HUP
     printf '\n'
     return "$sel"
 }
 
 if ! ask; then
     printf ' %s%s%sAborted -- nothing was installed%s\n' "$C_BOLD" "$C_BLACK" "$C_RED_BG" "$C_OFF"
-    exit 0
+    exit 1
+fi
+
+# NOT AS ROOT. Run under sudo, the build lands root-owned in your checkout, the
+# font and the launcher go into /root, and spoot starts as root. This script
+# asks for root itself, for the package manager and nothing else.
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}${DOAS_USER:-}" ]; then
+    die "run setup as yourself -- it asks for root only where it needs it"
 fi
 
 # --- which package manager, and how it is spoken ---------------------------
@@ -255,6 +264,7 @@ if [ "$mgr_root" -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
     if   command -v sudo >/dev/null 2>&1; then priv="sudo"
     elif command -v doas >/dev/null 2>&1; then priv="doas"
     elif command -v su   >/dev/null 2>&1; then priv="su-c"
+    else priv="none"
     fi
 fi
 
@@ -266,6 +276,7 @@ run_priv() {
         return 0
     fi
     case "$priv" in
+        none)   die "$mgr needs root and there is no sudo, doas or su to ask for it" ;;
         "")     sh -c "$*" ;;
         su-c)   su -c "$*" ;;
         *)      "$priv" sh -c "$*" ;;
@@ -295,7 +306,7 @@ have_dep() {
         compiler)      command -v c++ >/dev/null 2>&1 || command -v g++ >/dev/null 2>&1 \
                        || command -v clang++ >/dev/null 2>&1 ;;
         pkgconfig)     command -v pkg-config >/dev/null 2>&1 || command -v pkgconf >/dev/null 2>&1 ;;
-        qtbase)        pkg-config --exists Qt6Gui Qt6Network 2>/dev/null ;;
+        qtbase)        pkg-config --exists Qt6Gui Qt6Network Qt6DBus 2>/dev/null ;;
         qtdeclarative) pkg-config --exists Qt6Qml Qt6Quick 2>/dev/null ;;
         # LayerShellQt ships a CMake package and usually no .pc file, so the
         # config file is the real probe. Confined to the handful of directories
@@ -309,11 +320,17 @@ have_dep() {
         # to match the interpreter's ABI and a name cannot tell you whether it
         # does. This is also the cjson probe -- there is one Lua requirement, not
         # two.
-        lua)           command -v lua >/dev/null 2>&1 && lua -e 'require("cjson")' >/dev/null 2>&1 ;;
+        # The build needs Lua's HEADERS (a pkg-config module, which CMake looks
+        # for under the same names), and the engine needs cjson for that Lua. An
+        # interpreter on PATH answers the second; its name is not the same
+        # anywhere twice, so each spelling is tried.
+        lua)           lua_headers && lua_cjson ;;
         fontconfig)    command -v fc-list >/dev/null 2>&1 && command -v fc-cache >/dev/null 2>&1 ;;
+        # The PROPO face specifically: it is the one Theme.qml names.
         font)          command -v fc-list >/dev/null 2>&1 \
-                       && fc-list 2>/dev/null | grep -qi 'jetbrainsmono nerd' ;;
-        spotifyd)      command -v spotifyd >/dev/null 2>&1 || command -v librespot >/dev/null 2>&1 ;;
+                       && fc-list 2>/dev/null | grep -qi 'jetbrainsmono nerd font propo' ;;
+        # spotifyd itself -- the engine runs `spotifyd` and nothing else.
+        spotifyd)      command -v spotifyd >/dev/null 2>&1 ;;
         xdgopen)       command -v xdg-open >/dev/null 2>&1 ;;
         openssl)       command -v openssl >/dev/null 2>&1 ;;
         pkill)         command -v pkill >/dev/null 2>&1 ;;
@@ -323,6 +340,19 @@ have_dep() {
         curl)          command -v curl >/dev/null 2>&1 ;;
         *) return 0 ;;
     esac
+}
+
+lua_headers() {
+    for _m in lua5.5 lua-5.5 lua5.4 lua-5.4 lua; do
+        pkg-config --exists "$_m" 2>/dev/null && return 0
+    done
+    return 1
+}
+lua_cjson() {
+    for _l in lua5.5 lua5.4 lua54 lua; do
+        command -v "$_l" >/dev/null 2>&1 && "$_l" -e 'require("cjson")' >/dev/null 2>&1 && return 0
+    done
+    return 1
 }
 
 # What it is for, said in the one place it is decided. Printed when something is
@@ -336,7 +366,7 @@ why_dep() {
         qtbase)        printf 'Qt 6, which spoot is written against' ;;
         qtdeclarative) printf 'Qt Quick, which draws every menu' ;;
         layershell)    printf 'the layer-shell surface spoot opens on' ;;
-        lua)           printf 'the engine, and the json module it opens with' ;;
+        lua)           printf 'the engine: Lua 5.4+ headers for the build, and lua-cjson' ;;
         fontconfig)    printf 'finding and registering fonts' ;;
         font)          printf 'the glyphs the interface is built out of' ;;
         spotifyd)      printf 'playback itself' ;;
@@ -346,7 +376,7 @@ why_dep() {
         notify)        printf 'desktop notifications' ;;
         songrec)       printf 'identifying what is playing in the room' ;;
         parec)         printf 'recording the room for songrec to identify' ;;
-        curl)          printf 'requests when the engine runs outside spoot' ;;
+        curl)          printf 'downloading the font, and requests when the engine runs outside spoot' ;;
     esac
 }
 
@@ -399,10 +429,14 @@ pkg_for() {
     lua)
         case "$mgr" in
             pacman) printf 'lua' ;;                       # cjson is AUR-only, below
-            apt-get) printf 'lua5.4 lua-cjson' ;;
-            dnf) printf 'lua lua-cjson' ;; zypper) printf 'lua54 lua54-luajson' ;;
-            apk) printf 'lua5.4 lua5.4-cjson' ;;
-            xbps-install) printf 'lua54 lua54-cjson' ;;
+            # The -dev/-devel half is what CMake links against; without it the
+            # build cannot find Lua however many interpreters are installed.
+            # Each name is checked with mgr_query before it goes into the batch.
+            apt-get) printf 'lua5.4 liblua5.4-dev lua-cjson' ;;
+            dnf) printf 'lua lua-devel lua-cjson' ;;
+            zypper) printf 'lua54 lua54-devel lua54-cjson' ;;
+            apk) printf 'lua5.4 lua5.4-dev lua5.4-cjson' ;;
+            xbps-install) printf 'lua54 lua54-devel lua54-cjson' ;;
             nix-env) printf 'lua luaPackages.cjson' ;;
             pkg) printf 'lua54 lua54-cjson' ;; pkg_add) printf 'lua' ;;
             emerge) printf 'dev-lang/lua dev-lua/lua-cjson' ;;
@@ -539,13 +573,13 @@ fi
 # Arch keeps it in the AUR, so the batch above cannot include it. An AUR helper
 # is never run through sudo: makepkg refuses to build as root, and that refusal
 # is correct.
-if ! have_dep lua; then
+if ! lua_cjson; then
     say "installing lua-cjson"
     if [ "$DRY" = 1 ]; then
         step "would try: paru/yay -S lua-cjson, or luarocks install lua-cjson"
-    elif command -v paru >/dev/null 2>&1; then paru -S --needed --noconfirm lua-cjson || true
-    elif command -v yay  >/dev/null 2>&1; then yay  -S --needed --noconfirm lua-cjson || true
-    elif command -v luarocks >/dev/null 2>&1; then run_priv "luarocks install lua-cjson" || true
+    elif command -v paru >/dev/null 2>&1; then paru -S --needed lua-cjson || true
+    elif command -v yay  >/dev/null 2>&1; then yay  -S --needed lua-cjson || true
+    elif command -v luarocks >/dev/null 2>&1; then run_priv "luarocks --lua-version=5.4 install lua-cjson" || true
     fi
 fi
 
@@ -563,8 +597,10 @@ if ! have_dep font; then
         step "would download $FONT_URL -> $FONT_DIR"
     else
         say "fetching JetBrains Mono Nerd Font"
-        tmp=$(mktemp -d 2>/dev/null || printf '/tmp/spoot-font.%s' $$)
-        mkdir -p "$tmp" "$FONT_DIR"
+        # No predictable fallback name: a guessable /tmp path is one another
+        # account can create first.
+        tmp=$(mktemp -d) || die "could not make a temporary directory for the font"
+        mkdir -p "$FONT_DIR"
         ok=1
         if   command -v curl >/dev/null 2>&1; then curl -fsSL "$FONT_URL" -o "$tmp/f.zip" || ok=0
         elif command -v wget >/dev/null 2>&1; then wget -q "$FONT_URL" -O "$tmp/f.zip" || ok=0
@@ -579,16 +615,16 @@ if ! have_dep font; then
         # not a reasonable thing for an installer to do.
         if [ "$ok" = 1 ]; then
             if   command -v unzip  >/dev/null 2>&1; then
-                unzip -qo "$tmp/f.zip" '*Propo*' -d "$FONT_DIR" 2>/dev/null \
-                    || unzip -qo "$tmp/f.zip" -d "$FONT_DIR" || ok=0
+                unzip -qo "$tmp/f.zip" '*Propo*' -d "$FONT_DIR" || ok=0
             elif command -v bsdtar >/dev/null 2>&1; then
-                bsdtar -xf "$tmp/f.zip" -C "$FONT_DIR" '*Propo*' 2>/dev/null \
-                    || bsdtar -xf "$tmp/f.zip" -C "$FONT_DIR" || ok=0
+                bsdtar -xf "$tmp/f.zip" -C "$FONT_DIR" '*Propo*' || ok=0
             else ok=0; warn "no unzip or bsdtar to unpack the font with"
             fi
         fi
         rm -rf "$tmp"
-        [ "$ok" = 1 ] && command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$FONT_DIR" >/dev/null 2>&1
+        if [ "$ok" = 1 ] && command -v fc-cache >/dev/null 2>&1; then
+            fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true
+        fi
         # Asked again rather than assumed: a download that unpacked into the
         # wrong place is a download that did not work.
         if have_dep font; then
@@ -635,7 +671,7 @@ if [ -f build/CMakeCache.txt ] \
     rm -rf build
 fi
 say "building"
-if ! cmake -S . -B build; then
+if ! cmake -S . -B build -DCMAKE_BUILD_TYPE=Release; then
     die "cmake could not configure -- it needs Qt 6 (Gui, Qml, Quick, Network),
     LayerShellQt and Lua. The message above names which one it could not find."
 fi
@@ -700,24 +736,32 @@ else
         mkdir -p "$icon_dir" || continue
         # `command -v`, not have_dep: that function is a roster of spoot's actual
         # dependencies and a scaler is not one -- it is only nice to have.
-        if [ "$px" = 512 ] || ! command -v magick >/dev/null 2>&1; then
+        # ImageMagick 7 is `magick`; 6 only has `convert`.
+        scaler=""
+        if command -v magick >/dev/null 2>&1; then scaler=magick
+        elif command -v convert >/dev/null 2>&1; then scaler=convert
+        fi
+        if [ "$px" = 512 ] || [ -z "$scaler" ]; then
             cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" \
                 || warn "could not write $icon_dir/spoot.png"
         else
-            magick "$here/assets/spoot.png" -resize "${px}x${px}" \
+            "$scaler" "$here/assets/spoot.png" -resize "${px}x${px}" \
                    "$icon_dir/spoot.png" 2>/dev/null \
                 || cp -f "$here/assets/spoot.png" "$icon_dir/spoot.png" \
                 || warn "could not write $icon_dir/spoot.png"
         fi
     done
 fi
+# Quoted and escaped per the Desktop Entry spec, so a checkout under a path
+# with spaces or quotes still launches.
+exec_path=$(printf '%s' "$here/bin/spoot" | sed 's/[\\"`$]/\\&/g')
 cat > "$app_dir/spoot.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=spoot
 GenericName=Spotify Client
 Comment=Spotify, as a menu you summon with a key
-Exec=$here/bin/spoot
+Exec="$exec_path"
 Icon=spoot
 Terminal=false
 Categories=AudioVideo;Audio;Player;
@@ -727,7 +771,7 @@ Actions=Listen;
 
 [Desktop Action Listen]
 Name=Identify what is playing
-Exec=$here/bin/spoot --listen
+Exec="$exec_path" --listen
 DESKTOP
 
 # BEST EFFORT, both of them. The caches make the entry and the icon visible to a
@@ -770,13 +814,20 @@ done || true
 # Said rather than asked. This script installs and gets out of the way; a prompt
 # here would block an unattended run for something that is optional and takes two
 # minutes to do later.
-if [ "$("$here/bin/spoot" --client-id 2>/dev/null | grep -c shared)" != 0 ]; then
+if "$here/bin/spoot" --client-id 2>/dev/null | grep -q shared; then
     say "using the shared Spotify app id -- its rate limit is shared too"
     say "for a quota of your own: make an app at developer.spotify.com/dashboard"
     say "with redirect URI http://127.0.0.1:8989/login, then run"
     say "  $here/bin/spoot --client-id <your client id>"
 fi
 
+# Only where there is a session to open on: from SSH or a text console it
+# would fail silently, with every line of output thrown away.
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+    say "done -- no Wayland session here, so spoot was not started"
+    say "bind $here/bin/spoot to a key in your compositor and press it"
+    exit 0
+fi
 say "starting spoot"
 nohup ./bin/spoot >/dev/null 2>&1 </dev/null &
 say "done -- bind $here/bin/spoot to a key and press it"

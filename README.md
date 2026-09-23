@@ -1,11 +1,11 @@
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/5b4d8a87-b8d6-4f07-941c-a3361f5ba01f">
-  <img src="image-light.png" alt="">
+  <img src="https://github.com/user-attachments/assets/5b4d8a87-b8d6-4f07-941c-a3361f5ba01f" alt="spoot">
 </picture></p>
 
-<h3><p align="center">
-A keyboard-first Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
-<br>
+<h3 align="center">
+<b>A keyboard-first Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
+</h3>
 
 # The philosophy behind spoot
 Spotify clients (official one included) are too big and often glorified in comparison to what they're supposed to do. An optimal music player (for me, personally) should be something small, clear, easy and quick to interact with, which no player that I know of delivers. The original iteration and purpose of spoot was to act as a quick control panel for [spotify-player](https://github.com/aome510/spotify-player) which back then was my Spotify client of choice, but even that player -despite its speed and accessibility- wasn't enough for my use case. spoot was meant to bridge that gap, think of it as a remote control for your stereo system.
@@ -39,25 +39,29 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 The included install script can automatically take care of everything for you, but it's important to be clear about what spoot requires
 
-```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6``` &nbsp; ```LayerShellQt``` &nbsp; ```spotifyd``` &nbsp; ```wl-clipboard``` &nbsp; ```playerctl``` &nbsp; ```curl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```wl-clipboard``` &nbsp; ```songrec``` &nbsp; ```pactl``` &nbsp; ```libnotify``` &nbsp; ```ttf-jetbrains-mono-nerd```
+**Required:** ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6.5+``` &nbsp; ```LayerShellQt 6.1+``` &nbsp; ```Lua 5.4+ (with headers)``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd 0.4+``` &nbsp; ```openssl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```JetBrainsMono Nerd Font (Propo)```
+
+**Optional:** ```songrec``` + ```parec``` (pulseaudio-utils) for Listen
+
+**Only when running the engine outside the spoot binary** (`lua engine/spoot.lua`, `SPOOT_FORCE_CURL`, `SPOOT_FORCE_PLAYERCTL`): ```curl``` &nbsp; ```playerctl``` &nbsp; ```wl-clipboard``` &nbsp; ```libnotify``` &nbsp; ```perl```
 
 # Setup
-It's a breeze. ```bash setup``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefixed the filename with ```bash``` as denoted -- then launch spoot. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
+It's a breeze. ```sh setup``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefix the filename with ```sh``` as denoted -- then launch spoot. Run it as yourself, not with sudo: it asks for root only for the package manager. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done
 
-- Run ```bash setup```
+- Run ```sh setup```
 - Complete the Spotify authentication step
 - Have fun
 
 > The ```.desktop``` file will point to the binary inside the spoot dir where you extracted it
 
 **OPTIONAL:** If you want to set up keybinds for quicker access
-- For spoot -- Set a keybind pointing to ```/bin/spoot```
-- For listener -- Set a keybind pointing to ```/bin/spoot --listen```
+- For spoot -- Set a keybind pointing to ```<spoot dir>/bin/spoot```
+- For listener -- Set a keybind pointing to ```<spoot dir>/bin/spoot --listen```
   > You can still access this panel from ```main > playback```
 
 **Where spoot stores its files:**
 - Everything is stored in the spoot directory where you extracted it and in ```~/.cache/spoot/```
-- spoot also generates a ```.desktop``` file that lives in ```~/.local/share/applications/```
+- spoot also generates a ```.desktop``` file that lives in ```~/.local/share/applications/```, its icon in ```~/.local/share/icons/hicolor/```, and (if your distribution doesn't package it) the font in ```~/.local/share/fonts/JetBrainsMonoNerd/```
 
 # Controls
 Keybinds can also be viewed from ```Main > System > Keybinds```
@@ -68,13 +72,12 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `tab` | trail menu / history | Universal |
 | `return` | select -- play/pause/resume selected item | Universal |
 | `delete` | delete entry in search or trail history | Search history, Trail history |
-| `escape` | clear filter, then hide spoot | Universal |
+| `escape` | clear filter, close a card, then hide spoot | Universal |
 | `backspace` | clear filter, then back one level | Universal |
 | `alt` `=` `-` | quick seek + / - 10s | Universal |
 | `shift` `return` | hovered item's action menu | Any list or grid row |
-| `alt` `return` | jump to current track's action menu | Universal |
+| `alt` `return` | jump to main menu | Universal |
 | `alt` `delete` | clear session | Universal |
-| `alt` `space` | jump to main menu | Universal |
 | `alt` `e` | jump to seek menu | Universal |
 | `alt` `f` | search, from anywhere -- opens as a card, costs no trail step | Universal |
 | `alt` `l` | jump to liked tracks | Universal |
@@ -86,7 +89,8 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `alt` `a` | jump to albumart of current track | Universal |
 | `alt` `r` | cycle repeat modes | Universal |
 | `alt` `s` | toggle shuffle | Universal |
-| `alt` `g` | open spotify web link | Universal |
+| `alt` `g` | open the spotify link on the clipboard | Universal |
 | `alt` `c` | jump to the playing track -- from any view; walks back to the list it was played from, or opens playback if that list is gone | Universal |
 | `alt` `←` `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
 | `ctrl` `←` `→` | previous / next track | Universal |
+| `home` `end` / `pgup` `pgdn` | first / last row, a page at a time | Any list or grid |
