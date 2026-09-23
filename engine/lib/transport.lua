@@ -33,14 +33,13 @@ return function(Util, ctx)
 
     -- ONE REQUEST, DESCRIBED RATHER THAN SPELLED OUT.
     --
-    -- Six sites used to hand-build a curl command line. A request now says what it
-    -- wants and this decides how it travels: natively through the host when the
+    -- A request says what it wants and this decides how it travels: natively through the host when the
     -- engine is embedded in the binary, and through curl when the script is run
     -- standalone -- which both engine guards and the `printf | lua ... --serve`
     -- probe do, so that path is not legacy, it is the debugging route.
     --
     -- The curl branch is not a second implementation of anything. It is the ONLY
-    -- copy of "how to build a curl", where there used to be six.
+    -- copy of "how to build a curl".
     --
     --   req  {method=, url=, headers={...}, body=, timeout=, compressed=}
     --   ->   {code=<number>, body=<string>, headers=<string>}
@@ -273,10 +272,8 @@ return function(Util, ctx)
     -- it -- and there is nothing a well-behaved client can do about that from its own
     -- side.
     --
-    -- REGISTERING YOUR OWN IS NOT THE FIX IT LOOKS LIKE, and this note used to say it
-    -- was ("two minutes, and hands you the whole quota"). That was written before
-    -- November 2024, when Spotify closed a set of endpoints to every app created
-    -- after that date. The fallback id predates the change and still reaches them; a
+    -- REGISTERING YOUR OWN IS NOT THE FIX IT LOOKS LIKE. In November 2024 Spotify
+    -- closed a set of endpoints to every app created after that date. The fallback id predates the change and still reaches them; a
     -- new one does not, and answers 403 or 404 instead:
     --
     --   browse/categories                 Categories
@@ -297,7 +294,7 @@ return function(Util, ctx)
     -- Validated rather than trusted: a Spotify app id is 32 hex characters, and a
     -- file holding a pasted-in newline, a URL or half a word would otherwise turn
     -- every request into a 400 with nothing saying why. Anything that is not an id
-    -- falls back, so a bad paste degrades to the old behaviour instead of breaking
+    -- falls back, so a bad paste degrades to the shared id instead of breaking
     -- authentication.
     --
     -- Read fresh each time rather than memoised: it changes about once in the life of

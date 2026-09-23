@@ -36,11 +36,10 @@ return function(Util, ctx)
     Util.UI_SETTINGS = {
         {key = "replay", default = true, kind = "bool", label = "Session Replay",
          why = "reopen the menu you were in when spoot last closed"},
-        -- SOLID BY DEFAULT. It shipped at 80, from the rofi build where the panel
-         -- was the whole of what spoot drew; with a backdrop, covers and a floating
-         -- card all layered inside it, a translucent ground is the desktop showing
-         -- through three things at once. Still adjustable down to 50 for anyone who
-         -- wants it.
+        -- SOLID BY DEFAULT. With a backdrop, covers and a floating card all
+        -- layered inside the panel, a translucent ground is the desktop showing
+        -- through three things at once. Still adjustable down to 50 for anyone who
+        -- wants it.
         {key = "opacity", default = 100, kind = "range", min = 50, max = 100, step = 5,
          label = "Opacity", unit = "%", why = "how solid the panel's ground is"},
         -- THE EDGE, and whether it is there at all. On by default: it is the only
@@ -395,14 +394,13 @@ return function(Util, ctx)
     -- Which results page each query was last left on, keyed by the query itself.
     --
     -- A SIBLING of the history list rather than something stored inside it:
-    -- Util.hist_get's return value IS the row array rofi draws, so its entries have
+    -- Util.hist_get's return value IS the row array the menu draws, so its entries have
     -- to stay bare strings. It rides in the same file because it is the same fact --
     -- what you did with a query last time -- and because removing a query from the
     -- history is then the one place that has to forget its page too.
     --
-    -- This used to be a single view_pos entry shared by every search, so the page
-    -- you left one query on was the page the NEXT one opened on. Per query, a query
-    -- with no record is a query never filtered, which is what makes All the default
+    -- Per query, not one entry for every search, or the page you left one query
+    -- on would be the page the NEXT one opened on. A query with no record is a query never filtered, which is what makes All the default
     -- for anything new without a special case for it.
     P.hist_page_key = "search-page"
 

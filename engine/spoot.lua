@@ -102,9 +102,8 @@ P.cache      = P.xdg_cache .. "/spoot"
 -- account, same artwork, and starting warm is the entire point); nothing that
 -- means "mine" can be.
 --
--- The second is that each of these names used to be spelled out at every site
--- that touched it, up to six times each, which is how two of them could have
--- drifted apart without anything noticing.
+-- The second is that each name is spelled out once, here, so no two sites can
+-- drift apart.
 -- ...AND NOT UNDER A NAME ANYONE CAN TAKE FIRST. $TMPDIR/spoot is a fixed path
 -- in a directory every user can write, and `mkdir -p` happily adopts one that
 -- is already there -- so another account could create it first, own it, and
@@ -189,12 +188,6 @@ P.eresume_max     = 200
 -- Util.view_listen. The WHOLE budget: the recording below, plus the round trip
 -- to Shazam, plus room for a slow one. Measured here at about sixteen seconds
 -- end to end, so thirty is roughly double what a good run needs.
---
--- It used to be reasoned from songrec's own --request-interval, which defaults
--- to 10s: the timeout had to allow two attempts. That applied to
--- `songrec recognize -d`, which spoot no longer uses -- see Util.listen_start
--- for why it could never capture anything here. There is one attempt now, on one
--- deliberate capture, and the interval does not enter into it.
 --
 -- The poll is what makes the window dismissable -- it is how often the loop asks
 -- whether a match landed or the user closed the window, so it wants to be short
@@ -1555,13 +1548,10 @@ end
 
 -- A step renders its own name when it has one, and its view's label otherwise.
 --
--- This used to collapse a name that MATCHED THE STEP ABOVE IT down to the label,
--- which was the wrong test on both counts. It misfired on legitimate repeats --
--- a single, whose track shares the album's name, showed "Snail of Gold > Track",
--- and a self-titled album under its artist showed "Weezer > Album". And the case
--- it was really there for is about view identity, not string equality: "Lyrics"
--- reads better than a repeated track name because Lyrics is a DETAIL of the step
--- above it, which is now stated directly by label_only (see reg).
+-- Not collapsed when the name MATCHES THE STEP ABOVE IT: a single shares its
+-- album's name and a self-titled album its artist's, and both are real names.
+-- The case that wants the label is about view identity -- Lyrics is a DETAIL of
+-- the step above it -- which label_only states directly (see reg).
 --
 -- THE naming rule, and the only copy of it: the breadcrumb, the Trail Steps menu
 -- and the closed-menus list all name a step through here, so none of them can
@@ -1691,10 +1681,8 @@ ui_say = function(msg, theme)
     error("ui_say called before serve mode replaced it", 2)
 end
 
--- A LINK WAS COPIED. Eight action menus do this and all eight used to spell out
--- the same sentence for rofi to draw, because a sentence was the only thing rofi
--- could be handed. The UI marks the row you picked instead, and it can only do
--- that if this arrives as a THING -- one event with a name -- rather than as
+-- A LINK WAS COPIED. Eight action menus do this. The UI marks the row you
+-- picked, and it can only do that if this arrives as a THING -- one event with a name -- rather than as
 -- prose it would have to recognise by matching on the wording.
 --
 -- The message stays as the fallback for anything not being served, so the
@@ -1711,12 +1699,10 @@ end
 -- caller must stop on it. "" means answered with nothing, which is also a stop.
 -- So the test is `if not x or x == "" then`, and it has to be that way round.
 --
--- Worth spelling out because all three callers had it wrong, and wrong in the
--- way that WRITES: rofi's input box could only ever answer with a string, so ""
--- was cancel and `x ~= ""` was a complete test. Under Qt the first pass answers
--- nil, `nil ~= ""` is true, and each of them went on to send its request --
--- creating a nameless playlist the moment the field appeared, and renaming one
--- to nothing. See view_playlists, view_add_pl and Util.open_playlist_actions.
+-- Worth spelling out because getting it wrong WRITES: `x ~= ""` alone is true
+-- for nil, so the first pass would send its request -- creating a nameless
+-- playlist the moment the field appeared, or renaming one to nothing. See
+-- view_playlists, view_add_pl and Util.open_playlist_actions.
 local function ui_ask(prompt, preset, theme)
     -- Replaced by Util.serve_mode with a prompt event answered from the path.
     error("ui_ask called before serve mode replaced it", 2)
@@ -3415,18 +3401,16 @@ display_track = function(item, hide_artist, hide_liked, hide_single_artist)
     local hide = hide_artist or (hide_single_artist and #(item.artists or {}) <= 1)
     local an = hide and "" or artist_names(item)
     -- NO TRANSPORT MARKER AND NO GREEN. Which row is playing changes while you
-    -- are looking at the list, and baking it into the row's TEXT meant the only
-    -- way to move it was to build the whole menu again -- which is what rofi
-    -- forced, because a dmenu process could be handed strings and nothing else.
-    -- The row now carries its id (see Util.serve_rows) and the UI marks whichever
-    -- one matches what is playing, live, without asking for anything.
+    -- are looking at the list, so it is not baked into the row's TEXT: the row
+    -- carries its id (see Util.serve_rows) and the UI marks whichever one
+    -- matches what is playing, live, without asking for anything.
     -- The FILLED circle-check, matching Theme.glyphLiked. A row only ever marks
     -- the saved state -- there is no hollow counterpart on a list, because a mark
     -- on every unsaved row would be a column of punctuation.
     -- THE RIGHT-HAND COLUMN: what is true about the track, and how long it is.
     --
-    -- These marks used to LEAD the title, and that is three constraints that
-    -- cannot all hold: a mark in front pushes every title to a different x, a mark
+    -- Not LEADING the title, because that is three constraints that cannot all
+    -- hold: a mark in front pushes every title to a different x, a mark
     -- behind elides away with a long title, and a reserved slot in front leaves a
     -- hole on every row that has neither. Measured, the hole is real -- a nerd
     -- glyph is 14.77px against a 9.59px space, so no padding closes it.
@@ -5204,12 +5188,9 @@ end
 -- bar the art viewer and every card wear. A sheet is a floating card now, and a
 -- card with no title is a slab of text with no idea what it is about.
 function Util.detail_sheet(theme, title)
-    -- PAIRS, not padded strings. This built its label column by repeating spaces
-    -- to width 15 because rofi is handed one blob of text and lays out nothing;
-    -- a long label simply collided with its value. The pairs were always here --
-    -- every caller writes s.add("Label", value) -- they were just flattened away
-    -- at the end. Keeping them lets the front end lay out two real columns with
-    -- the same renderer the keybind sheet uses.
+    -- PAIRS, not padded strings: every caller writes s.add("Label", value), and
+    -- keeping them lets the front end lay out two real columns with the same
+    -- renderer the keybind sheet uses.
     local pairs_ = {}
     local s = {}
     function s.add(label, val)
@@ -6782,7 +6763,7 @@ view_art = function(item)
     local mesg = (item.name or "Unknown") .. (by ~= "" and (SEP .. by) or "")
     -- THE PICTURE IS THE PAYLOAD. Everything above -- the resolution choice, the
     -- high-res fetch, the artist/playlist/album split -- has already run, so the
-    -- UI is handed exactly the image rofi would have shown.
+    -- UI is handed exactly the image to show.
     --
     Util.serve_write({ev = "art-view", path = art_path,
                       mesg = Util.strip_markup(mesg or ""),
@@ -7113,13 +7094,11 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
     -- Backdrop only, at 640x640 because the action layout draws it at 364px; see
     -- Util.ensure_art_med.
     --
-    -- CACHE ONLY. This was the hot one: nothing warms the med-res pool ahead of
-    -- an action menu, so the first one opened on any album paid a live fetch
-    -- before it could draw a single row -- the last place in the app where a
-    -- menu visibly waited on something. rofi had no choice, because the cover
-    -- was the window's background-image and had to exist before the window did.
-    -- Qt draws it beside the rows instead, so a miss now costs nothing: the URL
-    -- goes to Util.serve_ctx_art and the picture arrives after the menu.
+    -- CACHE ONLY. Nothing warms the med-res pool ahead of an action menu, so a
+    -- live fetch here would make the first one opened on any album wait before
+    -- it could draw a single row. The UI draws the cover beside the rows, so a
+    -- miss costs nothing: the URL goes to Util.serve_ctx_art and the picture
+    -- arrives after the menu.
     local art_path = Util.ensure_art_med(art_url, true)
     -- The cover, recorded for the draw. The theme is a NAME and always was;
     -- what used to conflate the two was write_art_theme, which took the name,
@@ -7156,14 +7135,10 @@ view_actions = function(item, ctx_type, ctx_id, all_items, cidx, entries)
             return
         end
 
-        -- THE ROW'S KEY, not the words printed on it. `akeys` has named every
-        -- row since this menu was written and NOTHING read it: the branches below
-        -- compared the LABEL, which is the one part of a row that changes --
-        -- "Pause" becomes "Resume", "Like" becomes "Unlike", and an unavailable
-        -- Play arrives wrapped in a colour span. Each of those needed a rule here
-        -- to undo it, and a label that ever gains a word would silently match
-        -- nothing and redraw the menu. That is rofi's shape: it echoed back the
-        -- string it was handed, so the string was the only handle there was.
+        -- THE ROW'S KEY, not the words printed on it. The LABEL is the one part
+        -- of a row that changes -- "Pause" becomes "Resume", "Like" becomes
+        -- "Unlike", and an unavailable Play arrives wrapped in a colour span --
+        -- so a label that ever gains a word would silently match nothing.
         --
         -- Resolved against `actions` AS DRAWN -- rebuild_actions has not run
         -- again yet, so the label that came back still names the row it came
@@ -8109,7 +8084,7 @@ view_add_pl = function(track_id, track_name)
     for _, p in ipairs(items) do
         if Util.pl_is_mine(p, my_id) then
             -- `or "Playlist"` matters: names and ids are parallel arrays read by
-            -- one rofi index, and a nil name appended nothing while the id still
+            -- one row index, and a nil name appended nothing while the id still
             -- appended, skewing every later row onto the wrong playlist.
             names[#names+1] = p.name or "Playlist"; ids[#ids+1] = p.id
         end
@@ -8886,8 +8861,8 @@ function Util.view_tile_grid(spec)
         labels()
         Util.album_thumbs(entries, tiles, spec.kind, pre_sel, spec.view .. "||")
         -- by_index, like every other thumbnail grid here: album_thumbs appends a
-        -- \0icon field to each row, so matching rofi\'s echo back against the row
-        -- TEXT is exactly the comparison that suffix would break.
+        -- \0icon field to each row, so matching against the row TEXT is exactly
+        -- the comparison that suffix would break.
         local idx = ui_menu(entries, {prompt=spec.prompt, mesg=spec.prompt, by_index=true,
             thumbs=true, refresh=redraw})
         if not idx then return end
@@ -9038,17 +9013,8 @@ end
 view_seek = function(item)
     -- NO PICTURE AT ALL, and no cover recorded for one.
     --
-    -- This used to name the playing track's sleeve so the card would wear it,
-    -- because a tail segment inherits whatever the trail was standing on (see
-    -- Util.serve_run's keepCtx) and a Seek opened by keybind inside an album
-    -- would otherwise have come up wearing the ALBUM -- a picture of the wrong
-    -- thing, since the track being seeked in need not be from it.
-    --
     -- Seek is a ruler, not a portrait. It says `no_cover` below, so
-    -- Util.serve_card_art is never asked and the recording had nobody left to
-    -- read it.
-    --
-    -- It said `hide_art` too, and that was the over-reach: the card wearing no
+    -- Util.serve_card_art is never asked. Not `hide_art`: the card wearing no
     -- picture is one thing, the LIST behind it losing the one it already had is
     -- another, and only the first is Seek's business.
     Util.scope({view="seek", track_id=item.id, strack_name=item.name or "", track_duration_ms=item.duration_ms or 0}, function()
@@ -9064,9 +9030,9 @@ view_seek = function(item)
         -- and three times -- ten seconds, ten more, back a minute -- and every
         -- other verb here is a one-shot: Play, Like, Copy Web Link act once and
         -- the card has finished with the row. So the UI closes a card on the
-        -- pick and asks the list behind it again, and Seek came back as a NEW
-        -- card each time with its cursor on the first row. That is rofi's
-        -- behaviour, reproduced by accident. See applyContext's `sticky`.
+        -- pick and asks the list behind it again, which would bring Seek back as
+        -- a NEW card each time with its cursor on the first row. See
+        -- applyContext's `sticky`.
         --
         local si = ui_menu(seeks, {prompt="Seek", theme=THEME_SUB,
                                       context=true, art=false, sticky=true,
@@ -9181,15 +9147,9 @@ end
 
 -- LISTENING, WITHOUT HOLDING THE ENGINE HOSTAGE.
 --
--- This used to be one function that started songrec and then sat in a polling
--- loop for up to P.listen_timeout seconds. The engine is a single stdio loop, so
--- for those thirty seconds it read no request and answered none: every poll the
--- UI sent queued up behind it, the loading glow breathed forever because the
--- draw it was waiting on could never arrive, and spoot was locked in whatever
--- menu it happened to be on. Killing the process did not help, because the
--- backgrounded songrec outlived it still holding the monitor.
---
--- Split into three, none of which waits: start it, ask how it is doing, stop it.
+-- The engine answers one request at a time, so a listen that polled for
+-- P.listen_timeout seconds would lock spoot in whatever menu it was on. Split
+-- into three, none of which waits: start it, ask how it is doing, stop it.
 -- The UI drives the asking while its card is up, which is also what finally gives
 -- the card a working cancel.
 Util.listen = nil          -- {out, pidf, device, deadline} while one is running
@@ -9410,9 +9370,7 @@ local function view_playback()
     end
     build_items()
     -- THE PLAYING TRACK'S COVER, beside the verbs. This menu is about one track
-    -- in the same way an action menu is, so it wears the same backdrop -- rofi
-    -- could not, because a cover there was the window's background-image and
-    -- this menu shares THEME_SUB with a dozen others that are about nothing.
+    -- in the same way an action menu is, so it wears the same backdrop.
     --
     -- Cache-only, and the url handed on for the continuation: the rows go out
     -- first and the picture follows. See Util.serve_cover.
@@ -11183,12 +11141,6 @@ Util.SHELF_COVERS_ONLY = {library = true}
 -- The pid file below stops two warmers running AT ONCE; this stops one running
 -- on every single open, for the plain reason that a warm which just ran cannot
 -- have anything new to fetch.
---
--- It used to be load-bearing for a second reason: Util.shelf_tiles could not
--- tell "shelf not cached yet" from "shelf is genuinely empty", so a Podcasts
--- grid with nothing followed reported `cold` forever and spawned a process on
--- every draw. Util.shelf_head tells those apart now and `cold` is set only for
--- an unread shelf, so this is back to being an ordinary rate limit.
 function Util.spawn_shelf_warm(kind)
     if not Util.SHELF_KINDS[kind] then return end
     local stamps = disk_get(P.warm) or {}
@@ -11341,9 +11293,8 @@ end
 -- The markup was never decoration. It is how a menu says an action is not
 -- available to you -- Play and Seek on an unavailable track, Lyrics on one with
 -- none, dimmed rather than absent where the row still explains itself -- and how a
--- settings list marks the value you are on, in green with a check. rofi drew all
--- of it and Util.strip_markup was throwing every bit of it away, so a greyed-out
--- action was indistinguishable from a live one.
+-- settings list marks the value you are on, in green with a check. Stripped,
+-- a greyed-out action would be indistinguishable from a live one.
 --
 -- Pango's <span foreground> becomes Qt's <font color>. Those two and <b> are the
 -- entire vocabulary spoot emits, so the conversion is a rename rather than a
@@ -11445,8 +11396,8 @@ function Util.serve_main()
     local rows = Util.serve_rows(entries)
     for i, t in ipairs(Util.MAIN_TILES) do rows[i].key = t.key end
     local crumb = Util.breadcrumb_parts()
-    -- `cold` is the grid saying a shelf has never been read. The rofi path
-    -- spawns a warm and redraws; here it is reported so the UI can decide.
+    -- `cold` is the grid saying a shelf has never been read; it is reported so
+    -- the UI can decide.
     -- Says "grid" explicitly. Every other view reports its layout, and the UI
     -- only drew the root correctly because grid happened to be its fallback --
     -- a default doing the work of a statement.
@@ -11454,10 +11405,8 @@ function Util.serve_main()
             view = "main", layout = "grid", scope = "main"}
 end
 
--- Every top-level view, by the name the UI asks for. These are the SAME
--- functions the rofi build calls -- not reimplementations -- which is what makes
--- the port 1:1 by construction rather than by inspection: a view cannot drift
--- from its original because it IS its original.
+-- Every top-level view, by the name the UI asks for. These are the view
+-- functions themselves, not wrappers, so the table cannot drift from them.
 Util.SERVE_VIEWS = {
     liked            = function() view_liked_tracks() end,
     ["top-tracks"]   = function() view_top_tracks() end,
@@ -11478,8 +11427,7 @@ Util.SERVE_VIEWS = {
     ["discover-genre"]  = function() Util.view_discover_genre() end,
     ["ui-settings"]     = function() Util.view_ui_settings() end,
     -- Takes its query as the first path step: view("search", {path = {"aurora"}}).
-    -- With no step it draws the history list, which is what the rofi build shows
-    -- before you type.
+    -- With no step it draws the history list.
     search           = function() view_search() end,
     -- Tab's menu, over the stack the engine is currently standing on. Selecting
     -- a row jumps there, which the path mechanism drives like any other view.
@@ -11488,8 +11436,7 @@ Util.SERVE_VIEWS = {
     -- the one view whose whole content IS the stack: it found nothing to list,
     -- decided there was no trail, and opened straight into Trail History -- so
     -- the two modes read as one. The stack of the segment before this one is
-    -- where Tab was pressed, and running on it is exactly the situation the rofi
-    -- build had when it called this from inside a live menu.
+    -- where Tab was pressed, so this runs on it.
     ["trail-jump"]   = function(a)
         if a and type(a.stack) == "table" then Util.session_set(a.stack) end
         Util.view_trail_jump(Util.session_stack(), a and a.tip, a and a.tipRoots,
@@ -11577,10 +11524,7 @@ Util.SERVE_VIEWS = {
         open_url(url)
     end,
 
-    -- THE CURRENT-TRACK KEYS. In the rofi build these are rofi exit codes
-    -- handled inside ui_menu, which decoded them from an exit code; replacing
-    -- that function took them with it. Each refreshes playback first for the
-    -- same reason the originals do -- the keybind may be pressed a while after
+    -- THE CURRENT-TRACK KEYS. Each refreshes playback first -- the keybind may be pressed a while after
     -- the track changed, and acting on a stale current_track opens the wrong
     -- song's lyrics.
     ["lyrics-current"] = function()
@@ -11676,16 +11620,13 @@ function Util.serve_draw(name, d)
         -- question. (`raw` sat beside it and really was dead: a parameter threaded
         -- through three functions to fill a field nobody read. That one went.)
         view   = name,
-        -- opts.thumbs is precisely how the rofi build decides grid vs list, so
-        -- the UI inherits that decision rather than keeping its own table.
+        -- opts.thumbs is how a view says grid vs list, so the UI inherits that
+        -- decision rather than keeping its own table.
         layout = o.thumbs and "grid" or "list",
         prompt = o.prompt and Util.strip_markup(o.prompt) or nil,
         -- A FUNCTION IS A MESG TOO. Views whose caption depends on live state
         -- pass a closure rather than a string -- Playback's names whatever is
-        -- playing right now, Main's the transport state -- and rofi called it.
-        -- Taking only strings dropped those on the floor without a word, which
-        -- is how the Playback menu came to have no caption at all and nothing
-        -- anywhere said so.
+        -- playing right now, Main's the transport state -- so it is called here.
         mesg   = (function()
             local m = o.mesg
             if type(m) == "function" then
@@ -11697,7 +11638,7 @@ function Util.serve_draw(name, d)
         rows   = Util.serve_rows(d.entries, o.items, o.keys),
         -- Util.parts_from_stack's own output: "Main", then one part per step,
         -- with a qualified sub-view spending two. The UI draws the arrows; the
-        -- naming rule stays in one place, where the rofi build already has it.
+        -- naming rule stays in one place.
         crumb  = d.crumb,
         -- WHICH ZENON THEME this view would have been drawn with. Every view
         -- already names one when it calls ui_menu, and those files carry the
@@ -11725,8 +11666,8 @@ function Util.serve_draw(name, d)
         -- The track a lyrics view is FOR, so the UI can ask for its cues without
         -- guessing that it is whatever happens to be playing.
         track  = (d.stack and #d.stack > 0) and d.stack[#d.stack].track_id or nil,
-        -- WHETHER DELETE MEANS ANYTHING HERE. opts.del_select is the rofi build's
-        -- own claim on the key -- only the menus that erase a record set it -- so
+        -- WHETHER DELETE MEANS ANYTHING HERE. opts.del_select is the menu's own
+        -- claim on the key -- only the menus that erase a record set it -- so
         -- reporting it lets the UI offer Delete exactly where it does something.
         -- Without this the key had to either do nothing everywhere or be sent
         -- blind, and a menu that does not claim it would have read the step as an
@@ -12008,8 +11949,8 @@ function Util.serve_nav(args)
     local keep_ctx = nil
     -- THE DAISY CHAIN. Each segment runs on its OWN stack and reports its own
     -- crumb; the chain is assembled here. That is what makes a root visible as a
-    -- root: joined by the trail glyph rather than the step arrow, exactly as the
-    -- rofi build joined archived trails (Util.trail_label). Building segments on
+    -- root: joined by the trail glyph rather than the step arrow (see
+    -- Util.trail_label). Building segments on
     -- one shared stack instead would have hidden the seam -- and a Main root,
     -- whose whole crumb is the word "Main", would have vanished entirely.
     local chain, roots = {}, {}
@@ -12431,10 +12372,8 @@ function Util.serve_shelf(d)
     -- you nothing about where you are, and opening an album to find an unrelated
     -- track's artwork reads as a bug.
     --
-    -- This used to test ctx_type == "album", then "album or playlist": a list of
-    -- kinds that could only grow, and that had already missed podcasts -- a show's
-    -- episode list passes no ctx_type at all, deliberately (see Util.open_show),
-    -- so it could never have matched however long the list got.
+    -- Not a test on ctx_type: a show's episode list passes none, deliberately
+    -- (see Util.open_show), so a list of kinds could never cover it.
     -- ...UNTIL SOMETHING IN THE LIST IS PLAYING. The exception above is about
     -- not showing you an unrelated track's artwork beside a container you merely
     -- opened -- and once the music is coming OUT of that container the artwork is
@@ -12689,20 +12628,16 @@ function Util.serve_art_after(name, d)
             -- are no longer pending -- and reports everything resolved so far.
             -- Looping it fills the whole grid instead of its first sixty.
             --
-            -- That cap was rofi's. rofi could not draw a menu until its icons
-            -- existed, so fetching a 1500-album discography up front WAS the
-            -- menu hanging, and everything past sixty had to be handed to a
-            -- detached prefetch and picked up on some later draw -- which is why
-            -- a grid of 69 artists came up with nine blank tiles. Nothing here
-            -- waits on art: the rows go out first and covers arrive as events,
-            -- so there is no reason to stop at any particular number.
+            -- Nothing here waits on art: the rows go out first and covers
+            -- arrive as events, so there is no reason to stop at any
+            -- particular number.
             --
             -- The clock is not a cap on covers, it is a cap on how long the
             -- engine may go without answering. It reads one line at a time and
             -- cannot be interrupted mid-fill, so a pathological list would
             -- otherwise leave the next keypress waiting minutes. Whatever is
             -- unresolved when it runs out is already spooled to the detached
-            -- prefetch, exactly as the whole tail used to be.
+            -- prefetch.
             local deadline = os.time() + Util.ART_FILL_SECONDS
             local reported = -1
             while true do
@@ -12783,8 +12718,7 @@ function Util.serve_art_after(name, d)
     end
 end
 
--- Opening a Main tile runs the tile's OWN open() -- the same closure the rofi
--- grid invokes on Return -- so the mapping from tile to view is not duplicated
+-- Opening a Main tile runs the tile's OWN open(), so the mapping from tile to view is not duplicated
 -- anywhere. A tile that changes where it goes changes here for free.
 function Util.serve_open(args)
     local key = args and args.tile
@@ -13127,11 +13061,9 @@ Util.SERVE = {
         -- something is playing (no network at all) and through get_playback when
         -- it is not. So there is nothing here for a request of its own to find.
         --
-        -- It used to make one anyway, on a flat 25s timer, and that is half of
-        -- what throttled the account: measured on an idle, CLOSED spoot,
-        -- me/player was leaving every ~15 seconds -- the sum of two independent
-        -- timers each of which believed it was the only one. This records from
-        -- what the other has already fetched; Util.recent_record is the half that
+        -- A timer of its own here would double the me/player traffic of an
+        -- idle spoot, which throttles the account. This records from what the
+        -- other has already fetched; Util.recent_record is the half that
         -- was worth keeping, and get_playback stashes the position it saw.
         --
         -- The standalone `--recent-watch` process still polls for itself through
@@ -13281,7 +13213,7 @@ function Util.serve_mode()
             -- UNSCOPED -- they are context menus, not places -- so they draw at
             -- the same stack depth as the grid behind them and looked like a
             -- redraw of it. Their theme differs (sub/action versus thumbs),
-            -- which is exactly the distinction rofi itself makes.
+            -- which is exactly the distinction wanted.
             -- ...AND WHETHER IT IS A CONFIRMATION. A yes/no prompt is raised from
             -- inside the view it belongs to, at that view's depth and in that
             -- view's theme, so by every measure above it looks exactly like a
@@ -13324,30 +13256,24 @@ function Util.serve_mode()
                 end
             end
             -- A step may be {i = 3, alt = true} instead of a bare 3. That is
-            -- Shift+Return: rofi reports it through an exit code, and every
-            -- caller reads Util.alt_pressed immediately after the menu returns,
-            -- so setting it here is exactly what the real key does. Reset first,
+            -- Shift+Return: every caller reads Util.alt_pressed immediately after
+            -- the menu returns, so setting it here is exactly what the key does. Reset first,
             -- because the flag is sticky and a stale true would send the NEXT
             -- plain Return into an action menu.
             Util.alt_pressed = false
-            -- Delete travels the same way. rofi reported it as its own exit code
-            -- and Util.view_trail_jump reads the flag immediately after the menu
+            -- Delete travels the same way. Util.view_trail_jump reads the flag immediately after the menu
             -- returns, so setting it here is exactly what the key did. Cleared on
             -- every draw for the same reason alt is: the flag is sticky, and a
             -- stale true would erase a row the next Return only meant to pick.
             Util.del_pressed = false
             -- And Tab, which two menus claim for themselves: the trail menu
             -- cycles Trail Steps against Trail History with it, and the search
-            -- results cycle their type picker. Both branches were still here and
-            -- both were unreachable, because nothing set the flag once rofi
-            -- stopped reporting the key -- so the menus kept the code for a
-            -- feature they no longer had. Same shape as alt and del: a flag on
-            -- the path step, read immediately after the menu returns.
+            -- results cycle their type picker. Same shape as alt and del: a flag
+            -- on the path step, read immediately after the menu returns.
             Util.tab_pressed = false
             -- ...and Queue, which is a middle click on a row. Same shape again: a
-            -- flag on the step, read once, cleared on every draw. It is not a key
-            -- in the rofi build at all -- there was no third mouse button to bind
-            -- -- so this is the one of the four with no keyboard ancestor.
+            -- flag on the step, read once, cleared on every draw -- the one of
+            -- the four with no key.
             Util.queue_pressed = false
             local want_id, want_key = nil, nil
             if type(ans) == "table" then
@@ -13536,11 +13462,9 @@ function Util.serve_mode()
                     ans = nil
                 end
             end
-            -- ui_menu used to handle Shift+Return ITSELF for lists that do
-            -- not claim it: a track row has no alt branch in
-            -- view_browse because rofi opened the action menu on the list's
-            -- behalf. Replacing ui_menu took that with it, so the default
-            -- handler is reproduced here, from the same opts it read.
+            -- THE DEFAULT Shift+Return, for lists that do not claim it: a track
+            -- row has no alt branch in view_browse, so the action menu is opened
+            -- here on the list's behalf, from the menu's own opts.
             if Util.alt_pressed and ans ~= nil and not opts.alt_select
                and type(opts.items) == "table" and type(ans) == "number" then
                 local item = opts.items[ans]
@@ -13611,8 +13535,7 @@ function Util.serve_mode()
                 -- Return indexed the grid behind it.
                 -- A STRING step is free-typed input: a search query, a new
                 -- playlist name, a rename. Menus that allow custom text take
-                -- whatever the user wrote, so handing it straight back is
-                -- exactly what rofi does.
+                -- whatever the user wrote, so it is handed straight back.
                 if type(ans) == "string" then return ans end
                 -- by_index decides the ANSWER TYPE: menus that match on the row
                 -- text (the action menus) must be handed the string, or the
@@ -13623,14 +13546,12 @@ function Util.serve_mode()
             end
             -- NOT resolved here. opts.refresh is the view's own rebuild, and it
             -- runs Util.album_thumbs, which downloads whatever the visible window
-            -- is missing -- seconds, for a fifty-cover grid. Doing that before
-            -- answering is rofi's bargain: nothing on screen until everything is
-            -- ready. It is kept as a continuation instead, so the rows go out
+            -- is missing -- seconds, for a fifty-cover grid. It is kept as a
+            -- continuation instead, so the rows go out
             -- immediately and the covers follow as events.
             -- THE STACK, as it stands at this draw. Util.scope has pushed every
-            -- step that led here and has not popped any of them yet, so this is
-            -- the same stack the rofi build would be sitting on -- the crumb, the
-            -- trail and a warm start all read from it. Taken here because the
+            -- step that led here and has not popped any of them yet -- the crumb,
+            -- the trail and a warm start all read from it. Taken here because the
             -- replay unwinds every scope on the way out, leaving it empty by the
             -- time the command returns.
             -- The theme is resolved by the same expression ui_menu uses -- the
@@ -13638,13 +13559,9 @@ function Util.serve_mode()
             -- THE ROWS AS THEY ARE NOW, not as they were when the view built
             -- them. A menu whose rows describe state it can change -- Like
             -- becoming Unlike, Save Album becoming Remove, Track Cache flipping
-            -- -- hands ui_menu a `refresh` and lets it rebuild them; rofi
-            -- called that itself every time it redrew, so the row you had just
-            -- acted on was correct by the time you saw it again.
-            --
-            -- Capturing `entries` untouched skipped that entirely: the action
-            -- ran, the menu came back, and every label still read as it had
-            -- before. Liking a track did like it and then showed you "Like".
+            -- -- hands ui_menu a `refresh` and lets it rebuild them, so it is
+            -- called here: the `entries` the view built would still read as
+            -- they did before the action -- liking a track would show "Like".
             --
             -- Costs nothing to do here: album_thumbs is gated by _art_defer,
             -- which is still set, so a refresh rebuilds labels and fetches no
@@ -13867,10 +13784,9 @@ elseif arg and arg[1] == "--device-auth" then
 elseif arg and arg[1] then
     os.exit(2)
 else
-    -- NO FLAG: the engine has nothing to do without a host to serve. This ran
-    -- rofi's interactive main loop once, and nothing has reached it since the
-    -- Qt port -- the binary always passes --serve, and the CLI only ever passes
-    -- a flag. Said, rather than left to fail somewhere inside a menu.
+    -- NO FLAG: the engine has nothing to do without a host to serve -- the
+    -- binary always passes --serve, and the CLI only ever passes a flag. Said,
+    -- rather than left to fail somewhere inside a menu.
     print("spoot: the engine runs inside bin/spoot -- see `bin/spoot --help`")
     os.exit(2)
 end

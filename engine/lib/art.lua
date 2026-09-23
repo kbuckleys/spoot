@@ -24,13 +24,10 @@ return function(Util)
     end
 
     -- The rendition of a PLAYLIST cover. The last byte of the prefix is a size code,
-    -- and there are FOUR, not the two this said before it was swept properly: 01 is
+    -- and there are FOUR: 01 is
     -- 64x64, 02 is 300x300 -- what the API hands back as images[1] -- 03 is 640x640
     -- and 04 is 1280x1280. 05 and 06 do not exist, so 04 is as large as a playlist
     -- gets. Confirmed against every playlist on this account.
-    --
-    -- The old comment claimed 03 was the top, which is why the full-screen viewer
-    -- spent its life upscaling 640 into a 1000px window.
     --
     -- Anchored to that exact prefix on purpose, and it matches barely half of what
     -- is cached: ab67706c personalised covers (one size only), album-art URLs, and
@@ -74,17 +71,14 @@ return function(Util)
         return tostring(os.time())
     end
 
-    -- Is this file something rofi can actually draw, and did all of it arrive?
+    -- Is this file something the UI can actually draw, and did all of it arrive?
     --
-    -- This used to accept JPEG and nothing else, which was wrong about what Spotify
-    -- serves: 2 of the 50 category icons are PNG, and roughly a tenth of playlist
-    -- search results are WebP (user-uploaded covers on image-cdn-*.spotifycdn.com).
-    -- Every one of those was downloaded, rejected, and queued again on the NEXT
-    -- draw, so Categories and playlist search each paid ~3 s per open, reopen and
-    -- back -- forever, since the file could never be accepted. rofi renders all
-    -- three formats (gdk-pixbuf identifies images by content, not by extension),
-    -- so the files are stored exactly as they arrive under their existing .jpg
-    -- path and the suffix is cosmetic.
+    -- Not only JPEG: 2 of the 50 category icons are PNG, and roughly a tenth of
+    -- playlist search results are WebP (user-uploaded covers on
+    -- image-cdn-*.spotifycdn.com). Rejecting those queued them again on every draw,
+    -- forever. Qt identifies images by content, not by extension, so the files are
+    -- stored exactly as they arrive under their .jpg path and the suffix is
+    -- cosmetic.
     --
     -- Still a real check, not a rubber stamp: each format is verified end-to-end so
     -- a truncated download is caught, which is the reason this function exists.

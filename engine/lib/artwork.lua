@@ -419,10 +419,7 @@ return function(Util, ctx)
 
     -- WHAT A ROW WEARS WHEN IT WILL NEVER HAVE REAL ARTWORK.
     --
-    -- Ten 300x300 PNGs shipped in engine/assets/ and stood here. They were pictures
-    -- OF nerd icons -- an icon rasterised, saved, loaded back off disk, decoded and
-    -- scaled into a 150px tile -- so the grid paid an image load per placeholder to
-    -- draw a glyph the font already has. The font is the one dependency spoot cannot
+    -- A glyph, not a picture of one. The font is the one dependency spoot cannot
     -- run without (ttf-jetbrains-mono-nerd, see the README), so the glyph is always
     -- there and always the right size: it is text, it scales to the tile, it takes
     -- the theme's colour, and nothing is fetched, decoded or cached to draw it.

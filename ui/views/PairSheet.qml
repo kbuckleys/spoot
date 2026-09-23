@@ -8,15 +8,9 @@
 //
 // One renderer for every sheet in the app: the keybind reference and the
 // Track/Album/Podcast/Episode detail sheets are all the same shape -- a short
-// right-aligned label and a value beside it -- and they were all built as
-// space-padded strings because rofi could only be handed text.
+// right-aligned label and a value beside it.
 //
-// rofi took one blob of text, so the engine used to hand it a string with the
-// key column faked by counting spaces to column 15. Nothing lined up unless the
-// font was monospaced, nothing could wrap, and the window height was a guess --
-// which is why the last binding was cut off the bottom.
-//
-// Here the key column measures itself against the widest key, the description
+// The key column measures itself against the widest key, the description
 // column takes the rest, and the sheet is exactly as tall as its rows.
 import QtQuick
 
@@ -52,8 +46,7 @@ Column {
     //
     // The sheet measures itself and the window takes its size, instead of the
     // window being a number in a theme file and the text living with whatever it
-    // got. rofi could not do this: it is handed a size up front, which is why
-    // meta.rasi says 800px whether the sheet holds three fields or twelve.
+    // got.
     //
     // Everything below is measured with the SAME font the delegates draw with,
     // so the numbers cannot disagree with the layout.

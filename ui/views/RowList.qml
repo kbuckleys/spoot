@@ -14,10 +14,9 @@ import QtQuick
 import "../Mark.js" as Mark
 import "../Scroll.js" as Scroll
 
-// A text list. rofi's listview is a grid whose default flow is VERTICAL -- it
-// fills a column top to bottom, then starts the next one -- and the default menu
-// theme really does use two columns. A plain ListView could never express that,
-// which is why this is a GridView with one row's height per cell.
+// A text list. A GridView with one row's height per cell rather than a
+// ListView, because a theme may ask for more than one column (the position
+// picker does).
 GridView {
     id: list
     property var theme
@@ -139,11 +138,7 @@ GridView {
     }
     // ACROSS, THEN DOWN, ALWAYS.
     //
-    // This was FlowTopToBottom -- rofi's `listview` default, which fills a column
-    // before it starts the next -- with FlowLeftToRight as an exception for one
-    // column and for the window-position picker. Both halves of that were wrong.
-    //
-    // With ONE column, filling down means the view fills the height, wraps into a
+    // Not FlowTopToBottom. With ONE column, filling down means the view fills the height, wraps into a
     // second column off the right-hand edge, and scrolls SIDEWAYS. Measured: 700
     // rows at 26px in a 400px view came out 47 columns wide, contentWidth 47000
     // and contentHeight -1. Everything that reads a list's position was quietly
@@ -152,11 +147,9 @@ GridView {
     //
     // And with MORE than one, nothing here could reach it: every list theme
     // declares one column (see Theme.viewGeom) and the only menu that asks for
-    // more is the position picker, which is a shape read across. So the
-    // column-major branch was unreachable -- and had it ever been reached,
-    // main.qml's move() would have walked the cursor across the grid on the Down
-    // key, because it steps by the column count. One flow, and the rows are in the
-    // order and on the axis they look like they are on.
+    // more is the position picker, which is a shape read across -- and main.qml's
+    // move() steps by the column count, which assumes rows run across. One flow,
+    // and the rows are in the order and on the axis they look like they are on.
     flow: GridView.FlowLeftToRight
     cellWidth: Math.floor(width / Math.max(1, columns))
     cellHeight: rowHeight
@@ -489,9 +482,8 @@ GridView {
                 if (list.inert) { list.rowClicked(index); return }
                 list.currentIndex = index
                 if (m.button === Qt.RightButton) { list.picked(index, true); return }
-                // THE THIRD BUTTON QUEUES. It had no meaning at all before --
-                // rofi had no third button to bind -- and "play this next" is
-                // the verb people reach for most often after play itself.
+                // THE THIRD BUTTON QUEUES: "play this next" is the verb people
+                // reach for most often after play itself.
                 if (m.button === Qt.MiddleButton) { list.rowQueued(index); return }
                 list.rowClicked(index)
             }

@@ -1160,20 +1160,19 @@ class JobPool;
 static void installJob(lua_State *L, JobPool *pool);
 
 // ── BACKGROUND JOBS ──────────────────────────────────────────────────────────
-// What `nohup lua spoot.lua --prefetch-art-batch &` was. Five jobs use this --
-// artwork prefetch, the playlist index, revalidation, lyrics, the notification
-// helper -- and each one used to be a process: a fork, an exec, and a fresh
-// 13,400-line script parsed from disk before it could do anything.
+// Artwork prefetch, the playlist index, revalidation, lyrics, the notification
+// helper -- each runs here rather than as a process: no fork, no exec, and no
+// fresh script parsed from disk before it can do anything.
 //
 // A JOB IS STILL COMPLETELY ISOLATED. It gets a lua_State of its own, which
 // shares no memory whatsoever with the engine's -- separate heap, separate
 // globals, separate everything, the same isolation the fork had -- and it is
 // DISPOSED of when the job ends, so its memory leaves with it exactly as a
-// process' did. What it does not get is the fork.
+// process' would. What it does not get is the fork.
 //
 // The state has no `emit` and no `next`: a job does not serve. It reads its
-// arguments from `arg` and takes the same entry point the process took, which
-// is why not one line of any job's code had to change.
+// arguments from `arg` and takes the same entry point `spoot --flag` takes, so
+// a job runs identically hosted or as a process of its own.
 class JobRunner : public QObject {
     Q_OBJECT
 public:
@@ -1436,16 +1435,15 @@ static void installJob(lua_State *L, JobPool *pool) {
 // ---------------------------------------------------------------------------
 // THE ENGINE, IN THIS PROCESS.
 //
-// It used to be `lua spoot.lua --serve` on the other end of a pipe. It is the
-// same script, unchanged and still read from disk, running on a worker thread
-// inside this binary -- so editing engine/spoot.lua still costs a restart and
+// The same script `lua spoot.lua --serve` runs, still read from disk, running
+// on a worker thread inside this binary -- so editing engine/spoot.lua still costs a restart and
 // not a rebuild.
 //
 // WHAT CROSSES THE THREAD BOUNDARY IS BYTES. The worker and the GUI thread
-// exchange the very ndjson lines they exchanged over the pipe: QByteArray in,
+// exchange the very ndjson lines `--serve` speaks over a pipe: QByteArray in,
 // QByteArray out, never a live object and never a shared structure. That is the
 // whole of the concurrency design -- with nothing shared there is nothing to
-// race over, and the process boundary's semantics survive its removal.
+// race over.
 //
 // The worker runs NO event loop of its own -- it blocks inside Lua -- and
 // requests reach it through a plain mutex-guarded queue rather than a queued
@@ -1812,11 +1810,10 @@ public:
     }
     // HANDED IN BY THE QML THAT DECLARES IT, from Component.onCompleted -- which
     // runs while the window still has no platform window, which is the one moment
-    // LayerShellQt::Window::get() can turn it into a layer surface.
+    // LayerShellQt::Window::get() can turn it into a layer surface. (Not
+    // findChild: a Window declared inside another Window is not a QObject child
+    // of it.)
     //
-    // findChild STOOD HERE and found nothing: a Window declared inside another
-    // Window is not a QObject child of it, so the dock was configured never,
-    // registered never, and the whole feature was one silent early return.
     // WHERE THE POINTER IS, WITHOUT OWNING THE GROUND IT IS OVER.
     //
     // The dock has to know you are approaching before you arrive, and a Wayland
@@ -2089,15 +2086,13 @@ private:
 };
 
 // ── SURVIVING A FAULT ────────────────────────────────────────────────────────
-// The engine used to be a process of its own, so a fault in it left the window
-// up and useless -- which is why Engine already respawns it. Now that everything
-// is in here, a fault takes the window with it, and the honest answer is not to
-// pretend that cannot happen but to come straight back.
+// Engine respawns a dead Lua worker, but a fault in native code takes the
+// window with it, and the honest answer is not to pretend that cannot happen
+// but to come straight back.
 //
 // spoot restores its session, its trail and its scroll position on a cold start,
 // so an execv of ourselves lands on the menu that was open. What the user sees is
-// a blink. That is strictly better than what a separated engine gave: there, a
-// crash in the UI half was simply the end.
+// a blink.
 //
 // THREE STRIKES. A fault that happens every time -- a bad build, a missing
 // library -- must not become an infinite respawn that buries its own reason, so
@@ -2272,8 +2267,7 @@ int main(int argc, char *argv[]) {
     shell->setParent(&app);
     qml.rootContext()->setContextProperty("Engine", &engine);
     qml.rootContext()->setContextProperty("Shell", shell);
-    // --listen opens straight on the Listen view, the way the rofi build's one
-    // rofi-opening flag does today.
+    // --listen opens straight on the Listen view.
     // WHAT THE DOCK SAW, on demand. It is built against wlr-layer-shell -- which
     // every compositor spoot can run on implements -- but only Hyprland answers
     // `cursorpos`, so everywhere else the hot spot rides on a probe surface being
@@ -2378,8 +2372,7 @@ int main(int argc, char *argv[]) {
         }
         // LIVE RELOAD. Every view lives in a .qml file read at runtime, so an
         // edit can take effect in the running shell -- no rebuild, and no
-        // closing the menu you are looking at, which was never possible when a
-        // menu was a rofi process that had already exited.
+        // closing the menu you are looking at.
         if (qEnvironmentVariableIsSet("SPOOT_DEV")) {
             auto *watch = new QFileSystemWatcher(&app);
             QDirIterator it(root + "/ui", {"*.qml"}, QDir::Files, QDirIterator::Subdirectories);

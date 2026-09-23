@@ -34,11 +34,9 @@ Window {
     // Computed HERE, from the model, rather than chained through
     // Loader.item.implicitHeight -- that indirection is null while the loader is
     // still building and the window collapsed to a 1px sliver because of it.
-    // ZENON's `fixed-height: false` means the panel is as tall as its rows need
-    // and no taller, with main.rasi's `lines: 3` acting as a ceiling.
-    // Rows wrap into `columns`, so the height is the number of ROWS needed,
-    // capped at the theme's `lines` -- which is how rofi reads those two numbers
-    // together rather than as a flat maximum.
+    // The panel is as tall as its rows need and no taller, with the theme's
+    // `lines` acting as a ceiling. Rows wrap into `columns`, so the height is the
+    // number of ROWS needed, capped at `lines`, rather than a flat maximum.
     readonly property int bodyHeight: {
         // THE ART VIEWER AND THE SHEETS DO NOT TOUCH THIS. Both are cards
         // floating over the menu, so the menu underneath keeps the shape it had
@@ -186,8 +184,7 @@ Window {
     property var pending: ({})
     property string layout: "grid"
     // The rows as the engine sent them. Filtering rebuilds `rows` from this, so
-    // typing never costs a request -- rofi filtered a static list too, it just
-    // had no choice about it.
+    // typing never costs a request.
     property var allRows: []
     property string filter: ""
     property var playback: ({})
@@ -335,8 +332,8 @@ Window {
     function rowStep(m, i, extra) {
         var st = extra || {}
         var inRange = !!m && i >= 0 && i < m.count
-        // Lua is 1-based, and so are the indices rofi handed back; out of range
-        // keeps the old arithmetic rather than inventing a row.
+        // Lua is 1-based, and so are the indices the engine reads; out of range
+        // keeps the plain arithmetic rather than inventing a row.
         st.i = inRange ? m.get(i).src : (i + 1)
         var rid = inRange ? (m.get(i).id || "") : ""
         if (rid.length) st.id = rid
@@ -476,11 +473,7 @@ Window {
 
     // --- NOTIFICATIONS ---------------------------------------------------
     // A remark the app is making, as opposed to the caption of the menu you are
-    // in. rofi had exactly one message bar and both had to share it, so "Copied
-    // link" arrived by REPLACING the name of the view you were standing in --
-    // you were told one thing at the cost of being told another.
-    //
-    // Here it gets its own bar at the foot of the panel. See noticeBar: it
+    // in. It gets its own bar at the foot of the panel. See noticeBar: it
     // pushes the menu up rather than covering a row, so nothing you were looking
     // at is hidden in order to tell you something.
     property string notice: ""
@@ -666,13 +659,11 @@ Window {
             // draw arrived carrying the same hops. This is the UI dropping them,
             // which is exactly what Alt+Delete does. See Util.clear_trail.
             else if (name === "home") root.goHome()
-            // A view that wants to say "No results" says it here -- rofi_message
-            // has nowhere to draw when the front end is not rofi.
+            // A view that wants to say "No results" says it here.
             else if (name === "message") {
                 // Multi-line means a SHEET (Track/Album/Podcast Details, the
-                // keybind list); one line is a status remark. rofi needed a
-                // separate themed window for the former -- here it is a panel
-                // that slides over the rows and takes Escape.
+                // keybind list), a panel that slides over the rows and takes
+                // Escape; one line is a status remark.
                 var t = data.text || ""
                 if (root.overlayTheme === "listen") root.closeOverlay()
                 if (t.indexOf("\n") >= 0) {
@@ -692,14 +683,6 @@ Window {
             // -- so this only arms the record; applyDraw takes it once the trail
             // describes the menu again. See armOrigin.
             else if (name === "played") root.armOrigin = data.id || ""
-            // ART BELONGS TO ROWS THAT ARE NOT ON SCREEN YET. The engine flushes
-            // the rows first and follows with their covers, so while a draw is
-            // held for the outgoing transition its art arrives ahead of it --
-            // and applying it then patches the menu being LEFT, whose model is
-            // about to be replaced by the held draw. Both the wrong rows and
-            // then no rows at all: Main came back with five blank tiles.
-            //
-            // Queued instead, and replayed the moment its own draw is applied.
             // QUIT means the whole app, window included. The engine sweeps the
             // background processes and then leaves, and it is the host that owns
             // it rather than the other way round -- so without this the window
@@ -711,6 +694,13 @@ Window {
             // none loses the row without you having to open the menu twice. No
             // card up means nothing on screen is waiting for this.
             else if (name === "lyrics-known") { if (root.ctxUp) root.refresh(0) }
+            // ART BELONGS TO ROWS THAT ARE NOT ON SCREEN YET. The engine flushes
+            // the rows first and follows with their covers, so while a draw is
+            // held for the outgoing transition its art arrives ahead of it --
+            // and applying it then patches the menu being LEFT, whose model is
+            // about to be replaced by the held draw.
+            //
+            // Queued instead, and replayed the moment its own draw is applied.
             else if (name === "art" || name === "context-art") {
                 if (root.heldDraw) root.heldArt.push({name: name, data: data})
                 else root.applyArtEvent(name, data)
@@ -727,11 +717,9 @@ Window {
                 root.overlayTheme = data.theme || "meta"
             }
             else if (name === "listening") {
-                // A PILL, not a picture. This used to borrow the art overlay
-                // wholesale -- a 300px speaker glyph with a caption under it --
-                // because in the rofi build a window with an image was the only
-                // way to look busy. What spoot is doing is a sentence; the pill
-                // is that sentence with a light going round it. See listenPill.
+                // A PILL, not a picture. What spoot is doing is a sentence; the
+                // pill is that sentence with a light going round it. See
+                // listenPill.
                 root.overlayFresh = true
                 root.artMesg = root.listenLines[
                     Math.floor(Math.random() * root.listenLines.length)] + "\u2026"
@@ -744,19 +732,13 @@ Window {
                 // and giving up both have to act on the same place it went.
                 root.promptInCard = root.ctxUp
                 root.setFilter(data.preset || "")
-                // THE STEP THAT RAISED THE FIELD STAYS ON THE PATH, and this is
-                // the whole of "create new playlist doesn't work".
-                //
-                // It used to come off here, on the reasoning that the engine
-                // answered nil and stayed put so the step was not a place. It is
-                // not -- and it is still an ANSWER. `Create New Playlist` is row
-                // one of a real menu, and the text is the answer to the field
-                // that row opened: the engine reads them in that order (see
-                // ui_ask, which takes the step AFTER the one its menu consumed).
-                // Dropping the row put the typed name where the row answer
-                // belonged, so the playlists grid -- a by_index menu -- was handed
-                // a string and the engine raised "attempt to compare number with
-                // string". Nothing was ever created.
+                // THE STEP THAT RAISED THE FIELD STAYS ON THE PATH. It is not a
+                // place, but it is an ANSWER: `Create New Playlist` is row one of
+                // a real menu, and the text is the answer to the field that row
+                // opened. The engine reads them in that order (see ui_ask, which
+                // takes the step AFTER the one its menu consumed), so dropping the
+                // row would hand the playlists grid -- a by_index menu -- a string
+                // where its row answer belongs.
                 //
                 // Not a place is handled where every other step's is: `keep`
                 // says so on the next draw and applyWhere trims it, so this
@@ -882,7 +864,7 @@ Window {
         var out = []
         for (var i = 0; i < source.length; i++) {
             var r = source[i]
-            // Substring, case-insensitive -- rofi's default matcher.
+            // Substring, case-insensitive.
             // EVERY role is present on every append, even when empty. ListModel
             // fixes its roles from the first object it is given, so appending a
             // row without `icon` -- which is now every row, since art streams in
@@ -1337,10 +1319,7 @@ Window {
             for (var k in was) mark[k] = was[k]
             mark.buf = true
             root.ctxHops = [mark]
-            root.hops = root.hops.slice(0, root.hops.length - 1)
-            root.trailPos = root.hops.length
-            root.fullCrumb = []; root.fullRoots = []
-            root.forgetAhead(root.trailPos)
+            root.cutTrail(root.hops.slice(0, root.hops.length - 1))
         }
         // A CONTEXT MENU DOES NOT SURVIVE BEING USED. `keep` is the engine saying
         // which of the steps behind this draw described a place; when the last
@@ -1838,8 +1817,8 @@ Window {
     // dismissed, which is why the keymap asks about it first.
     property string sheet: ""
     // The theme an overlay was opened with -- meta (800px), binds (680), pods
-    // (1000), art (1000), imp (640). rofi opened a differently sized WINDOW for
-    // each of these; here the panel takes that size while the overlay is up.
+    // (1000), art (1000), imp (640). The panel takes that size while the overlay
+    // is up.
     property string overlayTheme: ""
     // A text prompt the engine is waiting on (Rename Playlist, New Playlist).
     // It shares the typing buffer with search rather than owning a second one:
@@ -1853,13 +1832,11 @@ Window {
     // title is a slab of text with no idea what it is about -- and every other
     // floating thing in spoot wears one. See Util.detail_sheet's `title`.
     property string sheetTitle: ""
-    // The art viewer. rofi could only show a picture as a giant row icon; this
-    // is an image, sized to the panel, with the caption rofi put in its mesg.
+    // The art viewer: an image, sized to the panel, with its caption.
     property string artPath: ""
     property string artMesg: ""
-    // The cover of the thing an action menu is ABOUT. rofi could only name it in
-    // the message bar; here it sits beside the verbs, so you can see what you
-    // are about to act on.
+    // The cover of the thing an action menu is ABOUT. It sits beside the verbs,
+    // so you can see what you are about to act on.
     property string contextArt: ""
     // Set by the draw itself (Util.serve_draw's `art`): this menu is about
     // nothing you can picture, so it wears no cover however much artwork is
@@ -2205,10 +2182,9 @@ Window {
     // moment after that, so scrolling through a song does not turn into a fight
     // with the sync pulling the selection back every line.
     property double lastManualMove: 0
-    // Where the cursor was in each list you have visited. rofi needed pos_key
-    // because every menu was a new process with no memory; this needs it for the
-    // opposite reason -- one long-lived view swaps its model out from under the
-    // same ListView, and without this every revisit snaps back to the top.
+    // Where the cursor was in each list you have visited. One long-lived view
+    // swaps its model out from under the same ListView, and without this every
+    // revisit snaps back to the top.
     property var positions: ({})
     // Crumb length -> the navigation state that produced it. Clicking a step in
     // the trail restores the exact path that drew it, which is why this records
@@ -2232,6 +2208,15 @@ Window {
         for (var k in root.trailMap)
             if (root.trailMap[k] <= pos) keep[k] = root.trailMap[k]
         root.trailMap = keep
+    }
+    // CUTS THE TRAIL to `hs`, standing at `pos` (its end unless said), and drops
+    // everything that only made sense on the longer one: the crumbs ahead and the
+    // cursor memory past the cut.
+    function cutTrail(hs, pos) {
+        root.hops = hs
+        root.trailPos = pos === undefined ? hs.length : pos
+        root.fullCrumb = []; root.fullRoots = []
+        root.forgetAhead(hs.length)
     }
     // The DEEPEST crumb reached on this trail, remembered so that stepping back
     // can still show what lies ahead. Only ever grows while you walk backwards;
@@ -2410,14 +2395,12 @@ Window {
         root.ctxHops = root.ctxHops.concat([{cmd: "view", key: name, buf: true}])
         root.refresh()
     }
-    // alt is Shift+Return: the engine turns it into Util.alt_pressed, which is
-    // exactly what rofi's exit code does, so the view opens its action menu.
+    // alt is Shift+Return: the engine turns it into Util.alt_pressed, so the view
+    // opens its action menu.
     // True while the Search view is showing its history and nothing has been
     // submitted: there, what you type is a QUERY, not a filter over the history.
-    // rofi expressed this with `custom` on the menu; here it is one predicate.
-    // THE SEARCH BOX IS UP. It used to be a VIEW you had navigated to -- "the
-    // search menu, before a query has been submitted" -- and it is a card now, so
-    // the card says so for itself. See ctxField and Util.serve_draw's `field`.
+    // THE SEARCH BOX IS UP. It is a card, so the card says so for itself. See
+    // ctxField and Util.serve_draw's `field`.
     readonly property bool isSearchPrompt: root.ctxUp && root.ctxField
     // WHAT YOU TYPE IS TEXT TO SUBMIT, not a filter over rows: the search box,
     // and the prompts that ask for a name (New Playlist, Rename Playlist).
@@ -2440,18 +2423,17 @@ Window {
     // the one whose label this side knows.
     readonly property string fieldLabel:
         root.promptFor.length > 0 ? root.promptFor : "Search"
-    // ...and WHETHER TYPING NARROWS THE ROWS, which is a different question and
-    // was answered by `composing` only because nobody had asked it separately.
+    // ...and WHETHER TYPING NARROWS THE ROWS, which is a different question.
     //
     // Everywhere but a prompt asking for a NAME -- New Playlist, Rename -- where
     // what is on screen is not a menu you are choosing from and there is nothing
     // for the characters to narrow.
     //
-    // The search box DOES narrow now. The query you are typing and a filter over
+    // The search box DOES narrow. The query you are typing and a filter over
     // your past queries are the same characters, so a history of thirty searches
     // gets out of the way while you type the thirty-first instead of sitting there
     // whole. Return still submits what you TYPED rather than the row under the
-    // cursor -- free text wins there, as it does in rofi -- so narrowing the list
+    // cursor -- free text wins there -- so narrowing the list
     // underneath costs nothing and reaches an old query in fewer keys.
     readonly property bool narrows: root.promptFor.length === 0
 
@@ -2594,8 +2576,7 @@ Window {
             return
         }
         if (root.isSearchPrompt && root.liveFilter.length) {
-            // Free-typed text wins over the highlighted history row, exactly as
-            // it does in rofi when custom input is enabled.
+            // Free-typed text wins over the highlighted history row.
             //
             // ON THE CARD'S OWN STEPS, not on the trail. The search box is a card
             // and its step lives in ctxHops; pushHop would call closeContext and
@@ -2621,7 +2602,7 @@ Window {
         // and the card is not it. Writing there would move the LIST's cursor to
         // wherever a verb happened to sit.
         if (!root.ctxUp && root.filter.length && src > 0) root.positions[posKey()] = src - 1
-        // Lua is 1-based, and so are the indices rofi hands back.
+        // Lua is 1-based, and so are the indices the engine reads.
         // PROVISIONAL, when this is a card's step or the gesture that opens one.
         // Shift+Return on a row IS that gesture everywhere it does anything, and
         // every menu it reaches answers `context`. If one ever does not, applyWhere
@@ -2907,7 +2888,7 @@ Window {
     // shallow band you have to touch. Asked once, because the answer is about the
     // session and cannot change inside it.
     readonly property bool cursorTracked:
-        (root.hasShell) && Shell.cursorWatchable()
+        root.hasShell && Shell.cursorWatchable()
     // Watched only while the panel is away, which is the only time a dock is up.
     // Spoot starts revealed, so the watch starts off and the first dismiss turns
     // it on -- no second Component.onCompleted needed (there is already one on
@@ -3051,7 +3032,7 @@ Window {
         // warm start restores from, and re-summoning always landed on Main.
         // Leaving the view alone means the next reveal shows exactly where you
         // were, and the stack on disk stays deep for a real cold start.
-        if (typeof Shell === "undefined") { Qt.quit(); return }
+        if (!root.hasShell) { Qt.quit(); return }
         root.closeContext()
         root.opened = false
         openAnim.stop(); closeAnim.restart()
@@ -3126,10 +3107,7 @@ Window {
             var h = root.hops[k]
             if (!h || !h.cmd) continue
             if (h.key === "trail-jump") {
-                root.hops = root.hops.slice(0, k)
-                root.trailPos = Math.min(root.trailPos, root.hops.length)
-                root.fullCrumb = []; root.fullRoots = []
-                root.forgetAhead(root.hops.length)
+                root.cutTrail(root.hops.slice(0, k), Math.min(root.trailPos, k))
             }
             break
         }
@@ -3199,8 +3177,7 @@ Window {
         if (root.composing && root.liveFilter.length) root.activate(-1, alt === true)
     }
     // dx moves within a row, dy between rows. A list is one column wide, so dy
-    // is the only axis that means anything there -- which is also how rofi
-    // behaves in a list versus a grid.
+    // is the only axis that means anything there.
     function move(dx, dy) {
         var view = root.focusItem
         if (!view || root.focusModel.count === 0) return
@@ -3329,8 +3306,7 @@ Window {
     // playing row of the view it opens rather than wherever that view was left.
     property bool seekPlaying: false
     // ALT+C, UNIVERSAL. One key, one meaning, everywhere: take me to what is
-    // playing. rofi could express only the first of these three, and only in the
-    // views whose loops had been wired for it by hand.
+    // playing.
     //
     //   1. It is on screen -- move the cursor to it.
     //   2. Its list is somewhere on the trail -- WALK there, exactly as Alt+left
@@ -3527,9 +3503,7 @@ Window {
         // Alt+right could still reach. The NEXT press then removes a step, as
         // it always does.
         if (root.trailPos < root.hops.length) {
-            root.hops = root.activeHops()
-            root.fullCrumb = []; root.fullRoots = []
-            root.forgetAhead(root.trailPos)
+            root.cutTrail(root.activeHops())
             return
         }
         // BACK UP A RESTORED PATH, one menu at a time. A place reopened from
@@ -3544,10 +3518,7 @@ Window {
             shorter.restore = tipHop.restore.slice(0, tipHop.restore.length - 1)
             var hs = root.hops.slice(0, root.trailPos - 1)
             hs.push(shorter)
-            root.hops = hs
-            root.forgetAhead(root.hops.length)
-            root.trailPos = root.hops.length
-            root.fullCrumb = []; root.fullRoots = []
+            root.cutTrail(hs)
             root.refresh(-1)
             return
         }
@@ -3557,10 +3528,7 @@ Window {
             // ...and it takes the step that opened a card with it, rather than
             // stopping on one: backing out of the album a track's menu sent you
             // to returns you to the list, not to the menu.
-            root.hops = root.hops.slice(0, root.skipCtx(root.trailPos - 1, -1))
-            root.forgetAhead(root.hops.length)
-            root.trailPos = root.hops.length
-            root.fullCrumb = []; root.fullRoots = []
+            root.cutTrail(root.hops.slice(0, root.skipCtx(root.trailPos - 1, -1)))
             root.refresh(-1)
         }
         else root.dismiss()
@@ -4552,18 +4520,13 @@ Window {
                     }
                 }
 
-                // THE TRAIL. rofi could only put this in the same one-line mesg as
-                // everything else; here it is its own line, dim, with the arrows
-                // darker than the names so the names read first -- which is exactly
-                // what Util.crumb_arrow does in the rofi build.
-                // THE TRAIL, as chrome rather than a menu. rofi could only draw it
-                // as a line of text and needed a separate window to navigate it;
-                // here every step is a control -- click one and you are there.
+                // THE TRAIL, as chrome rather than a menu: its own line, dim, with
+                // the arrows darker than the names so the names read first, and
+                // every step a control -- click one and you are there.
                 //
-                // ONE LINE, ALWAYS. It used to wrap, and a daisy chain of four or
-                // five roots is three rows of chrome above a menu that might only
-                // have four -- the bar grew taller than the thing it labels. It
-                // scrolls sideways instead: the panel keeps one row's height
+                // ONE LINE, ALWAYS. A daisy chain of four or five roots wrapped
+                // would be three rows of chrome above a menu that might only have
+                // four. It scrolls sideways instead: the panel keeps one row's height
                 // whatever the path is, and the path is walked rather than stacked.
                 Item {
                     id: crumbBar
@@ -5066,7 +5029,7 @@ Window {
                 height: root.bodyHeight
                 sourceComponent: root.layout === "grid" ? gridView : listView
                 // Asynchronous: a grid of 700 rows must not stall the frame that
-                // swaps the view in. This is not rofi -- nothing here blocks.
+                // swaps the view in.
                 asynchronous: true
                 onLoaded: root.applyPos()
                 // NOT focused. GridView and ListView are focus scopes, so a focused
@@ -5880,12 +5843,8 @@ Window {
     //
     // WHAT SPOOT IS DOING, as a sentence with a light going round it.
     //
-    // It used to be the image viewer wearing a different hat: a 300px speaker
-    // glyph with a caption under it, because in the rofi build a window with a
-    // picture was the only way to look like something was happening. Every number
-    // in that card then had two answers -- one for a picture, one for this -- and
-    // the wrong one arrived mid-fade often enough to need a latch. This is its own
-    // item, so it has one answer for everything and the viewer does too.
+    // Its own item rather than the image viewer in a different hat, so every
+    // number in it has one answer and the viewer's do too.
     //
     // It follows the PANEL, unlike the viewer: the viewer is a picture you study
     // and takes the middle of the output, but this is spoot working, and it
@@ -6170,8 +6129,7 @@ Window {
             }
 
 
-            // THE CAPTION SITS ABOVE THE PICTURE, as it did in rofi: art.rasi
-            // and imp.rasi both order their mainbox [message, listview].
+            // THE CAPTION SITS ABOVE THE PICTURE.
             //
             // ...and UNDER it while listening, where it belongs: above a cover the
             // words name the thing, under a spinner they are its status.

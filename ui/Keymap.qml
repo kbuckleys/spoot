@@ -6,10 +6,8 @@
 
 // THE KEYMAP. One file, no rebuild to change it, and no ceiling.
 //
-// rofi allowed nineteen custom bindings and needed a whole subprocess (bsmon) to
-// notice a Backspace, because a dmenu process cannot report a key it does not
-// own. None of that applies now: every key below is just a key, several do
-// different things depending on what is on screen, and adding one costs a line.
+// Every key below is just a key, several do different things depending on what
+// is on screen, and adding one costs a line.
 //
 // `app` is the shell (main.qml). Everything routes through its functions rather
 // than reaching into views, so a binding cannot depend on which view is loaded.
@@ -113,12 +111,9 @@ Item {
             case Qt.Key_Return:
             case Qt.Key_Enter:    app.openMain();                     break
             case Qt.Key_Delete:   app.goHome();                       break
-            // ALT+1..9 STOOD HERE, one key per breadcrumb step. Nine bindings
-            // to reach nine places, none of them labelled with its own number,
-            // and all of them a worse version of the two that already do this:
-            // Tab lists the whole path by name, and a crumb step is clickable.
-            // The steps are still reachable -- see app.jumpToCrumb, which both
-            // of those call.
+            // No Alt+1..9 per breadcrumb step: Tab lists the whole path by
+            // name, and a crumb step is clickable -- see app.jumpToCrumb, which
+            // both of those call.
             default: return
             }
             e.accepted = true
@@ -186,8 +181,8 @@ Item {
             break
         case Qt.Key_Return:
         case Qt.Key_Enter:
-            // Shift+Return is the action menu everywhere in the rofi build, and
-            // it is one flag on the same path step rather than a second route.
+            // Shift+Return is the action menu everywhere, and it is one flag on
+            // the same path step rather than a second route.
             app.activateCurrent(shift)
             break
         case Qt.Key_Space:

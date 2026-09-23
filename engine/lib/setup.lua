@@ -19,12 +19,8 @@ return function(Util, ctx)
     -- WHAT THIS MACHINE HAS
     -- ============================================================================
     --
-    -- A dependency SYSTEM used to live here: a table of every program spoot shells
-    -- out to, a package manager per distribution, a way to become root, and an
-    -- installer that ran on first launch and raised an authentication dialog over
-    -- spoot's own surface to finish. All of it is gone, and the reason is that it
-    -- was in the wrong program. `setup` installs everything before spoot ever runs,
-    -- so by the time this file is loaded the question has already been answered.
+    -- No installing happens here. `setup` installs everything before spoot ever
+    -- runs, so by the time this file is loaded the question has been answered.
     --
     -- What survives is the one-line question itself, because three places that have
     -- nothing to do with installing anything still need to ask it: the notification
