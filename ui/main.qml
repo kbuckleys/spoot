@@ -112,8 +112,9 @@ Window {
 
     // WHERE SPOOT SITS, split into the two halves the anchors need. Nine
     // positions, stored as one string by the engine, read here and nowhere else.
-    readonly property string anchorV: (root.settings.position || "bottom-center").split("-")[0]
-    readonly property string anchorH: (root.settings.position || "bottom-center").split("-")[1]
+    // Defaulted per half, so a value without a hyphen cannot leave one undefined.
+    readonly property string anchorV: (root.settings.position || "bottom-center").split("-")[0] || "bottom"
+    readonly property string anchorH: (root.settings.position || "bottom-center").split("-")[1] || "center"
 
     // THE FIRST DRAW. Asked for, not waited for. `restore` answers empty when
     // there is no session worth reopening, and Main is the fallback -- so one
@@ -160,17 +161,20 @@ Window {
                 root.render(d)
                 return
             }
+            restoreOrHome()
+        }, restoreOrHome)
+        // A FAILED RESUME STILL OWES A FIRST DRAW. Without one the cold start
+        // never pops in at all (see firstDrawn), so a nav the engine refused
+        // falls through to the restore and then to Main, like an empty one.
+        function restoreOrHome() {
             var rid = root.call("restore", {}, function (r) {
                 root.drawReq = rid
                 if (r && r.rows && r.rows.length) root.render(r)
                 else root.goHome()
-                // NOTHING TO DO HERE. openListen used to be called beside
-                // goHome, which is a REQUEST rather than a redraw -- two navs in
-                // flight, and the listener's empty one arrived last and won, so no
-                // menu was ever drawn. It is handed to the draw instead, and
-                // listenWanted was set before either branch ran.
-            })
-        })
+                // Listening is handed to the draw rather than requested beside
+                // goHome, where two navs in flight let the empty one win.
+            }, function () { root.goHome() })
+        }
     }
     // `spoot --listen` IS WAITING FOR A MENU TO EXIST.
     //
@@ -381,11 +385,17 @@ Window {
         root.fullCrumb = []; root.fullRoots = []
     }
 
-    function call(cmd, args, cb) {
+    // `onFail` runs when the engine answers ok=false -- the one route a reply
+    // takes that never reaches `cb`. Anything a caller set while waiting (a dim, a
+    // busy flag, a first draw still owed) is released there, or it would wait on
+    // a callback that is never coming.
+    function call(cmd, args, cb, onFail) {
         var id = Engine.request(cmd, args || {})
         if (cb) pending[id] = cb
+        if (onFail) failing[id] = onFail
         return id
     }
+    property var failing: ({})
 
     // --- OPENING INSTANTLY ---------------------------------------------------
     // A menu is a place, not a payload: asking for one puts you there straight
@@ -527,7 +537,7 @@ Window {
         // read, not a dialog you dismiss. Hiding hands back the keyboard as well.
         if (typeof Shell !== "undefined") Shell.conceal()
         setupGuard.restart()
-        root.call("setup", {}, root.finishSetup)
+        root.call("setup", {}, root.finishSetup, function () { root.finishSetup(null) })
     }
     function finishSetup(r) {
         setupGuard.stop()
@@ -606,8 +616,10 @@ Window {
         function onResponse(id, ok, data, err) {
             if (id === root.pollId) root.pollId = -1
             var cb = root.pending[id]
+            var fail = root.failing[id]
             var wasDraw = root.drawIds[id] === true
             delete root.pending[id]
+            delete root.failing[id]
             delete root.drawIds[id]
             if (!ok) {
                 // render() would have released it; nothing else will -- and
@@ -615,6 +627,7 @@ Window {
                 // out on a transition that now has nothing to transition to.
                 if (wasDraw) { root.endDraw(); root.abortSwap() }
                 root.notify(err && err.length ? err : "engine error")
+                if (fail) fail(err)
                 return
             }
             if (cb) cb(data)
@@ -625,16 +638,20 @@ Window {
             // qml.load() spins the event loop -- so the engine thread's signal
             // can land before this Connections object exists and be lost. The
             // first draw is PULLED in bootstrap() instead, which cannot race.
-            if (name === "ready") { /* handshake seen; nothing to do */ }
             // THE ENGINE CAME BACK. Everything in flight died with it, so the
             // callbacks are dropped rather than left to leak, the loading glow is
             // released, and the menu is asked for again -- which the engine
             // answers from the session it restores on start. From the outside a
             // crash is now a flicker and a line in the notice bar, instead of a
             // window that stops answering and never says why.
-            else if (name === "engine-restarted") {
+            if (name === "engine-restarted") {
                 root.pending = ({})
+                root.failing = ({})
+                // Whatever was waiting on a reply is not getting one.
+                root.listenArming = false
+                if (root.setupBusy) root.finishSetup(null)
                 root.pollId = -1
+                root.listenPollId = -1
                 root.drawIds = ({})
                 root.inFlight = 0
                 root.endDraw()
@@ -740,6 +757,10 @@ Window {
             }
             else if (name === "prompt") {
                 root.promptFor = data.prompt || ""
+                // WHERE THE RAISING STEP LIVES: on the card's own hops when a card
+                // verb asked (Rename Playlist), on the trail otherwise. Submitting
+                // and giving up both have to act on the same place it went.
+                root.promptInCard = root.ctxUp
                 root.setFilter(data.preset || "")
                 // THE STEP THAT RAISED THE FIELD STAYS ON THE PATH, and this is
                 // the whole of "create new playlist doesn't work".
@@ -949,6 +970,8 @@ Window {
         // The draw this was waiting on. Released FIRST, so bodyHeight is sizing
         // from the rows below rather than from the height it was holding.
         root.endDraw()
+        // No answer at all: put back whatever transition had started and stop.
+        if (!d) { root.abortSwap(); return }
         // NOTHING TO DRAW IS NOT A MENU. Views that exist to produce an overlay
         // -- the art viewer, a details sheet -- and views that find they have
         // nothing to show -- an empty queue, no followed podcasts -- answer with
@@ -1226,6 +1249,11 @@ Window {
         }
         // Record where we are, keyed by how deep the crumb reads.
         if (root.crumb.length > 0) root.trailMap[root.crumb.length] = root.trailPos
+        // A REDRAW OF THE SAME LYRICS KEEPS ITS CUES. A like or a stale retry
+        // redraws the view in place, and dropping the timing there made the sung
+        // line blink out until the refetch landed.
+        if (d.scope === "lyrics" && d.track && d.track === root.lyricFor
+                && root.lyricTimes.length === rows.count) return
         root.lyricTimes = []; root.lyricFor = ""; root.lyricIndex = -1
         if (d.scope === "lyrics" && d.track) {
             var want = d.track
@@ -1931,8 +1959,11 @@ Window {
     // ...AND IS ANYTHING AT ALL IN FRONT OF THE ROWS. What makes a click on the
     // list a dismissal rather than a pick -- see RowList.inert and dismissTop,
     // which are the two halves of the same rule and had a copy each.
+    // The listener too: the panel is only faded out behind it, and a faded Item
+    // still takes clicks -- so a double click where the rows sit played a track
+    // you could not see. modalGuard's dismissTop already knows to cancel a listen.
     readonly property bool anythingUp:
-        root.viewerUp || root.promptFor.length > 0 || root.ctxUp
+        root.viewerUp || root.promptFor.length > 0 || root.ctxUp || root.listenMode
 
     // WHICH OVERLAYS MOVE THE PANEL. The image viewer does: albumart and an
     // artist's impression are things you look AT, so the panel leaves the bottom
@@ -2346,9 +2377,19 @@ Window {
                                    tip: root.fullCrumb.length ? root.fullCrumb : root.crumb,
                                    tipRoots: root.fullCrumb.length ? root.fullRoots
                                                                    : root.crumbRoots},
-                           function (d) { root.drawReq = id; root.render(d) })
+                           function (d) {
+                               // SUPERSEDED. A second pick sent before this answer
+                               // landed carries this one's steps too, so its reply
+                               // is the whole truth; applying this older one would
+                               // trim the trail against a cursor that has moved on.
+                               if (id !== root.navLatest) { root.endDraw(); return }
+                               root.drawReq = id; root.render(d)
+                           })
+        root.navLatest = id
         root.drawIds[id] = true
     }
+    // The newest nav in flight; see refresh's callback.
+    property int navLatest: -1
     // Already standing exactly there, with nothing walked into it. Jumping where
     // you are is not a jump, and appending it daisy-chains a root onto itself for
     // nothing -- Tab inside the trail menu could do that forever.
@@ -2577,8 +2618,14 @@ Window {
             // liveFilter for the reason the search branch below takes it: the two
             // are the same string whenever no card is up, and only one of them
             // stays right if one ever is.
-            root.pushHop({step: root.liveFilter})
-            root.promptFor = ""; root.setFilter(""); root.refresh()
+            // ON THE CARD'S STEPS when a card raised the field, for the reason the
+            // search branch below gives: pushHop closes the card and drops the
+            // step that asked, and the name would be replayed against the list.
+            var answer = root.liveFilter
+            var inCard = root.promptInCard && root.ctxUp
+            root.promptFor = ""; root.promptInCard = false
+            root.setFilter("")
+            root.sendStep({step: answer}, inCard)
             return
         }
         if (root.isSearchPrompt && root.liveFilter.length) {
@@ -2615,8 +2662,13 @@ Window {
         // every menu it reaches answers `context`. If one ever does not, applyWhere
         // adopts the hop into the trail and the result is exactly what pushHop
         // would have given -- so the wrong guess costs nothing.
-        var hop = {step: step}
-        if (root.ctxUp || alt) root.ctxHops = root.ctxHops.concat([hop])
+        root.sendStep({step: step}, root.ctxUp || alt)
+    }
+    // ONE ROUTE FOR A STEP: onto the card's own hops when it belongs to a card,
+    // onto the trail otherwise, then ask. Written out at each site it drifted --
+    // a prompt answer once went to the trail from inside a card.
+    function sendStep(hop, toCard) {
+        if (toCard) root.ctxHops = root.ctxHops.concat([hop])
         else root.pushHop(hop)
         root.refresh()
     }
@@ -2636,9 +2688,15 @@ Window {
         root.setFilter("")
         // AND THE STEP GOES WITH IT. While the field is up that step is still an
         // answer waiting for its second half (see the prompt event); abandoned,
-        // it is a row that would open the field again on the next refresh.
-        root.popTransient()
+        // it is a row that would open the field again on the next refresh. From
+        // wherever it went: a card's own hops, or the trail.
+        if (root.promptInCard && root.ctxHops.length)
+            root.ctxHops = root.ctxHops.slice(0, -1)
+        else
+            root.popTransient()
+        root.promptInCard = false
     }
+    property bool promptInCard: false
 
     function closeOverlay() {
         // GIVING UP STOPS THE RECORDER. Nothing used to: the card went away and
@@ -2927,7 +2985,8 @@ Window {
         // to zero with nothing coming to undo it. Either the `listening` event
         // arrived first and listenMode holds the dim from here, or it did not and
         // the panel comes straight back.
-        root.call("listen-start", {}, function () { root.listenArming = false })
+        root.call("listen-start", {}, function () { root.listenArming = false },
+                  function () { root.listenArming = false })
     }
 
     // THE VIEWER ARRIVES THE WAY THE PANEL DOES. A cover and an artist's
@@ -3438,9 +3497,7 @@ Window {
         root.rememberPos()
         var hop = {step: root.rowStep(root.focusModel,
                                       root.focusItem.currentIndex, {tab: true})}
-        if (root.ctxUp) root.ctxHops = root.ctxHops.concat([hop])
-        else root.pushHop(hop)
-        root.refresh()
+        root.sendStep(hop, root.ctxUp)
         return true
     }
     // QUEUE THE ROW UNDER THE POINTER, and stay exactly where you are.
@@ -3478,9 +3535,7 @@ Window {
         //
         // Same two lines tabHere already uses, and for the same reason: a card's
         // steps live on ctxHops or they are not that card's steps.
-        if (root.ctxUp) root.ctxHops = root.ctxHops.concat([hop])
-        else root.pushHop(hop)
-        root.refresh()
+        root.sendStep(hop, root.ctxUp)
     }
     function goBack() {
         // A CARD CLOSES WITHOUT ASKING ANYONE. Its hops were never on the trail,
@@ -5465,7 +5520,7 @@ Window {
                                   top: promptTitleBar.bottom
                                   topMargin: zenon.messagePadV * 2 }
                         theme: zenon
-                        text: root.filter
+                        text: root.liveFilter
                         centered: true
                         blinking: promptCard.visible
                     }
@@ -6310,21 +6365,33 @@ Window {
         interval: 400
         repeat: true
         running: root.listenMode
-        onTriggered: root.call("listen-poll", {}, function (r) {
-            if (!r || r.state === "listening") return
-            // Whatever it says, the card is done.
-            root.closeOverlay()
-            if (r.state === "match") {
-                // THE IDENTIFIED TRACK, as its own action menu -- a card over
-                // whatever you were on, costing no trail step, which is what
-                // "jump to it" can mean now that an action menu is an overlay.
-                root.openCard("listen-result")
-            }
-            else if (r.state === "notfound") {
-                root.notify("Not on Spotify \u2014 " + (r.label || ""))
-            }
-            else if (r.state === "none") root.notify("No match")
-        })
+        // ONE IN FLIGHT, like the playback poll: the engine is a single worker,
+        // and ticks queued behind a busy moment would all answer after the match
+        // -- a second result card, or "No match" over the first.
+        onTriggered: {
+            if (root.listenPollId !== -1) return
+            root.listenPollId = root.call("listen-poll", {}, root.listenPolled,
+                                          function () { root.listenPollId = -1 })
+        }
+    }
+    property int listenPollId: -1
+    function listenPolled(r) {
+        root.listenPollId = -1
+        // The card was closed while this was in flight: its answer is moot.
+        if (!root.listenMode) return
+        if (!r || r.state === "listening") return
+        // Whatever it says, the card is done.
+        root.closeOverlay()
+        if (r.state === "match") {
+            // THE IDENTIFIED TRACK, as its own action menu -- a card over
+            // whatever you were on, costing no trail step, which is what
+            // "jump to it" can mean now that an action menu is an overlay.
+            root.openCard("listen-result")
+        }
+        else if (r.state === "notfound") {
+            root.notify("Not on Spotify \u2014 " + (r.label || ""))
+        }
+        else if (r.state === "none") root.notify("No match")
     }
 
     // --- keys ----------------------------------------------------------------

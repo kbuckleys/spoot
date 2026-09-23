@@ -650,7 +650,10 @@ Window {
                     var dur = dock.playback.duration || 0
                     if (dur <= 0) return
                     var want = Math.max(0, Math.min(1, m.x / rule.width)) * dur
-                    dock.controlRequested("seek", Math.round((want - dock.positionMs) / 1000))
+                    // A click on the playhead itself moves nothing, and a zero
+                    // would reach the engine as "no amount" -- its 10s default.
+                    var by = Math.round((want - dock.positionMs) / 1000)
+                    if (by !== 0) dock.controlRequested("seek", by)
                 }
             }
         }

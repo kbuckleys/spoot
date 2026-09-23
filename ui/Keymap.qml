@@ -29,6 +29,13 @@ Item {
         // ...and the listener, which no longer has a picture to be recognised by:
         // it is a pill now (see main.qml's listenPill), so `artPath` is empty
         // while it is up and this branch stopped covering it.
+        // A bare modifier or a held key's repeat is not a press anyone meant as
+        // "close": it is the start of a chord, or the key that opened this.
+        var bare = e.key === Qt.Key_Shift || e.key === Qt.Key_Control
+                || e.key === Qt.Key_Alt || e.key === Qt.Key_Meta
+                || e.key === Qt.Key_AltGr || e.key === Qt.Key_Super_L
+                || e.key === Qt.Key_Super_R
+        if (app.overlayAsked && (bare || e.isAutoRepeat)) { e.accepted = true; return }
         if (app.overlayAsked) {
             // GIVING UP ON THE LISTENER IS GIVING UP. You did not open spoot to
             // browse -- you asked it to name a song -- so cancelling before it

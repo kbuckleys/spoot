@@ -185,8 +185,11 @@ Column {
                 }
             }
             Text {
+                id: valueText
                 text: modelData.desc || ""
-                height: pair.lineH
+                // At least one line; more when the value wraps, or the second line
+                // is painted over the row below (contentHeight already counts it).
+                height: Math.max(pair.lineH, valueText.implicitHeight)
                 verticalAlignment: Text.AlignVCenter
                 // Bounded so a long value wraps inside the sheet instead of
                 // running off the edge of the window.
