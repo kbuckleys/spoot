@@ -31,7 +31,6 @@ return function(Util, ctx)
     Util.fetch_art = function(url, art_path, opts)
         opts = opts or {}
         local attempts = opts.attempts or 3
-        local connect_timeout = opts.connect_timeout or 5
         local timeout = opts.timeout or 10
         for attempt = 1, attempts do
             local tmp = art_path .. ".tmp" .. Util._rand_suffix()
@@ -39,7 +38,10 @@ return function(Util, ctx)
             -- transport is in play rather than owning a seventh curl command line.
             -- The header dump the old form needed for Content-Length is gone with it:
             -- the headers come back as a string either way.
-            local r = Util.http{url = url, timeout = timeout}
+            -- connect_timeout reaches the curl transport; the native one has a
+            -- single deadline, which `timeout` already bounds.
+            local r = Util.http{url = url, timeout = timeout,
+                                connect_timeout = opts.connect_timeout or 5}
             local code = tostring(r.code):match("%d%d%d")
             local cl = tonumber((r.headers or ""):match("[Cc]ontent%-[Ll]ength:%s*(%d+)"))
             -- NOTHING IS WRITTEN FOR A FAILED FETCH -- what `curl -sf` bought. A file
@@ -687,21 +689,25 @@ return function(Util, ctx)
             -- Tabs are the separator and a view key is arbitrary text.
             out[i] = tostring(v):gsub("[\t\n]", " ")
         end
-        local f = io.open(P.thumb_log, "a")
-        if not f then return end
-        f:write(table.concat(out, "\t"), "\n")
-        local size = f:seek("end")
-        f:close()
-        if not size or size <= P.thumb_log_max then return end
-        -- Halve it rather than trimming one line per draw: the rewrite then happens
-        -- once every few thousand draws instead of on every one past the cap.
-        local raw = read_file(P.thumb_log)
-        if not raw then return end
-        local lines = {}
-        for line in raw:gmatch("[^\n]+") do lines[#lines+1] = line end
-        local keep = {}
-        for i = math.floor(#lines / 2) + 1, #lines do keep[#keep+1] = lines[i] end
-        write_file(P.thumb_log, table.concat(keep, "\n") .. "\n")
+        -- Locked: the engine and the prefetch jobs all append here, and a line
+        -- written between the halving's read and its rewrite would be lost.
+        Util.locked("thumblog", function()
+            local f = io.open(P.thumb_log, "a")
+            if not f then return end
+            f:write(table.concat(out, "\t"), "\n")
+            local size = f:seek("end")
+            f:close()
+            if not size or size <= P.thumb_log_max then return end
+            -- Halve it rather than trimming one line per draw: the rewrite then
+            -- happens once every few thousand draws instead of on every one.
+            local raw = read_file(P.thumb_log)
+            if not raw then return end
+            local lines = {}
+            for line in raw:gmatch("[^\n]+") do lines[#lines+1] = line end
+            local keep = {}
+            for i = math.floor(#lines / 2) + 1, #lines do keep[#keep+1] = lines[i] end
+            write_file(P.thumb_log, table.concat(keep, "\n") .. "\n")
+        end)
     end
 
     -- Album-list thumbnails, reusing the shared 300px art cache (seed "1e02").
@@ -715,7 +721,11 @@ return function(Util, ctx)
     -- url -> path is memoised per list: this reruns on every redraw, and re-deriving
     -- it cost 1500 gsubs + 1500 stats per keypress on a large discography. Only
     -- covers still MISSING are re-statted, which preserves the retry above.
-    Util._thumb_memo = nil
+    --
+    -- TWO slots, most recent first: going from a grid into one of its items and
+    -- back is the commonest walk there is, and a single slot re-resolved the
+    -- parent grid on every return.
+    Util._thumb_memo = {}
     -- Resolves ONE item to the icon path it should show, plus the url/hash needed if
     -- that file still has to be fetched. This is the ONLY thing that differs between
     -- an album grid and a playlist grid -- the memo, the re-stat of missing covers,
@@ -782,9 +792,17 @@ return function(Util, ctx)
         -- this very table in place, and a memo keyed on identity alone would then
         -- hand every row below the removal the previous row's cover. `kind` is in the
         -- key too, so an album grid and a playlist grid cannot share a memo.
-        local memo = Util._thumb_memo
-        if not (memo and memo.items == items and memo.n == n and memo.kind == kind
-                and memo.first == items[1] and memo.last == items[n]) then
+        local slots, memo = Util._thumb_memo, nil
+        for si = 1, #slots do
+            local m = slots[si]
+            if m.items == items and m.n == n and m.kind == kind
+                    and m.first == items[1] and m.last == items[n] then
+                memo = m
+                if si ~= 1 then table.remove(slots, si); table.insert(slots, 1, m) end
+                break
+            end
+        end
+        if not memo then
             memo = {items = items, n = n, kind = kind, first = items[1], last = items[n],
                     paths = {}, urls = {}, hashes = {}, ids = {}, missing = {}}
             for i, it in ipairs(items) do
@@ -801,7 +819,8 @@ return function(Util, ctx)
                     memo.missing[#memo.missing + 1] = i
                 end
             end
-            Util._thumb_memo = memo
+            table.insert(slots, 1, memo)
+            slots[3] = nil
         end
         local paths = memo.paths
         local pending, still = {}, {}

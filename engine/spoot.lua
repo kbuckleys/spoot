@@ -9570,6 +9570,19 @@ end
 
 -- VIEW: SYSTEM
 
+-- What a finished device login means. The credentials are read back rather than
+-- trusting the helper's exit status, and the daemon is replaced on success:
+-- spotifyd reads its credentials at launch, so the one already running would
+-- still be unauthenticated.
+function Util.device_auth_done(ok)
+    if ok then
+        Util.restart_daemons()
+        ui_say("Playback device authorised")
+    else
+        ui_say("Could not authorise the playback device")
+    end
+end
+
 -- Lifted out of view_system's "Restart" row so the bitrate view can
 -- reuse it -- bitrate only takes effect when spotifyd is respawned, since
 -- ensure_spotifyd reads get_saved_bitrate() at launch. Body is unchanged.
@@ -9980,15 +9993,15 @@ local function view_system()
             ui_say(Util.reauth() and "Re-authenticated"
                 or "Re-authentication failed")
         elseif clean == "Authorise Playback" then
-            -- Reads the credentials back rather than trusting the helper's exit
-            -- status, and replaces the daemon on success: spotifyd reads its
-            -- credentials at launch, so the one already running would still be
-            -- unauthenticated.
-            if Util.device_auth() then
-                Util.restart_daemons()
-                ui_say("Playback device authorised")
+            -- A BACKGROUND JOB when hosted: the login waits on a browser page for
+            -- up to three minutes, and the engine answers nothing while it waits.
+            -- The job's end arrives as `job-done` (see Util.SERVE), which is
+            -- where the daemon is replaced and the outcome said.
+            if Util.host and Util.host.job then
+                Util.spawn_self({"--device-auth"}, nil, "device-auth")
+                ui_say("Authorising playback" .. SEP .. "finish the login in your browser")
             else
-                ui_say("Could not authorise the playback device")
+                Util.device_auth_done(Util.device_auth())
             end
         elseif clean == "Jump to Trail Step" then
             Util.view_trail_jump(_session_stack)
@@ -10981,18 +10994,29 @@ function Util.run_prefetch_art_batch()
     if first and #first == 0 then first = nil end
     -- Bounded so a spool that somehow refills forever cannot make this immortal;
     -- whatever is left is picked up by the next draw's worker.
+    local function spooled()
+        local names = {}
+        local p = io.popen("ls -1 " .. shell_quote(dir) .. " 2>/dev/null")
+        if p then
+            for line in p:lines() do
+                -- Dot-prefixed names are chunks still being written.
+                if line:sub(1, 1) ~= "." then names[#names+1] = line end
+            end
+            p:close()
+        end
+        return names
+    end
     for _ = 1, 200 do
         local lf = first
         first = nil
         if not lf then
-            local names = {}
-            local p = io.popen("ls -1 " .. shell_quote(dir) .. " 2>/dev/null")
-            if p then
-                for line in p:lines() do
-                    -- Dot-prefixed names are chunks still being written.
-                    if line:sub(1, 1) ~= "." then names[#names+1] = line end
-                end
-                p:close()
+            local names = spooled()
+            -- One more look before leaving. A grid that spools a chunk while this
+            -- is deciding to exit still sees the pid as running and spawns nothing,
+            -- so without the grace that chunk waited for the next draw's worker.
+            if #names == 0 then
+                Util.wait(0.5)
+                names = spooled()
             end
             if #names == 0 then break end
             table.sort(names)
@@ -13126,6 +13150,10 @@ Util.SERVE = {
     -- was drawn before that answer existed the UI is told to redraw it.
     ["job-done"] = function(a)
         local key = a and a.key or ""
+        if key == "device-auth" then
+            Util.device_auth_done(Util.device_ready())
+            return {ok = true}
+        end
         local id = key:match("^lyrics:(.+)$") or key:match("^notify:(.+)$")
         if id then
             Util.lyr_bust(id)
@@ -13832,6 +13860,10 @@ elseif arg and arg[1] == "--revalidate" then
     Util.run_revalidate()
 elseif arg and arg[1] == "--notify" then
     Util.run_notify()
+elseif arg and arg[1] == "--device-auth" then
+    Util.detached = true
+    Util.device_auth()
+    os.exit(0)
 elseif arg and arg[1] then
     os.exit(2)
 else

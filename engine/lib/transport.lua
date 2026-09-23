@@ -73,23 +73,35 @@ return function(Util, ctx)
     local NET_DOWN_SECS = 3
     Util.net_down_until = 0
 
+    -- WHERE THE GATE LIVES: process-wide in the host's shared store, so the engine
+    -- and every job agree on one outage rather than each paying its own timeout
+    -- to discover it; per state outside a host, where there is only one.
+    local function net_until(v)
+        local shared = Util.host and Util.host.shared
+        if v == nil then
+            if shared then return shared("net-down") or 0 end
+            return Util.net_down_until or 0
+        end
+        if shared then shared("net-down", v) else Util.net_down_until = v end
+    end
+
     -- The gate and NOTHING ELSE. Saying so is api_get's job, beside the 429 and the
     -- 401: ui_say is a local declared several thousand lines below this, so a call
     -- from here would be a global lookup and a nil call -- and this runs on every
     -- request in the app, including from background jobs that have nobody to tell.
     function Util.net_note(code)
         if code and code > 0 then
-            Util.net_down_until = 0
+            net_until(0)
             Util.net_said = false
             return
         end
-        Util.net_down_until = os.time() + NET_DOWN_SECS
+        net_until(os.time() + NET_DOWN_SECS)
     end
 
     -- Is the gate shut right now? Read by Util.http and Util.curl_batch, which are
     -- the only two ways out of this process.
     function Util.net_down()
-        return os.time() < (Util.net_down_until or 0)
+        return os.time() < net_until()
     end
 
     -- IS SPOTIFY STILL SAYING "LATER"? Seconds remaining, or 0.
@@ -371,6 +383,9 @@ return function(Util, ctx)
         local hdr = Util.api_hdr_path()
         local c = {"curl -s --max-time ", tostring(req.timeout or 10)}
         if req.compressed then c[#c+1] = " --compressed" end
+        if req.connect_timeout then
+            c[#c+1] = " --connect-timeout " .. tostring(tonumber(req.connect_timeout) or 5)
+        end
         -- No header dump for `bg`: nothing reads it, and a backgrounded curl
         -- writing the shared file could clobber a foreground request's Retry-After.
         if not req.bg then c[#c+1] = " -D " .. shell_quote(hdr) end
@@ -575,8 +590,9 @@ return function(Util, ctx)
     --   raw      return the response body, not the status (create-playlist).
     -- Returns the status string, or the body under raw, or nil. Test with
     -- Util.is2xx -- "403" is truthy.
-    function Util.api_write(verb, url, token, opts)
-        opts = opts or {}
+    -- The headers and body of an authenticated write, shared by the awaited and
+    -- the fire-and-forget form so the two cannot disagree about either.
+    local function write_parts(token, opts)
         local headers = {"Authorization: Bearer " .. token}
         local body
         if opts.body ~= nil then
@@ -585,6 +601,12 @@ return function(Util, ctx)
         elseif opts.len0 then
             headers[#headers+1] = "Content-Length: 0"
         end
+        return headers, body
+    end
+
+    function Util.api_write(verb, url, token, opts)
+        opts = opts or {}
+        local headers, body = write_parts(token, opts)
         local r = Util.http{method = verb, url = url, headers = headers, body = body,
                             timeout = opts.timeout or 5}
         -- The contract callers have always had: the status as a STRING for
@@ -606,11 +628,10 @@ return function(Util, ctx)
     -- the round trip must not cost a frame (shuffle/repeat toggles).
     function Util.api_write_bg(verb, url, token, opts)
         opts = opts or {}
-        local headers = {"Authorization: Bearer " .. token}
-        if opts.len0 then headers[#headers+1] = "Content-Length: 0" end
+        local headers, body = write_parts(token, opts)
         -- `bg` is honoured natively (issue it, wait for nothing) and by the curl
-        -- branch, which backgrounds the process the way this always did.
-        Util.http{method = verb, url = url, headers = headers,
+        -- branch, which backgrounds the process.
+        Util.http{method = verb, url = url, headers = headers, body = body,
                   timeout = opts.timeout or 5, bg = true}
     end
 end
