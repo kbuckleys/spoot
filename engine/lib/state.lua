@@ -190,9 +190,22 @@ return function(Util, ctx)
     --
     -- Every caller assigns or compares -- never concatenates -- for the reason
     -- spelled out above Util.strip_markup.
+    -- ONE READ PER DRAW, NOT ONE PER ROW. Util.episode_progress asks for every
+    -- episode row it renders, and a show's list is two hundred of them -- each a
+    -- read and a decode of the same file. Held for two seconds, which covers a
+    -- draw; this state's own writes replace it at once, and another state's
+    -- (the recorder in a job) are picked up two seconds later.
+    function Util.eresume_map()
+        local now = os.time()
+        if Util._eres and now - Util._eres_at < 2 then return Util._eres end
+        local m = disk_get(P.eresume)
+        Util._eres, Util._eres_at = (type(m) == "table") and m or {}, now
+        return Util._eres
+    end
+
     function Util.eresume_get(id)
         if not id then return nil, false end
-        local m = disk_get(P.eresume)
+        local m = Util.eresume_map()
         local e = type(m) == "table" and m[id]
         if type(e) ~= "table" then return nil, false end
         local ms = tonumber(e.ms)
@@ -207,6 +220,7 @@ return function(Util, ctx)
     function Util.eresume_put(id, ms, dur)
         if not id then return false end
         ms = tonumber(ms) or 0
+        -- Fresh from disk, never the memo: this rewrites the whole file.
         local m = disk_get(P.eresume)
         if type(m) ~= "table" then m = {} end
         local prev = type(m[id]) == "table" and tonumber(m[id].ms) or nil
@@ -240,6 +254,7 @@ return function(Util, ctx)
             end
         end
         disk_set(P.eresume, m)
+        Util._eres, Util._eres_at = m, os.time()
         return true
     end
 

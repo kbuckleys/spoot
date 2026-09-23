@@ -455,7 +455,16 @@ end
 -- One fork per process, at the 0.44ms a bare fork costs, against a guarantee
 -- that a thirteenth entry point cannot miss. 700 because this holds pidfiles
 -- and, for the length of a login, the OAuth code.
-os.execute("mkdir -p -m 700 " .. shell_quote(P.run) .. " 2>/dev/null")
+-- ONCE PER PROCESS when hosted: every background job is a fresh Lua state that
+-- runs this line, and the directory it makes is the process's, not the state's.
+do
+    local host = rawget(_G, "spoot")
+    local shared = type(host) == "table" and host.shared or nil
+    if not (shared and shared("run-dir-made")) then
+        os.execute("mkdir -p -m 700 " .. shell_quote(P.run) .. " 2>/dev/null")
+        if shared then shared("run-dir-made", 1) end
+    end
+end
 
 local function trim(s)
     if not s then return "" end
@@ -692,61 +701,70 @@ Util.THEME_PODS    = "pods"        -- wider than meta: descriptions run to sente
 local _cache_ready = false
 local function ensure_cache()
     if _cache_ready then return end
-    -- Both mkdirs in ONE shell: os.execute spawns /bin/sh every time (measured at
-    -- 1.0ms against 0.44ms for a bare fork), so two calls cost a whole extra
-    -- shell for a command that runs in microseconds.
-    --
-    -- Scratch dir gets its own mkdir inside that shell because -m applies to
-    -- every operand and the cache dirs must keep their normal mode. -p also
-    -- creates P.tmp itself when $TMPDIR names something that does not exist yet.
-    --
-    -- The mode is the point. os.tmpname() was backed by mkstemp, which creates
-    -- 0600; Util.tmpfile hands back a path that io.open("w") (or a shell >) then
-    -- creates 0666 & ~umask -- 0644 here. Rather than pay a chmod fork PER FILE
-    -- (two per menu draw) to claw that back, the directory carries the
-    -- protection: files inside stay 0644, but 0700 means no other user can
-    -- traverse in to reach them. One fork per process instead of per file.
-    -- -m sets the mode at creation, so there is no window where it is 0755.
-    os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics)
-        .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.api)
-        .. " " .. shell_quote(P.art) .. Util.art_dirs()
-        .. "; mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
+    -- The mkdir and the one-time migration below are the PROCESS's business, and
+    -- every job state reaches this: with a host they are done once, by whichever
+    -- state gets here first. The hourly sweep further down keeps its own clock.
+    local host = Util.host or rawget(_G, "spoot")
+    local shared = type(host) == "table" and host.shared or nil
+    local made = shared and shared("cache-dirs-made")
+    if not made then
+        -- Both mkdirs in ONE shell: os.execute spawns /bin/sh every time (measured at
+        -- 1.0ms against 0.44ms for a bare fork), so two calls cost a whole extra
+        -- shell for a command that runs in microseconds.
+        --
+        -- Scratch dir gets its own mkdir inside that shell because -m applies to
+        -- every operand and the cache dirs must keep their normal mode. -p also
+        -- creates P.tmp itself when $TMPDIR names something that does not exist yet.
+        --
+        -- The mode is the point. os.tmpname() was backed by mkstemp, which creates
+        -- 0600; Util.tmpfile hands back a path that io.open("w") (or a shell >) then
+        -- creates 0666 & ~umask -- 0644 here. Rather than pay a chmod fork PER FILE
+        -- (two per menu draw) to claw that back, the directory carries the
+        -- protection: files inside stay 0644, but 0700 means no other user can
+        -- traverse in to reach them. One fork per process instead of per file.
+        -- -m sets the mode at creation, so there is no window where it is 0755.
+        os.execute("mkdir -p " .. shell_quote(P.cache) .. " " .. shell_quote(P.lyrics)
+            .. " " .. shell_quote(P.mass) .. " " .. shell_quote(P.api)
+            .. " " .. shell_quote(P.art) .. Util.art_dirs()
+            .. "; mkdir -p -m 700 " .. shell_quote(Util.scratch_dir()))
 
-    -- Curations became Collections, and the art kind was renamed with it rather
-    -- than left as a name on disk matching nothing in the code. The six covers
-    -- re-download on the next warm; what would otherwise be left behind forever
-    -- is a directory and an index no reader can reach.
-    --
-    -- Unguarded because rm -rf on a path that is not there is already a silent
-    -- no-op, and it rides the same shell as the mkdir above -- so the steady
-    -- state costs no fork and no stat. Not migrated: renaming the files would
-    -- have to rewrite the index to match, for artwork one background fetch
-    -- replaces.
-    -- Header dumps moved into P.api, and the sweep only looks there now, so
-    -- anything the old layout left loose in the cache root as `.api_hdr.<pid>`
-    -- would never be collected -- 17 of them on this account at the time of the
-    -- move. Shares this shell rather than forking a second one, and the glob
-    -- stays OUTSIDE the quotes so the shell still expands it.
-    -- And spotifyd's cache, moved under ours ONCE. Both paths are under the same
-    -- base (P.xdg_cache), so this is a rename and not a copy however many
-    -- gigabytes of cached audio are in there -- 15 GB at the time of the move.
-    -- Moved rather than started fresh so oauth/ and zeroconf/ come with it and
-    -- the device needs no re-pairing.
-    --
-    -- Two tests and no fork of its own, riding the shell above. The guard is the
-    -- whole migration: once the destination exists this is a no-op forever, and
-    -- it must stay that way -- see the NOTE on P.spotifyd about why that path is
-    -- absent from the mkdir.
-    --
-    -- A spotifyd that was already running when this fires still holds the old
-    -- path as a string and will recreate a stub there for whatever it writes
-    -- next; the first restart after this launches with -c and nothing writes to
-    -- it again.
-    os.execute("{ rm -rf " .. shell_quote(P.art .. "/curations") .. " "
-        .. shell_quote(P.cache .. "/curation_art.json") .. ";"
-        .. " rm -f " .. shell_quote(P.cache) .. "/.api_hdr.*;"
-        .. " [ -d " .. shell_quote(P.spotifyd_old) .. " ] && [ ! -d " .. shell_quote(P.spotifyd) .. " ]"
-        .. " && mv " .. shell_quote(P.spotifyd_old) .. " " .. shell_quote(P.spotifyd) .. "; } 2>/dev/null")
+        -- Curations became Collections, and the art kind was renamed with it rather
+        -- than left as a name on disk matching nothing in the code. The six covers
+        -- re-download on the next warm; what would otherwise be left behind forever
+        -- is a directory and an index no reader can reach.
+        --
+        -- Unguarded because rm -rf on a path that is not there is already a silent
+        -- no-op, and it rides the same shell as the mkdir above -- so the steady
+        -- state costs no fork and no stat. Not migrated: renaming the files would
+        -- have to rewrite the index to match, for artwork one background fetch
+        -- replaces.
+        -- Header dumps moved into P.api, and the sweep only looks there now, so
+        -- anything the old layout left loose in the cache root as `.api_hdr.<pid>`
+        -- would never be collected -- 17 of them on this account at the time of the
+        -- move. Shares this shell rather than forking a second one, and the glob
+        -- stays OUTSIDE the quotes so the shell still expands it.
+        -- And spotifyd's cache, moved under ours ONCE. Both paths are under the same
+        -- base (P.xdg_cache), so this is a rename and not a copy however many
+        -- gigabytes of cached audio are in there -- 15 GB at the time of the move.
+        -- Moved rather than started fresh so oauth/ and zeroconf/ come with it and
+        -- the device needs no re-pairing.
+        --
+        -- Two tests and no fork of its own, riding the shell above. The guard is the
+        -- whole migration: once the destination exists this is a no-op forever, and
+        -- it must stay that way -- see the NOTE on P.spotifyd about why that path is
+        -- absent from the mkdir.
+        --
+        -- A spotifyd that was already running when this fires still holds the old
+        -- path as a string and will recreate a stub there for whatever it writes
+        -- next; the first restart after this launches with -c and nothing writes to
+        -- it again.
+        os.execute("{ rm -rf " .. shell_quote(P.art .. "/curations") .. " "
+            .. shell_quote(P.cache .. "/curation_art.json") .. ";"
+            .. " rm -f " .. shell_quote(P.cache) .. "/.api_hdr.*;"
+            .. " [ -d " .. shell_quote(P.spotifyd_old) .. " ] && [ ! -d " .. shell_quote(P.spotifyd) .. " ]"
+            .. " && mv " .. shell_quote(P.spotifyd_old) .. " " .. shell_quote(P.spotifyd) .. "; } 2>/dev/null")
+        if shared then shared("cache-dirs-made", 1) end
+    end
 
     -- The housekeeping sweeps below are throttled to once an hour by the mtime of
     -- a stamp file. They used to run in EVERY process -- including the --notify
@@ -1539,6 +1557,7 @@ function Util.clear_trail()
     -- nobody reads on the way in and the next launch came straight back to where
     -- it was. See Util.serve_nav.
     os.remove(P.nav)
+    Util._nav_written = nil
 end
 
 -- BREADCRUMB
@@ -4263,9 +4282,35 @@ function Util.track_from_cache(id)
         end
         return nil
     end
-    local hit = scan(mem_get("liked_tracks")) or scan(disk_get(P.liked))
-             or scan(disk_get(P.recent))
-    return hit
+    -- THE LIBRARY BY ID, built once per copy of the list rather than walked per
+    -- lookup, and the on-disk copy held for a minute when the memo has lapsed:
+    -- this runs on every track change, and decoding a megabyte-scale liked cache
+    -- each time -- in the engine AND again in the notify job -- was the cost.
+    local liked = mem_get("liked_tracks")
+    if type(liked) ~= "table" then
+        local now = os.time()
+        if not Util._liked_disk or now - Util._liked_disk.at > 60 then
+            Util._liked_disk = {list = disk_get(P.liked), at = now}
+        end
+        liked = Util._liked_disk.list
+    end
+    if type(liked) == "table" then
+        if Util._liked_byid_for ~= liked then
+            local idx = {}
+            for _, t in ipairs(liked) do
+                if type(t) == "table" then
+                    if t.id then idx[t.id] = idx[t.id] or t end
+                    if t.linked_from and t.linked_from.id then
+                        idx[t.linked_from.id] = idx[t.linked_from.id] or t
+                    end
+                end
+            end
+            Util._liked_byid, Util._liked_byid_for = idx, liked
+        end
+        local hit = Util._liked_byid[id]
+        if hit then return hit end
+    end
+    return scan(disk_get(P.recent))
 end
 
 function Util.snap_write(item, playing)
@@ -10525,6 +10570,13 @@ function Util.kill_recent_watch()
 end
 
 function Util.kill_playerctl_follow()
+    -- Only the hostless daemon ever starts that pipe; a host that has never run
+    -- one has no reason to pay a fork looking for it on every restart.
+    -- Once, for a pipe a previous build may have left behind.
+    if Util.host and Util.host.mpris and not os.getenv("SPOOT_FORCE_PLAYERCTL") then
+        if Util._follow_reaped then return end
+        Util._follow_reaped = true
+    end
     os.execute("pkill -f 'playerctl[ -]--follow metadata' 2>/dev/null")
 end
 
@@ -12440,10 +12492,7 @@ function Util.serve_nav_save(hops, pos, tip, tip_roots)
         tipRoots = (type(tip_roots) == "table" and #tip_roots > 0) and tip_roots or nil,
         origin = (type(origin) == "table" and origin.view) and origin or nil
     }
-    local f = io.open(P.nav, "w")
-    if not f then return end
-    f:write(json.encode(Util.serve_nav_state))
-    f:close()
+    Util.nav_write()
 end
 
 -- THE LIST A TRACK WAS PLAYED FROM, as a single scope entry.
@@ -12474,10 +12523,16 @@ function Util.play_origin_save()
     if type(leaf) ~= "table" or not leaf.view then return end
     if type(Util.serve_nav_state) ~= "table" then return end
     Util.serve_nav_state.origin = json.decode(json.encode(leaf))
-    local f = io.open(P.nav, "w")
-    if not f then return end
-    f:write(json.encode(Util.serve_nav_state))
-    f:close()
+    Util.nav_write()
+end
+
+-- nav.json, written whole or not at all, and only when it says something new:
+-- every request the UI makes ends in a nav save, and most of them describe the
+-- trail exactly as the last one did.
+function Util.nav_write()
+    local blob = json.encode(Util.serve_nav_state)
+    if blob == Util._nav_written then return end
+    if write_file(P.nav, blob) then Util._nav_written = blob end
 end
 
 function Util.serve_nav_load()

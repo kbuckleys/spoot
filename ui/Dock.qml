@@ -503,6 +503,9 @@ Window {
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: true
+                    // A thumbnail's worth, not the 640px cover it is read from:
+                    // one of these is held per screen for as long as spoot runs.
+                    sourceSize: Qt.size(128, 128)
                 }
                 MouseArea {
                     anchors.fill: parent

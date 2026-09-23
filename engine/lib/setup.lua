@@ -29,8 +29,15 @@ return function(Util, ctx)
     -- What survives is the one-line question itself, because three places that have
     -- nothing to do with installing anything still need to ask it: the notification
     -- fallback, the device check, and the login preconditions below.
+    -- Remembered once found: a program does not leave PATH mid-session, and the
+    -- notification fallback asks on every toast. A miss is asked again, so
+    -- installing something while spoot runs is still noticed.
+    Util._have = {}
     function Util.have(bin)
-        return trim(shell("command -v " .. shell_quote(bin) .. " 2>/dev/null") or "") ~= ""
+        if Util._have[bin] then return true end
+        local ok = trim(shell("command -v " .. shell_quote(bin) .. " 2>/dev/null") or "") ~= ""
+        if ok then Util._have[bin] = true end
+        return ok
     end
 
     -- The other half of "is this machine ready" -- programs are not enough, the two

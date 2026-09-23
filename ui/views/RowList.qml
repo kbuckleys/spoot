@@ -99,6 +99,9 @@ GridView {
     // because closing whatever is in front is the app's business, not this
     // file's.
     property bool inert: false
+    // False while the panel is hidden: the last-pick glow is the one thing here
+    // that animates forever, and nobody is looking.
+    property bool live: true
     // A PRESS LANDED, whatever it turns out to mean. Reported so the app can
     // stop anything that MOVES this list while a click is being made: a
     // double click is two presses, and a list that scrolls between them hands
@@ -232,7 +235,7 @@ GridView {
             color: list.theme.fade(list.theme.playing, 0.16)
             SequentialAnimation on opacity {
                 loops: Animation.Infinite
-                running: cell.lastPick
+                running: cell.lastPick && list.live
                 NumberAnimation { from: 0.35; to: 1.0; duration: 1100
                                   easing.type: Easing.InOutSine }
                 NumberAnimation { from: 1.0; to: 0.35; duration: 1100

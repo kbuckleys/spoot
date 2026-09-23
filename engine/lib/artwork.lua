@@ -198,8 +198,39 @@ return function(Util, ctx)
     Util.ART_BATCH_CONNECT  = 2
     Util.ART_BATCH_BUDGET   = 8   -- seconds, whole call
 
+    -- A COVER THAT IS NOT THERE, remembered for half an hour. A 404 or an image
+    -- that will never decode was re-requested on every draw of every grid that
+    -- held it, because only the id-keyed kinds record a write-off in their index.
+    -- Kept in the host's shared store when there is one, so the engine and the
+    -- prefetch jobs agree; per state otherwise.
+    Util.ART_DEAD_TTL = 1800
+    function Util.art_dead(url)
+        local at
+        if Util.host and Util.host.shared then at = Util.host.shared("artdead:" .. url)
+        else at = Util._dead_art and Util._dead_art[url] end
+        return at ~= nil and os.time() - at < Util.ART_DEAD_TTL
+    end
+    function Util.art_mark_dead(url)
+        if Util.host and Util.host.shared then Util.host.shared("artdead:" .. url, os.time())
+        else Util._dead_art = Util._dead_art or {}; Util._dead_art[url] = os.time() end
+    end
+
     Util._art_batch = function(items)
-        local todo = items
+        -- NOTHING TO FETCH FOR A FILE ALREADY WHOLE, or for one known to be gone.
+        -- A grid's tail is spooled again on every redraw, and the worker used to
+        -- download every entry whether or not an earlier chunk had landed it.
+        -- Hash-named covers only: an id-keyed file keeps its path when its art
+        -- changes, so being on disk says nothing about being current.
+        local todo = {}
+        for _, pd in ipairs(items) do
+            if not pd.art_key and Util._art_valid_file(pd.path) then
+                pd.ok = true
+            elseif Util.art_dead(pd.url) then
+                pd.dead = true
+            else
+                todo[#todo+1] = pd
+            end
+        end
         local started = Util.mono() or 0
         for pass = 1, 3 do
             if #todo == 0 then break end
@@ -244,6 +275,7 @@ return function(Util, ctx)
                         retry[#retry+1] = pd
                     else
                         pd.dead = true   -- so the caller can stop asking for it
+                        Util.art_mark_dead(pd.url)
                     end
                     os.remove(pd.tmp)
                 end
@@ -293,7 +325,11 @@ return function(Util, ctx)
     function Util.spawn_art_prefetch(list, kind)
         if not list or #list == 0 then return "empty" end
         local dir = Util.art_spool_dir()
-        os.execute("mkdir -p " .. shell_quote(dir))
+        -- Once per state rather than a fork per spool.
+        if not Util._spool_made then
+            os.execute("mkdir -p " .. shell_quote(dir))
+            Util._spool_made = true
+        end
         local n = 0
         for i = 1, #list, Util.PREFETCH_MAX do
             -- Zero-padded so a plain lexicographic sort is oldest-first, and written

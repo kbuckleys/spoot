@@ -893,8 +893,11 @@ Window {
     // named inline; a context menu needs the identical walk over a different pair
     // and copying it would have been two rules for what a match is.
     function fillRows(model, source, filter) {
-        model.clear()
         var f = root.narrows ? filter.toLowerCase() : ""
+        // BUILT FIRST, APPENDED ONCE. One append per row changed `count` once per
+        // row, and everything sized from it -- columns, the body height, the
+        // panel's animated height -- re-evaluated hundreds of times per keystroke.
+        var out = []
         for (var i = 0; i < source.length; i++) {
             var r = source[i]
             // Substring, case-insensitive -- rofi's default matcher.
@@ -909,21 +912,23 @@ Window {
             // -- and played a completely different track. Shift+Return had the
             // same fault, for the same reason.
             if (!f.length || String(r.label).toLowerCase().indexOf(f) >= 0)
-                model.append({label: r.label, icon: r.icon || "", key: r.key || "",
-                             // THE RIGHT-HAND COLUMN: how long the track is, and
-                             // beside it what is true about it. Drawn apart from
-                             // the label (see RowList's metaCol) so the marks lead
-                             // nothing and elide with nothing, and apart from each
-                             // other so the durations line up down the list.
-                             meta: r.meta || "", marks: r.marks || "",
-                             // The row's own track id, so the view can tell
-                             // which row is playing without being told again.
-                             id: r.id || "",
-                             // The same row with its markup kept, when it has any.
-                             // Filtering matches `label`, which is why that one
-                             // stays plain -- see Util.serve_rows.
-                             rich: r.rich || "", src: i + 1})
+                out.push({label: r.label, icon: r.icon || "", key: r.key || "",
+                         // THE RIGHT-HAND COLUMN: how long the track is, and
+                         // beside it what is true about it. Drawn apart from
+                         // the label (see RowList's metaCol) so the marks lead
+                         // nothing and elide with nothing, and apart from each
+                         // other so the durations line up down the list.
+                         meta: r.meta || "", marks: r.marks || "",
+                         // The row's own track id, so the view can tell
+                         // which row is playing without being told again.
+                         id: r.id || "",
+                         // The same row with its markup kept, when it has any.
+                         // Filtering matches `label`, which is why that one
+                         // stays plain -- see Util.serve_rows.
+                         rich: r.rich || "", src: i + 1})
         }
+        model.clear()
+        if (out.length) model.append(out)
     }
 
     // Lists that cross the engine boundary arrive as QVariantList proxies, not
@@ -3635,7 +3640,7 @@ Window {
         // thirty rows down the list you came from, and the same mechanism ran the
         // other way: a paused track's cues could walk a list you were reading.
         //
-        // The cues are cleared on every draw (see applyIdentity), but the fetch
+        // The cues are cleared on every draw of another view (see applyIdentity), but the fetch
         // that fills them is asynchronous and the interpolator ticks every 16ms,
         // so "cleared on leaving" was never a guarantee. The scope is: it is the
         // engine's word for which view this is.
@@ -3645,9 +3650,13 @@ Window {
         // not leave the previous song's lines marching along.
         if (root.playback.id !== root.lyricFor) { root.lyricIndex = -1; return }
         var t = root.positionMs / 1000
-        var i = -1
-        for (var k = 0; k < root.lyricTimes.length; k++) {
-            if (root.lyricTimes[k] <= t) i = k; else break
+        var times = root.lyricTimes
+        // From the line already sung when time has only moved forward, which is
+        // every frame but a seek -- not from the top of the song each frame.
+        var from = (root.lyricIndex >= 0 && times[root.lyricIndex] <= t) ? root.lyricIndex : 0
+        var i = from - 1
+        for (var k = from; k < times.length; k++) {
+            if (times[k] <= t) i = k; else break
         }
         if (i === root.lyricIndex) return
         root.lyricIndex = i
@@ -3804,7 +3813,9 @@ Window {
     // Timer went on recomputing a position nobody could see -- and the first
     // frame after a reveal reads the wall clock, so it comes back current.
     FrameAnimation {
-        running: root.playback.playing === true
+        // Gated like the poll that feeds it: with nobody looking, nothing reads
+        // the position, and a hidden window's frame clock is not guaranteed to stop.
+        running: root.playback.playing === true && (root.opened || root.anyDockEngaged)
         onTriggered: {
             var dur = root.playback.duration || 0
             if (dur <= 0) { root.progress = 0; return }
@@ -3820,6 +3831,7 @@ Window {
         TileGrid {
             // Named so its own handlers can read the state the delegate reads.
             id: gridBody
+            live: root.opened
             theme: zenon
             model: rows
             flashSrc: root.flashSrc
@@ -3872,6 +3884,7 @@ Window {
         RowList {
             // Named so its own handlers can read the state the delegate reads.
             id: listBody
+            live: root.opened
             theme: zenon
             model: rows
             columns: root.columns
@@ -4209,7 +4222,16 @@ Window {
                 // a scissor rectangle -- integers -- and on a 1000px bar under a
                 // six-minute track it sat still for a third of a second and then
                 // jumped a whole pixel. That was the stutter.
-                readonly property real head: Math.max(0, Math.min(1, root.progress))
+                // ...ON A QUARTER-PIXEL GRID, though. Still far below anything
+                // the eye can call a step, and it means the gradient, the mask
+                // capture and the effect behind it are only redone on the frames
+                // where the line actually moved -- over a long track, about one
+                // frame in ten instead of every one.
+                readonly property real head: {
+                    var p = Math.max(0, Math.min(1, root.progress))
+                    var q = Math.max(1, message.lineW * 4)
+                    return Math.round(p * q) / q
+                }
                 // A `feather` AND A `headStart` STOOD HERE, sizing the soft edge
                 // of the wash that used to fill this bar. The progress is a line
                 // along the top border now (see progressLine below) and a line has
@@ -5620,7 +5642,7 @@ Window {
                         text: root.liveFilter
                         glyph: zenon.glyphSearch
                         placeholder: "Search Spotify"
-                        blinking: root.ctxUp
+                        blinking: root.ctxUp && root.ctxField
                     }
                     // CENTRED IN THE BAR, not laid out from the card's top edge.
                     // Anchoring it to the top with the same padding the bar's
