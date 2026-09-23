@@ -94,3 +94,15 @@ Keybinds can also be viewed from ```Main > System > Keybinds```
 | `alt` `←` `→` | walk back and forth along the trail -- non-destructive, the trail stays whole | Universal |
 | `ctrl` `←` `→` | previous / next track | Universal |
 | `home` `end` / `pgup` `pgdn` | first / last row, a page at a time | Any list or grid |
+
+# Development
+
+- `engine/smoke.sh` drives the built binary's `--serve` protocol against your
+  signed-in account and checks every reply. It toggles shuffle twice, so the
+  account ends as it started.
+- `engine/views.sh` probes every view and compares row counts and shapes with
+  `engine/views.golden`. That file was recorded against one particular account,
+  so on any other run `sh engine/views.sh --record` once before comparing.
+- `ui/check.sh` exercises the running window and needs a Wayland session.
+- A ThreadSanitizer build (see `CMakeLists.txt`) should be run with
+  `TSAN_OPTIONS=suppressions=$PWD/src/tsan.supp`.

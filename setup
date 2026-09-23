@@ -293,7 +293,7 @@ run_priv() {
 # and the programs it reaches for once it is running. There is no reason to
 # install them at different times, and doing so is what left first-run doing
 # package management.
-DEPS="cmake compiler pkgconfig qtbase qtdeclarative layershell lua fontconfig font
+DEPS="cmake compiler pkgconfig qtbase qtdeclarative qtruntime layershell lua fontconfig font
       spotifyd xdgopen openssl pkill notify songrec parec curl"
 
 # Is it here already? One probe per dependency, and the probe is the real
@@ -308,6 +308,11 @@ have_dep() {
         pkgconfig)     command -v pkg-config >/dev/null 2>&1 || command -v pkgconf >/dev/null 2>&1 ;;
         qtbase)        pkg-config --exists Qt6Gui Qt6Network Qt6DBus 2>/dev/null ;;
         qtdeclarative) pkg-config --exists Qt6Qml Qt6Quick 2>/dev/null ;;
+        # What the build does not link but the window cannot open without: the
+        # QML modules the UI imports and the Wayland platform plugin. Split from
+        # the -dev packages on most distributions, so a build that succeeds says
+        # nothing about them.
+        qtruntime)     qt_runtime ;;
         # LayerShellQt ships a CMake package and usually no .pc file, so the
         # config file is the real probe. Confined to the handful of directories
         # cmake itself looks in -- a probe that walks /usr is a probe nobody
@@ -342,6 +347,21 @@ have_dep() {
     esac
 }
 
+qt_runtime() {
+    _qml=""; _plug=""
+    for _t in qtpaths6 qtpaths-qt6 qtpaths; do
+        command -v "$_t" >/dev/null 2>&1 || continue
+        _qml=$("$_t" --query QT_INSTALL_QML 2>/dev/null)
+        _plug=$("$_t" --query QT_INSTALL_PLUGINS 2>/dev/null)
+        [ -n "$_qml" ] && break
+    done
+    [ -n "$_qml" ] || return 1
+    for _m in QtQuick/Window QtQuick/Shapes QtQuick/Effects; do
+        [ -d "$_qml/$_m" ] || return 1
+    done
+    ls "$_plug"/platforms/libqwayland* >/dev/null 2>&1
+}
+
 lua_headers() {
     for _m in lua5.5 lua-5.5 lua5.4 lua-5.4 lua; do
         pkg-config --exists "$_m" 2>/dev/null && return 0
@@ -365,6 +385,7 @@ why_dep() {
         pkgconfig)     printf 'finding Qt and Lua at build time' ;;
         qtbase)        printf 'Qt 6, which spoot is written against' ;;
         qtdeclarative) printf 'Qt Quick, which draws every menu' ;;
+        qtruntime)     printf 'the QML modules and Wayland plugin the window opens with' ;;
         layershell)    printf 'the layer-shell surface spoot opens on' ;;
         lua)           printf 'the engine: Lua 5.4+ headers for the build, and lua-cjson' ;;
         fontconfig)    printf 'finding and registering fonts' ;;
@@ -417,6 +438,18 @@ pkg_for() {
             apk) printf 'qt6-qtdeclarative-dev' ;; xbps-install) printf 'qt6-declarative-devel' ;;
             nix-env) printf 'qt6.qtdeclarative' ;; pkg) printf 'qt6-declarative' ;;
             pkg_add) printf '' ;; emerge) printf 'dev-qt/qtdeclarative' ;;
+        esac ;;
+    qtruntime)
+        case "$mgr" in
+            pacman) printf 'qt6-declarative qt6-wayland' ;;
+            apt-get) printf 'qt6-wayland qml6-module-qtqml qml6-module-qtqml-workerscript qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-shapes qml6-module-qtquick-effects' ;;
+            dnf) printf 'qt6-qtdeclarative qt6-qtwayland' ;;
+            zypper) printf 'qt6-declarative-imports qt6-wayland' ;;
+            apk) printf 'qt6-qtdeclarative qt6-qtwayland' ;;
+            xbps-install) printf 'qt6-declarative qt6-wayland' ;;
+            nix-env) printf 'qt6.qtwayland' ;; pkg) printf 'qt6-wayland' ;;
+            emerge) printf 'dev-qt/qtwayland' ;;
+            *) printf '' ;;
         esac ;;
     layershell)
         case "$mgr" in
@@ -510,6 +543,13 @@ pkg_for() {
 # -- attempting an install and reporting what it said beats refusing to try.
 pkg_exists() {
     [ -n "$mgr_query" ] || return 0
+    # apt-cache knows nothing until the lists have been fetched once -- a fresh
+    # container, a minimal image -- and would reject every name. The install
+    # itself runs `apt-get update` first, so let it try.
+    if [ "$mgr" = apt-get ]; then
+        set -- "$1" /var/lib/apt/lists/*Packages*
+        [ -e "$2" ] || return 0
+    fi
     tool=${mgr_query%% *}
     command -v "$tool" >/dev/null 2>&1 || return 0
     # shellcheck disable=SC2059

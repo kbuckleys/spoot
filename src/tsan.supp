@@ -12,12 +12,13 @@
 # conflicting accesses were inside those libraries -- spoot's frames appeared
 # only as the caller that had asked for the connection.
 #
-# SUPPRESSED BY LIBRARY, NEVER BY OUR OWN FRAMES. `called_from_lib` drops a
-# report only when the access came from inside the named library, so a race
-# between two pieces of spoot's own code -- the request state and a job touching
-# the same field, a shim reaching a Natives member off its own thread -- is still
-# reported in full. That is the surface this target exists to watch, and nothing
-# here covers it.
+# SUPPRESSED BY LIBRARY, NEVER BY OUR OWN FRAMES. `called_from_lib` makes TSan
+# ignore the intercepted calls (memcpy, free, pthread_*...) a named library makes
+# itself -- that library is treated as uninstrumented. It does not hide a report
+# whose racing access is in spoot's own code, so a race between two pieces of
+# spoot -- the request state and a job touching the same field, a shim reaching a
+# Natives member off its own thread -- is still reported in full. That is the
+# surface this target exists to watch, and nothing here covers it.
 called_from_lib:libQt6Core.so
 called_from_lib:libQt6Gui.so
 called_from_lib:libQt6DBus.so
@@ -51,6 +52,9 @@ mutex:libpxbackend-1.0.so
 # The graphics stack, on the same terms: Qt's Wayland client and the vendor GL
 # driver both unlock mutexes on threads the sanitizer did not see them lock,
 # because the locking half is inside a library it cannot read.
+#
+# The *nvidia* entries are specific to the machine these were collected on; on
+# Mesa the equivalents are libEGL_mesa.so / libgallium-*.so and may need adding.
 called_from_lib:libQt6WaylandClient.so
 called_from_lib:libQt6WaylandCompositor.so
 called_from_lib:libnvidia-eglcore.so
