@@ -542,6 +542,11 @@ private:
                 continue;
             }
             QObject::disconnect(rep, nullptr, nullptr, nullptr);
+            // CUT OFF, whatever the status line said. A reply aborted by the clock
+            // mid-body keeps its 200, and `size` below is only what arrived -- so
+            // without this a truncated cover looked like a finished one that simply
+            // was not an image, and was written off rather than retried.
+            const bool cut = !rep->isFinished() || rep->error() != QNetworkReply::NoError;
             if (!rep->isFinished()) rep->abort();
             const int code = rep->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QByteArray body = rep->readAll();
@@ -559,6 +564,7 @@ private:
             lua_newtable(L);
             lua_pushinteger(L, code);  lua_setfield(L, -2, "code");
             lua_pushinteger(L, wrote); lua_setfield(L, -2, "size");
+            if (cut) { lua_pushboolean(L, 1); lua_setfield(L, -2, "cut"); }
             // Error bodies included: a caller reading `body` checks `code` first,
             // the way it checked for the file before.
             if (bodies) {
@@ -958,7 +964,7 @@ private:
 
     static int l_clip(lua_State *L) {
         const char *op = luaL_optstring(L, 1, "get");
-        const QByteArray text = luaL_optstring(L, 2, "") ? QByteArray(luaL_optstring(L, 2, "")) : QByteArray();
+        const QByteArray text(luaL_optstring(L, 2, ""));
         const bool set = QByteArray(op) == "set";
         QString out;
         auto work = [&] {
@@ -1642,6 +1648,14 @@ private slots:
     // isolation, it is a zombie -- and the fix is cheap, because spoot already
     // restores its session and its trail, so a respawn lands back where you were.
     void died(const QString &err) {
+        // THE WORKER AND ITS THREAD ARE ALREADY GOING: both deleteLater themselves
+        // once the thread finishes (see spawn). Forgotten here, before any early
+        // return, so nothing -- request(), shutdown() at quit -- can reach them
+        // afterwards. The wait is short: run() has returned, so the thread is only
+        // unwinding.
+        if (m_thread) m_thread->wait(2000);
+        m_worker = nullptr;
+        m_thread = nullptr;
         if (m_stopping) return;
         if (!err.isEmpty()) qWarning("spoot: engine error: %s", qPrintable(err));
         // A CRASH LOOP MUST NOT BE ANSWERED WITH AN INFINITE ONE. Five deaths in
@@ -2224,7 +2238,13 @@ int main(int argc, char *argv[]) {
     // If one is already resident, hand it the request and leave. Done before the
     // engine is spawned or any QML is loaded, so a second invocation costs a
     // socket round trip rather than a process.
-    const QString sockName = QStringLiteral("spoot-%1").arg(qEnvironmentVariable("USER", "u"));
+    // IN THE USER'S OWN RUNTIME DIR when there is one. A bare name resolves under
+    // /tmp, where any other account can create it first -- and a spoot that finds
+    // it answering hands its request over and exits. $XDG_RUNTIME_DIR is 0700.
+    const QString runDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const QString sockName = runDir.isEmpty()
+        ? QStringLiteral("spoot-%1").arg(qEnvironmentVariable("USER", "u"))
+        : runDir + QStringLiteral("/spoot.sock");
     {
         QLocalSocket probe;
         probe.connectToServer(sockName);
@@ -2247,7 +2267,9 @@ int main(int argc, char *argv[]) {
     // A minute up is a session that started, so the next fault is a fresh one
     // and gets its own three tries -- see crashguard.
     QTimer::singleShot(60000, &app, [] { crashguard::clearGeneration(); });
+    // Parented to the app so it is destroyed with it rather than leaked.
     Shell *shell = new Shell();
+    shell->setParent(&app);
     qml.rootContext()->setContextProperty("Engine", &engine);
     qml.rootContext()->setContextProperty("Shell", shell);
     // --listen opens straight on the Listen view, the way the rofi build's one
@@ -2389,6 +2411,7 @@ int main(int argc, char *argv[]) {
         // first is the difference between "resident" and "never starts again".
         QLocalServer::removeServer(sockName);
         auto *server = new QLocalServer(&app);
+        server->setSocketOptions(QLocalServer::UserAccessOption);
         server->listen(sockName);
         // CLOSE ON EXEC. Without this the listening socket is inherited by every
         // child -- each forked job, and, fatally, the execv the crash handler
@@ -2402,6 +2425,9 @@ int main(int argc, char *argv[]) {
         }
         QObject::connect(server, &QLocalServer::newConnection, [server, shell, &qml] {
             QLocalSocket *c = server->nextPendingConnection();
+            if (!c) return;
+            // A client that connects and says nothing must not leave its socket behind.
+            QObject::connect(c, &QLocalSocket::disconnected, c, &QObject::deleteLater);
             QObject::connect(c, &QLocalSocket::readyRead, [c, shell] {
                 const QByteArray cmd = c->readAll().trimmed();
                 // Revealed FIRST, so the view opens onto a window that is already
