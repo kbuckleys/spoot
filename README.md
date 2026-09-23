@@ -39,11 +39,11 @@ Third-party Spotify clients are inherently bound to what the Spotify Web API all
 # Dependencies
 The included install script can automatically take care of everything for you, but it's important to be clear about what spoot requires
 
-**Required:** ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6.5+``` &nbsp; ```LayerShellQt 6.1+``` &nbsp; ```Lua 5.4+ (with headers)``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd 0.4+``` &nbsp; ```openssl``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```JetBrainsMono Nerd Font (Propo)```
+**Required:** ```Wayland session``` &nbsp; ```Spotify Premium``` &nbsp; ```Qt 6.5+``` &nbsp; ```LayerShellQt 6.1+``` &nbsp; ```Lua 5.4+ (with headers)``` &nbsp; ```lua-cjson``` &nbsp; ```spotifyd 0.4+``` &nbsp; ```xdg-utils``` &nbsp; ```procps-ng``` &nbsp; ```JetBrainsMono Nerd Font (Propo)```
 
 **Optional:** ```songrec``` + ```parec``` (pulseaudio-utils) for Listen
 
-**Only when running the engine outside the spoot binary** (`lua engine/spoot.lua`, `SPOOT_FORCE_CURL`, `SPOOT_FORCE_PLAYERCTL`): ```curl``` &nbsp; ```playerctl``` &nbsp; ```wl-clipboard``` &nbsp; ```libnotify``` &nbsp; ```perl```
+**Only when running the engine outside the spoot binary** (`lua engine/spoot.lua`, `SPOOT_FORCE_CURL`, `SPOOT_FORCE_PLAYERCTL`): ```curl``` &nbsp; ```playerctl``` &nbsp; ```wl-clipboard``` &nbsp; ```libnotify``` &nbsp; ```perl``` &nbsp; ```openssl```
 
 # Setup
 It's a breeze. ```sh setup``` will automatically install the required core dependencies -- you don't even need to chmod the install script if you prefix the filename with ```sh``` as denoted -- then launch spoot. Run it as yourself, not with sudo: it asks for root only for the package manager. At this point, you'll be automatically redirected to a Spotify authentication page, login with your Spotify account and you're done

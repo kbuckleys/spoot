@@ -158,8 +158,8 @@ return function(Util, ctx)
     end
 
     -- WHAT A FIRST RUN STILL OWES, in the order it has to happen. Dependencies come
-    -- first and are not negotiable: the account login needs openssl to build the
-    -- challenge and xdg-open to show you the page. Authorising before those exist
+    -- first and are not negotiable: the account login needs xdg-open to show you
+    -- the page, and openssl to build the challenge when there is no host to. Authorising before those exist
     -- fails two ways.
     --
     -- Reported as state rather than as a verdict, so the caller can say what it is
@@ -171,7 +171,8 @@ return function(Util, ctx)
         -- survives only as the fallback for a spoot running under a bare
         -- interpreter, which is not the thing being set up here -- listing either
         -- would block a sign-in over a program the sign-in does not use.
-        local names = {"openssl", "xdg-open"}
+        local names = {"xdg-open"}
+        if not (Util.host and Util.host.pkce) then names[#names + 1] = "openssl" end
         local lack = {}
         for _, b in ipairs(names) do
             if not Util.have(b) then lack[#lack + 1] = b end

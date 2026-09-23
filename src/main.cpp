@@ -67,6 +67,8 @@
 #include <QRegularExpression>
 #include <QUrlQuery>
 #include <QThreadStorage>
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 #include <lua.hpp>
 #include <csignal>
 #include <cstdlib>
@@ -253,6 +255,8 @@ public:
         lua_setfield(L, -2, "with_lock");
         lua_pushcclosure(L, &Natives::l_shared, 0);
         lua_setfield(L, -2, "shared");
+        lua_pushcclosure(L, &Natives::l_pkce, 0);
+        lua_setfield(L, -2, "pkce");
         // THE LOGIN CALLBACK. Two calls rather than one so the socket is bound
         // BEFORE the browser is opened: bound after, a fast redirect could reach
         // a port nobody was listening on yet.
@@ -960,6 +964,27 @@ private:
         const QByteArray out = query.toUtf8();
         lua_pushlstring(L, out.constData(), size_t(out.size()));
         return 1;
+    }
+
+    // ── THE LOGIN'S SECRETS ──────────────────────────────────────────────────
+    // spoot.pkce() -> verifier, challenge, state. A PKCE verifier (RFC 7636: 43-
+    // 128 unreserved characters), its S256 challenge, and a hex state, all from
+    // the system CSPRNG -- what three openssl pipelines did, without a process.
+    static int l_pkce(lua_State *L) {
+        auto *rng = QRandomGenerator::system();
+        QByteArray raw(96, Qt::Uninitialized);
+        rng->fillRange(reinterpret_cast<quint32 *>(raw.data()), int(raw.size() / 4));
+        const auto b64url = QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals;
+        const QByteArray verifier = raw.toBase64(b64url);            // 128 chars
+        const QByteArray challenge =
+            QCryptographicHash::hash(verifier, QCryptographicHash::Sha256).toBase64(b64url);
+        QByteArray st(16, Qt::Uninitialized);
+        rng->fillRange(reinterpret_cast<quint32 *>(st.data()), int(st.size() / 4));
+        const QByteArray state = st.toHex();
+        lua_pushlstring(L, verifier.constData(), size_t(verifier.size()));
+        lua_pushlstring(L, challenge.constData(), size_t(challenge.size()));
+        lua_pushlstring(L, state.constData(), size_t(state.size()));
+        return 3;
     }
 
     static int l_clip(lua_State *L) {

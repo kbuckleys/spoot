@@ -1842,14 +1842,22 @@ get_token = function()
 end
 
 local function oauth_get_token()
-    local verifier = trim(shell("openssl rand -base64 96 | tr -d '=+\\n/' | head -c 128"))
-    local challenge = trim(shell("echo -n " .. shell_quote(verifier)
-        .. " | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='"))
     -- THE STATE, which PKCE alone does not give us: the verifier stops a forged
     -- code from being EXCHANGED, but only a state we minted says the answer
     -- arriving at the port belongs to the login this process started. Hex, so
     -- it needs no escaping in the URL or in the query that comes back.
-    local state = trim(shell("openssl rand -hex 16"))
+    --
+    -- The host mints all three natively; openssl is the fallback for a bare
+    -- interpreter.
+    local verifier, challenge, state
+    if Util.host and Util.host.pkce then
+        verifier, challenge, state = Util.host.pkce()
+    else
+        verifier = trim(shell("openssl rand -base64 96 | tr -d '=+\\n/' | head -c 128"))
+        challenge = trim(shell("echo -n " .. shell_quote(verifier)
+            .. " | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='"))
+        state = trim(shell("openssl rand -hex 16"))
+    end
     local scopes = OAUTH_SCOPES
     local auth_url = "https://accounts.spotify.com/authorize"
         .. "?client_id=" .. Util.client_id()

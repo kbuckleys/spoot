@@ -392,7 +392,7 @@ why_dep() {
         font)          printf 'the glyphs the interface is built out of' ;;
         spotifyd)      printf 'playback itself' ;;
         xdgopen)       printf 'opening the login page in your browser' ;;
-        openssl)       printf 'the login handshake' ;;
+        openssl)       printf 'the login handshake when the engine runs outside spoot' ;;
         pkill)         printf "stopping spoot's own background helpers" ;;
         notify)        printf 'desktop notifications' ;;
         songrec)       printf 'identifying what is playing in the room' ;;
