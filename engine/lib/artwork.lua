@@ -123,13 +123,16 @@ return function(Util, ctx)
             if not res then return nil end
             -- One answer is enough to know the link is alive; one failure is not
             -- enough to know it is dead, because a batch can lose a page on its own.
-            -- So only an ALL-ZERO batch arms the gate.
-            local best = 0
+            -- So only an ALL-ZERO batch arms the gate -- and only a batch aimed at
+            -- SPOTIFY, by the rule Util.net_seen states: a cover batch the CDN did
+            -- not answer is that host being slow, not the API being unreachable.
+            local best, any = 0, false
             for out, r in pairs(res) do
-                got[out] = {code = tostring(r.code), size = r.size, body = r.body}
+                any = true
+                got[out] = {code = tostring(r.code), size = r.size, body = r.body, cut = r.cut}
                 if (tonumber(r.code) or 0) > best then best = tonumber(r.code) or 0 end
             end
-            Util.net_note(best)
+            if any and jobs[1] then Util.net_seen({url = jobs[1].url}, best) end
             return got
         end
         local cfg = Util.tmpfile("curlcfg")
@@ -232,8 +235,8 @@ return function(Util, ctx)
                     -- r.size is what curl actually wrote. It can only disagree with
                     -- the transfer curl reported as complete if the transfer was
                     -- cut short, which is the one retryable kind of bad body.
-                    local truncated = false
-                    if r and Util.is2xx(r.code) then
+                    local truncated = (r and r.cut) and true or false
+                    if not truncated and r and Util.is2xx(r.code) then
                         local fh = io.open(pd.tmp, "rb")
                         if fh then truncated = fh:seek("end") ~= r.size; fh:close() end
                     end
@@ -495,11 +498,16 @@ return function(Util, ctx)
     function Util.art_index_put(kind, updates)
         local cfg = P.art_kinds[kind]
         if not cfg then return end
-        local idx = disk_get(cfg.index) or {}
-        for k, v in pairs(updates) do
-            if v == false then idx[k] = nil else idx[k] = v end
-        end
-        disk_set(cfg.index, idx)
+        -- Under the lock, or the engine and a prefetch job merging at once each
+        -- write back the index they read and one of them loses its covers.
+        local idx = Util.locked("artidx:" .. kind, function()
+            local cur = disk_get(cfg.index) or {}
+            for k, v in pairs(updates) do
+                if v == false then cur[k] = nil else cur[k] = v end
+            end
+            disk_set(cfg.index, cur)
+            return cur
+        end)
         Util._art_idx = Util._art_idx or {}
         Util._art_idx[kind] = idx
     end

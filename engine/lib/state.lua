@@ -255,13 +255,20 @@ return function(Util, ctx)
     -- hit is treated as a failure rather than guessed at, and the caller falls back
     -- to a real refresh.
     function Util.cache_touch(path)
-        local raw = read_file(path)
-        if not raw then return false end
-        local out, n = raw:gsub('"fetched_at":%s*%d+', '"fetched_at":' .. os.time(), 1)
-        if n ~= 1 then return false end
-        -- write_file answers os.rename's nil-on-failure, not false, so this is a
-        -- truthiness test rather than a comparison.
-        return not not write_file(path, out)
+        -- Locked like every other read-modify-write of a shared cache: a refresh
+        -- landing between the read and the write below would otherwise be
+        -- overwritten with the old payload, stamped as current.
+        return Util.locked("cache:" .. path, function()
+            local raw = read_file(path)
+            if not raw then return false end
+            -- Counted first: a replace capped at one could never see a second hit.
+            local _, hits = raw:gsub('"fetched_at":%s*%d+', "%0")
+            if hits ~= 1 then return false end
+            local out = raw:gsub('"fetched_at":%s*%d+', '"fetched_at":' .. os.time(), 1)
+            -- write_file answers os.rename's nil-on-failure, not false, so this is a
+            -- truthiness test rather than a comparison.
+            return not not write_file(path, out)
+        end)
     end
 
     -- view_pos (cursor memory) is read on essentially every menu draw and rewritten
@@ -486,7 +493,8 @@ return function(Util, ctx)
             if type(x) ~= "table" or type(y) ~= "table" then return false end
             if x.view ~= y.view then return false end
             for _, k in ipairs({"track_id", "album_id", "artist_id", "playlist_id",
-                                "category_id", "query", "category", "genre"}) do
+                                "category_id", "show_id", "episode_id", "setting",
+                                "query", "category", "genre"}) do
                 if x[k] ~= y[k] then return false end
             end
         end

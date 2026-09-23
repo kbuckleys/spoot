@@ -13,6 +13,7 @@
 return function(Util, ctx)
     local P = ctx.P
     local read_file, shell, shell_quote, trim = ctx.read_file, ctx.shell, ctx.shell_quote, ctx.trim
+    local safe_decode = ctx.safe_decode
 
     -- ============================================================================
     -- WHAT THIS MACHINE HAS
@@ -172,7 +173,11 @@ return function(Util, ctx)
         for _, b in ipairs(names) do
             if not Util.have(b) then lack[#lack + 1] = b end
         end
-        return {token = read_file(P.token) ~= nil,
+        -- A LOGIN THAT CAN BE USED, not a file that exists. An empty or corrupt
+        -- token.json is "" or junk -- both truthy -- and read as signed in, the
+        -- same trap device_ready above already steps around.
+        local tok = safe_decode(read_file(P.token))
+        return {token = type(tok) == "table" and type(tok.refresh_token) == "string",
                 device = Util.device_ready(),
                 lack = lack}
     end

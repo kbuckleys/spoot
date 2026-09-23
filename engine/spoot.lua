@@ -159,7 +159,6 @@ P.rate_say_every = 600
 P.last_notify   = P.run .. "/last-notify"
 P.oauth_code    = P.run .. "/oauth-code"
 P.oauth_pid     = P.run .. "/oauth.pid"
-P.crash_log     = P.run .. "/crash.log"
 -- Prefixes: the caller appends the name of the revalidator or the warm job, so
 -- one pidfile exists per kind rather than one for all of them.
 P.reval_pid     = P.run .. "/reval-"
@@ -217,7 +216,6 @@ P.listen_record  = 12
 -- capped, the way the search history is.
 P.listen_hist    = P.cache .. "/listen_history.json"
 P.listen_hist_max = 60
-P.listen_poll    = 0.3
 
 -- When each tile grid's artwork was last warmed, one timestamp per art kind.
 -- Not a cache of anything -- a rate limit; see Util.spawn_shelf_warm.
@@ -690,7 +688,6 @@ Util.THEME_RESULTS = "searchall"   -- the results LIST; search.rasi is its input
 Util.THEME_THUMBS  = "thumbs"
 Util.THEME_TRAIL   = "trail"       -- Trail Steps and Trail History share one
 Util.THEME_PODS    = "pods"        -- wider than meta: descriptions run to sentences
-Util.THEME_MAIN    = "main"        -- the root grid, so it can be styled apart
 
 local _cache_ready = false
 local function ensure_cache()
@@ -1072,7 +1069,10 @@ local function disk_get(path, ttl, tag)
     return payload
 end
 local function disk_set(path, data, tag)
-    write_file(path, json.encode({data=data, fetched_at=os.time(), tag=tag}))
+    local blob = json.encode({data=data, fetched_at=os.time(), tag=tag})
+    -- The same lock Util.cache_touch takes, so a touch cannot interleave with a
+    -- real write to the same file from another state and put the old payload back.
+    return Util.locked("cache:" .. path, function() return write_file(path, blob) end)
 end
 local function disk_bust(path) os.remove(path) end
 
@@ -1104,27 +1104,6 @@ local function cache_exists(path)
     local f = io.open(path)
     if f then f:close(); return true end
     return false
-end
--- disk_set writes fetched_at last, so it lands in the final few bytes. Reading
--- the whole file just to reach it costs ~7ms on liked_tracks.json (2.3MB) and
--- this runs for three caches on every startup; a tail read is ~500x cheaper.
--- Falls back to the full scan if the tail doesn't contain it, so a change in
--- key order can never turn a fresh cache into a permanently stale one.
-local function cache_stale(path)
-    local ts
-    local f = io.open(path, "rb")
-    if f then
-        local size = f:seek("end")
-        f:seek("set", math.max(0, size - 256))
-        local tail = f:read("*a")
-        f:close()
-        ts = tail and tonumber(tail:match('"fetched_at"%s*:%s*(%d+)'))
-    end
-    if not ts then
-        local raw = read_file(path)
-        ts = raw and tonumber(raw:match('"fetched_at"%s*:%s*(%d+)'))
-    end
-    return not ts or os.time() - ts >= P.ttl
 end
 -- Our Spotify market, memoised. Resolved from the profile, which is itself
 -- disk-cached for an hour, so the whole process pays at most one request for it.
@@ -1830,7 +1809,7 @@ Util.token_load = function()
                     method = "POST",
                     url = "https://accounts.spotify.com/api/token",
                     headers = {"Content-Type: application/x-www-form-urlencoded"},
-                    body = "grant_type=refresh_token&refresh_token=" .. data.refresh_token
+                    body = "grant_type=refresh_token&refresh_token=" .. url_encode(data.refresh_token)
                            .. "&client_id=" .. Util.client_id(),
                     compressed = true, timeout = 10}.body)
                 if rd and rd.access_token then
@@ -1961,7 +1940,7 @@ local function oauth_get_token()
     if not native then
         local srv = "perl -MIO::Socket::INET -e '"
             .. "alarm 120;"
-            .. "$s=IO::Socket::INET->new(LocalPort=>8989,Listen=>1,ReuseAddr=>1);"
+            .. "$s=IO::Socket::INET->new(LocalAddr=>q(127.0.0.1),LocalPort=>8989,Listen=>1,ReuseAddr=>1);"
             .. "$c=$s->accept();$r=<$c>;($x)=$r=~/^GET \\/login\\?(\\S+)/;"
             .. "if($x){open(F,\">\",$ARGV[0]);print F $x;close(F)}"
             .. "print $c \"HTTP/1.1 200 OK\\r\\n\\r\\nok\";close $c;close $s' "
@@ -3129,9 +3108,12 @@ get_playback = function()
     -- a TRACK over the podcast you are listening to. Every me/player read in
     -- this file carries it for that reason.
     -- A POLL, so a refusal arms the gate quietly; see api_get's 429 branch.
+    -- Cleared however the request ends: a raise left set would silence every
+    -- later rate-limit notice as though it came from a poll.
     Util.polling = true
-    local d = api_get("me/player", Util.with_market("additional_types=episode"))
+    local pok, d = pcall(api_get, "me/player", Util.with_market("additional_types=episode"))
     Util.polling = false
+    if not pok then error(d, 0) end
     last_playback = os.time()
     if not d or not d.item then
         -- NOTHING CAME BACK, and the next poll is worth less than this one was.
@@ -4283,7 +4265,6 @@ function Util.track_from_cache(id)
     end
     local hit = scan(mem_get("liked_tracks")) or scan(disk_get(P.liked))
              or scan(disk_get(P.recent))
-    if hit and hit.album and hit.album.id then return hit end
     return hit
 end
 
@@ -5544,7 +5525,7 @@ function Util.playlist_meta_seed(pl)
         snapshot_id = pl.snapshot_id,
         tracks = pl.tracks and {total = tonumber(pl.tracks.total)} or nil
     })
-    mem_set("playlist_meta_" .. pl.id, nil, 0)
+    mem_bust("playlist_meta_" .. pl.id)
 end
 
 -- Refreshes the snapshot FIRST, then lets it decide whether the tracks need
@@ -8001,7 +7982,6 @@ view_artist = function(artist)
                      "Related Artists",
                      is_followed and "Unfollow Artist" or "Follow Artist",
                      "Copy Web Link", "Artist Impression"}
-    local art_ac_key = "artist-ac:" .. (artist.id or "")
 
     while true do
         local sel = ui_menu(actions, {prompt=artist.name or "Artist", mesg=artist.name or "Artist", theme=THEME_SUB, context=true, art=false})
@@ -8084,20 +8064,8 @@ view_lyrics = function(item)
 
     local mesg_base = track_mesg(item)
     if timestamps then
-        local pre_sel = 0
-        if current_id == item.id then
-            local pos = get_playerctl_position()
-            for i, ts in ipairs(timestamps) do
-                if ts <= pos then pre_sel = i - 1 end
-            end
-        end
-        -- The synced viewer runs for ANY track that has timestamps. It used to
-        -- sit inside the `current_id == item.id` test above, because the `end`
-        -- closing this for-loop was missing -- which silently reparented the
-        -- whole block and left `if timestamps` with no else at all. A track with
-        -- plain (unsynced) lyrics therefore fell through both branches and
-        -- view_lyrics returned without opening a window, which is what made
-        -- "Lyrics" in the action menu look like it did nothing.
+        -- No cursor is computed here: the UI keeps its own, and marks the sung
+        -- line from the playback position it already interpolates.
         while true do
             ::lr_next::
             local sel_line = ui_menu(display_lines,
@@ -8110,14 +8078,6 @@ view_lyrics = function(item)
                  theme=THEME_LYR})
             if jump_to_track_pending then
                 jump_to_track_pending = false
-                if current_track and current_track.id == item.id then
-                    local pos = get_playerctl_position()
-                    local best = 1
-                    for i, ts in ipairs(timestamps) do
-                        if ts <= pos then best = i end
-                    end
-                    pre_sel = best - 1
-                end
                 goto lr_next
             end
             if not sel_line then
@@ -8178,7 +8138,6 @@ view_lyrics = function(item)
                 else
                     ui_say("Track changed while viewing lyrics")
                 end
-                pre_sel = found_idx - 1
             end
         end
     else
@@ -10043,37 +10002,38 @@ end
 --
 -- A binding with no key is a note about the one above it.
 Util.KEYBINDS = {
-    {key = "tab", desc = "trail menu / history"},
+    -- Mirrors ui/Keymap.qml, which is what actually binds them. A key added
+    -- there is a row added here, or the sheet stops being a complete answer.
     {key = "return", desc = "select -- play/pause/resume selected item"},
-    {key = "delete", desc = "delete entry in search or trail history"},
-    {key = "escape", desc = "clear filter, then hide spoot"},
-    {key = "backspace", desc = "clear filter, then back one level"},
-    {key = "alt = / -", desc = "quick seek + / - 10s"},
     {key = "shift return", desc = "hovered item's action menu"},
-    {key = "alt delete", desc = "clear session"},
+    {key = "escape", desc = "clear filter, close a card, then hide spoot"},
+    {key = "backspace", desc = "clear filter, then back one level"},
+    {key = "delete", desc = "delete entry in search or trail history"},
+    {key = "space", desc = "play / pause -- unless you are typing"},
+    {key = "tab", desc = "the trail menu -- every step of the whole path"},
+    {key = nil, desc = "or click a step in the breadcrumb itself"},
+    {key = "home / end", desc = "first / last row"},
+    {key = "page up / down", desc = "a page at a time"},
     {key = "alt return", desc = "jump to main menu"},
-    {key = "alt e", desc = "jump to seek menu"},
+    {key = "alt delete", desc = "clear session"},
     {key = "alt f", desc = "search, from anywhere"},
     {key = "alt l", desc = "jump to liked tracks"},
     {key = "alt p", desc = "jump to recently played"},
-    -- Bound since the keymap was written and never listed here, which made the
-    -- sheet a partial answer to the one question it exists to answer.
     {key = "alt t", desc = "jump to top tracks"},
     {key = "alt q", desc = "jump to your queue"},
-    {key = "space", desc = "play / pause -- unless you are typing"},
-    {key = "alt y", desc = "jump to lyrics of current track"},
-    {key = "alt a", desc = "jump to albumart of current track"},
+    {key = "alt e", desc = "seek the current track"},
+    {key = "alt y", desc = "lyrics of the current track"},
+    {key = "alt a", desc = "albumart of the current track"},
     {key = "alt r", desc = "cycle repeat modes"},
     {key = "alt s", desc = "toggle shuffle"},
-    {key = "alt g", desc = "open spotify web link"},
+    {key = "alt = / -", desc = "quick seek + / - 10s"},
+    {key = "alt g", desc = "open the spotify link on the clipboard"},
     {key = "alt c", desc = "jump to the playing track -- from any view"},
     {key = nil, desc = "walks back to the list it was played from"},
     {key = nil, desc = "or opens playback if that list is gone"},
     {key = "alt left / right", desc = "walk back and forth along the trail"},
     {key = nil, desc = "non-destructive -- the trail stays whole"},
     {key = "ctrl left / right", desc = "previous / next track"},
-    {key = "tab", desc = "the trail menu -- every step of the whole path"},
-    {key = nil, desc = "or click a step in the breadcrumb itself"},
     -- Last, and about this sheet: the one binding you cannot find by reading the
     -- sheet unless the sheet says it.
     {key = "f1", desc = "this list, from anywhere"}
@@ -10121,14 +10081,6 @@ local function view_system()
                    -- themselves. Restarting it by hand fixed nothing that was
                    -- still broken.
                    "Quit"}
-    -- Rows 2 to 4 are patched in place below as the volume, bitrate and track
-    -- cache change, so the cursor is remembered by these stable keys rather than
-    -- by the label (which no longer matched once it had been rewritten). See
-    -- Util.pos_row. Index-parallel with `items`: a row added to one is a row
-    -- added to the other, at the same position.
-    local keys = {"keybinds", "volume", "bitrate", "trackcache", "uisettings",
-                  "trailjump", "clearsession", "refresh", "reauth", "deviceauth",
-                  "kill"}
     Util.scope({view="system"}, function()
     while true do
         local sel = ui_menu(items, {prompt="System", theme=THEME_SUB})
@@ -10434,7 +10386,7 @@ require("lib.trail")(Util, {json = json, replay_session = replay_session, view_l
                             ui_say = function(...) return ui_say(...) end})
 -- What a first run still owes -- programs, the login, the device: see lib/setup.lua.
 require("lib.setup")(Util, {P = P, read_file = read_file, shell = shell,
-                            shell_quote = shell_quote, trim = trim})
+                            shell_quote = shell_quote, trim = trim, safe_decode = safe_decode})
 
 -- WHO WATCHES, and whether it needs a process to do it. Embedded, the host runs
 -- both watchers itself -- an MPRIS subscription and a 25s timer, posting
@@ -10924,8 +10876,9 @@ function Util.recent_tick()
     -- inside the host, where Util.detached is false, so without this a refused
     -- tick spoke to whoever happened to be looking. See api_get's 429 branch.
     Util.polling = true
-    local d = api_get("me/player", Util.with_market("additional_types=episode"))
+    local pok, d = pcall(api_get, "me/player", Util.with_market("additional_types=episode"))
     Util.polling = false
+    if not pok then error(d, 0) end
     if not d or type(d) ~= "table" then return false end
     return Util.recent_record(d.item, d.progress_ms)
 end
@@ -10963,7 +10916,6 @@ end
 -- ...and the bookkeeping that feeds it, so both callers count the same way.
 function Util.recent_note(got)
     Util.recent_idle = got and 0 or math.min((Util.recent_idle or 0) + 1, 12)
-    Util.recent_last = os.time()
     return got
 end
 
@@ -12088,7 +12040,6 @@ function Util.serve_run(name, fn, args)
     -- is the very failure keepCtx above exists to undo for serve_ctx_item. Its
     -- lifetime is "the last backdrop resolved", which is exactly what the gesture
     -- means by "this".
-    Util.serve_answered_depth = nil
     -- FROM EMPTY, every time. The replay pushes a scope per step as it walks the
     -- path, so a stack left over from the previous request would be pushed on top
     -- of rather than replaced -- the crumb grew across unrelated requests
@@ -13191,13 +13142,19 @@ function Util.serve_control(args)
         end
     elseif a == "shuffle" then toggle_shuffle()
     elseif a == "repeat" then toggle_repeat()
-    elseif a == "playpause" then Util.mpris{op = "play-pause", player = "spotifyd"}
-    elseif a == "next" then Util.mpris{op = "next", player = "spotifyd"}
-    elseif a == "prev" then Util.mpris{op = "previous", player = "spotifyd"}
+    elseif a == "playpause" or a == "next" or a == "prev" then
+        local op = (a == "playpause" and "play-pause") or (a == "next" and "next") or "previous"
+        if Util.mpris{op = op, player = "spotifyd"}.ok then Util.played_here = true end
+        -- THE REPLY IS READ AS THE NEW STATE (see main.qml's control), so the
+        -- one-second memos must not answer it. Left alone, a pause came back
+        -- saying "Playing" and the strip flipped back until the next poll.
+        Util.playerctl_bust()
+        mem_bust("_playerctl_pos")
     elseif a == "seek" then
         -- Seconds, signed. playerctl takes "10+" / "10-" rather than a sign.
         local by = tonumber(args.by) or 10
         Util.mpris{op = "seek", value = by, player = "spotifyd"}
+        mem_bust("_playerctl_pos")
     elseif a == "volume" then
         -- RELATIVE OR ABSOLUTE. The wheel nudges (`by`), a slider would set
         -- (`to`), and the arithmetic is here rather than in the UI because only

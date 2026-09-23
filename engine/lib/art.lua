@@ -164,11 +164,15 @@ return function(Util)
     -- code == nil means curl reported nothing for this url at all: connection
     -- refused, DNS, or timeout. `truncated` is a size mismatch against the
     -- Content-Length, i.e. the transfer was cut short.
+    -- Neither transport ever says nil: a request the clock cut off, or one that
+    -- never started, comes back as "0" from the host and "000" from curl. Both
+    -- are the never-reached-the-server case, and were being written off as dead.
     Util.art_retry_worthwhile = function(code, truncated)
         if code == nil then return true end          -- never reached the server
         if truncated then return true end            -- arrived short
         local n = tonumber(code)
         if not n then return false end
+        if n == 0 then return true end               -- no answer at all
         return n == 408 or n == 429 or n >= 500      -- server said "later"
     end
 end

@@ -136,21 +136,24 @@ return function(Util, ctx)
         -- show. Falling back rather than obeying blindly is what keeps Tab from
         -- landing you on an empty list: with no trail there is nothing to cross TO,
         -- and the menu says so on its own hint line instead.
+        local have_hist = #(Util.menu_hist_rows(stack)) > 0
         local mode = have_trail and "trail" or "history"
-        if mode_arg == "history" then mode = "history"
+        if mode_arg == "history" and have_hist then mode = "history"
         elseif mode_arg == "trail" and have_trail then mode = "trail" end
-        if not have_trail and #(Util.menu_hist_rows(stack)) == 0 then
+        if not have_trail and not have_hist then
             ui_say("You left no trail")
             replay_session()
             return
         end
         while true do
             local labels, chosen
+            -- Once per pass: every use below reads this one answer.
+            local hist_rows, hist_entries = Util.menu_hist_rows(stack)
             if mode == "trail" then
                 labels = {}
                 for i, o in ipairs(opts) do labels[i] = o.label end
             else
-                labels, chosen = Util.menu_hist_rows(stack)
+                labels, chosen = hist_rows, hist_entries
             end
             do
                 -- These two menus are the only ones that suppress the breadcrumb:
@@ -165,7 +168,7 @@ return function(Util, ctx)
                 -- which would advertise a switch back to the mode you are already in.
                 local other
                 if mode == "trail" then
-                    if #(Util.menu_hist_rows(stack)) > 0 then other = "history" end
+                    if #hist_rows > 0 then other = "history" end
                 elseif have_trail then
                     other = "trail"
                 end

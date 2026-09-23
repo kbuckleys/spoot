@@ -28,7 +28,7 @@ return function(Util, ctx)
     -- transport failure), so the two agree on every value curl can produce, and
     -- loosening nothing means this cannot reject a response the old code accepted.
     function Util.is2xx(r)
-        return r ~= nil and r:match("2..") ~= nil
+        return r ~= nil and tostring(r):match("^2%d%d$") ~= nil
     end
 
     -- Every authenticated write to the Spotify API (18 call sites).
@@ -128,6 +128,15 @@ return function(Util, ctx)
     function Util.shared_put(name, file, v)
         if Util.host and Util.host.shared then Util.host.shared(name, v); return end
         if v == nil then os.remove(file) else Util.secure_write(file, v) end
+    end
+
+    -- ONE WRITER AT A TIME, across every Lua state in the process -- the engine
+    -- and each job are separate states on separate threads, and a file they all
+    -- read-merge-write loses whichever update lands first. The host's named lock
+    -- when there is one; outside it there is one process and nothing to race.
+    function Util.locked(name, fn)
+        if Util.host and Util.host.with_lock then return Util.host.with_lock(name, fn) end
+        return fn()
     end
 
     function Util.rate_cool()
@@ -312,13 +321,23 @@ return function(Util, ctx)
     Util.REQLOG = os.getenv("SPOOT_REQLOG")
     function Util.req_log(req, code)
         if not Util.REQLOG then return end
+        -- Private from the first byte: it names every request the account made.
+        if not Util._reqlog_made then
+            Util._reqlog_made = true
+            local e = io.open(Util.REQLOG, "a")
+            if e then e:close(); os.execute("chmod 600 " .. shell_quote(Util.REQLOG) .. " 2>/dev/null") end
+        end
         local f = io.open(Util.REQLOG, "a")
         if not f then return end
         -- The BODY too, for writes: a play is entirely described by its body -- which
         -- context, which offset -- and without it the log says a play happened but
-        -- not what it asked for.
+        -- not what it asked for. EXCEPT a login's: a refresh token or an
+        -- authorization code is a credential, and a debug log is not a place for one.
         local body = req.body
         if type(body) == "table" then body = "(table)" end
+        if tostring(req.url or ""):match("^https?://accounts%.spotify%.com") then
+            body = body and "(redacted)" or nil
+        end
         f:write(string.format("%s\t%s\t%s\t%s\t%s\n", tostring(Util.mono and Util.mono() or os.time()),
             tostring(code or "-"), tostring(req.method or "GET"), tostring(req.url or "?"),
             tostring(body or "")))
@@ -357,21 +376,43 @@ return function(Util, ctx)
             return r
         end
         local hdr = Util.api_hdr_path()
-        -- Backgrounded, output discarded, nothing awaited -- the shell's answer to
-        -- what `bg` asks for.
-        local bg_tail = req.bg and " > /dev/null 2>&1 &" or ""
         local c = {"curl -s --max-time ", tostring(req.timeout or 10)}
         if req.compressed then c[#c+1] = " --compressed" end
-        c[#c+1] = " -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}'"
-        if req.method and req.method ~= "GET" then c[#c+1] = " -X " .. req.method end
-        for _, h in ipairs(req.headers or {}) do c[#c+1] = " -H " .. shell_quote(h) end
-        if req.body ~= nil then c[#c+1] = " -d " .. shell_quote(req.body) end
+        -- No header dump for `bg`: nothing reads it, and a backgrounded curl
+        -- writing the shared file could clobber a foreground request's Retry-After.
+        if not req.bg then c[#c+1] = " -D " .. shell_quote(hdr) end
+        c[#c+1] = " -w '\\n%{http_code}'"
+        if req.method and req.method ~= "GET" then c[#c+1] = " -X " .. shell_quote(req.method) end
+        -- HEADERS IN A CONFIG FILE, not on argv. An Authorization header on the
+        -- command line is readable by every local user through /proc for as long
+        -- as the request runs; the config sits in the 0700 scratch directory,
+        -- which is how Util.curl_batch has always sent its token.
+        local cfg
+        if req.headers and #req.headers > 0 then
+            cfg = Util.tmpfile("curlhdr")
+            local f = io.open(cfg, "w")
+            if f then
+                for _, h in ipairs(req.headers) do
+                    f:write('header = "', Util._curl_cfg_quote(h), '"\n')
+                end
+                f:close()
+                c[#c+1] = " -K " .. shell_quote(cfg)
+            else
+                cfg = nil
+            end
+        end
+        -- --data-raw, not -d: -d reads a FILE when the body starts with "@".
+        if req.body ~= nil then c[#c+1] = " --data-raw " .. shell_quote(req.body) end
         c[#c+1] = " " .. shell_quote(req.url)
         if req.bg then
-            os.execute(table.concat(c) .. bg_tail)
+            -- Backgrounded, output discarded, nothing awaited -- and the config
+            -- removed once curl has finished with it.
+            os.execute("{ " .. table.concat(c) .. " > /dev/null 2>&1"
+                .. (cfg and ("; rm -f " .. shell_quote(cfg)) or "") .. "; } &")
             return {code = 0, body = "", headers = ""}
         end
         local r = shell(table.concat(c)) or ""
+        if cfg then os.remove(cfg) end
         local out = {code = tonumber(r:match("\n(%d+)\n?$")) or 0,
                      body = r:match("^(.-)\n%d+\n?$") or "",
                      headers = read_file(hdr) or ""}
@@ -517,6 +558,8 @@ return function(Util, ctx)
             local m = Util.mpris_split(run("metadata -f " .. shell_quote(Util.mpris_fmt)))
             if not m then return {ok = false} end
             return {ok = true, value = m}
+        elseif (op == "setvol" or op == "setpos" or op == "seek") and tonumber(v) == nil then
+            return {ok = false}
         elseif op == "setvol" then
             return did("volume " .. string.format("%.2f", v))
         elseif op == "setpos" then
@@ -525,6 +568,10 @@ return function(Util, ctx)
             -- playerctl spells a relative seek "10+" / "10-" rather than with a sign.
             return did("position " .. string.format("%.2f", math.abs(v)) .. (v < 0 and "-" or "+"))
         end
+        -- Named verbs only: `op` goes onto a shell line unquoted.
+        local VERBS = {play = true, pause = true, ["play-pause"] = true,
+                       next = true, previous = true, stop = true}
+        if not VERBS[op] then return {ok = false} end
         return did(op)
     end
 
