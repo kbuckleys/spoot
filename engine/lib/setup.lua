@@ -100,8 +100,8 @@ return function(Util, ctx)
     -- SAYING WHAT IS HAPPENING WHILE THE PANEL IS HIDDEN. Both logins put a page in
     -- your browser, and the UI takes itself off screen for the duration -- so its own
     -- notice bar is exactly what you cannot see. Two unexplained browser tabs in a
-    -- row is a worse first run than two explained ones. Silent if notify-send is not
-    -- installed, which is why it is optional rather than required.
+    -- row is a worse first run than two explained ones. Silent where no
+    -- notification daemon answers, which is why it is optional rather than required.
     function Util.setup_notify(title, body)
         Util.notify{title = title, body = body or ""}
     end

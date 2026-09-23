@@ -31,13 +31,6 @@ return function(Util, ctx)
         return r ~= nil and tostring(r):match("^2%d%d$") ~= nil
     end
 
-    -- Every authenticated write to the Spotify API (18 call sites).
-    --   timeout  --max-time, default 5; player endpoints pass 3. Keep the split.
-    --   body     table is encoded, string sent as-is. Adds Content-Type.
-    --   len0     bodyless PUT/POST endpoints 411 without it. Ignored if body set.
-    --   raw      return the response body, not the status (create-playlist).
-    -- Returns the status string, or the body under raw, or nil. Test with
-    -- Util.is2xx -- "403" is truthy.
     -- ONE REQUEST, DESCRIBED RATHER THAN SPELLED OUT.
     --
     -- Six sites used to hand-build a curl command line. A request now says what it
@@ -435,16 +428,6 @@ return function(Util, ctx)
     Util.mpris_fmt = "{{title}}\x1f{{artist}}\x1f{{album}}\x1f{{mpris:artUrl}}"
         .. "\x1f{{mpris:trackid}}\x1f{{mpris:length}}"
 
-    -- The one reader of Util.mpris_fmt. The daemon's --follow stream emits a line
-    -- in this format per track change, so it splits them with this too rather than
-    -- carrying a second copy of the field order.
-    -- ONE NOTIFICATION, wherever it is raised from. Embedded this is the D-Bus call
-    -- that notify-send makes after paying for a process to make it; outside, it is
-    -- notify-send. Three sites raised notifications with three hand-built command
-    -- lines, which is how one of them ended up as the only one that could carry an
-    -- icon.
-    --
-    -- `urgency` is the spec's: 0 low, 1 normal, 2 critical.
     -- WHAT THE DAEMON ON THIS MACHINE CAN DO, asked once.
     --
     -- Every toast was shaped for a daemon that parses markup, draws action buttons
@@ -485,6 +468,13 @@ return function(Util, ctx)
         return "\n"
     end
 
+    -- ONE NOTIFICATION, wherever it is raised from. Embedded this is the D-Bus call
+    -- that notify-send makes after paying for a process to make it; outside, it is
+    -- notify-send. Three sites raised notifications with three hand-built command
+    -- lines, which is how one of them ended up as the only one that could carry an
+    -- icon.
+    --
+    -- `urgency` is the spec's: 0 low, 1 normal, 2 critical.
     function Util.notify(o)
         if Util.host and Util.host.notify then
             if Util.host.notify(o) then return true end
@@ -521,6 +511,9 @@ return function(Util, ctx)
         os.execute("sleep " .. tostring(secs))
     end
 
+    -- The one reader of Util.mpris_fmt. The daemon's --follow stream emits a line
+    -- in this format per track change, so it splits them with this too rather than
+    -- carrying a second copy of the field order.
     function Util.mpris_split(line)
         if not line then return nil end
         local title, artist, album, art, tid, len = trim(line):match(
@@ -575,6 +568,13 @@ return function(Util, ctx)
         return did(op)
     end
 
+    -- Every authenticated write to the Spotify API (18 call sites).
+    --   timeout  --max-time, default 5; player endpoints pass 3. Keep the split.
+    --   body     table is encoded, string sent as-is. Adds Content-Type.
+    --   len0     bodyless PUT/POST endpoints 411 without it. Ignored if body set.
+    --   raw      return the response body, not the status (create-playlist).
+    -- Returns the status string, or the body under raw, or nil. Test with
+    -- Util.is2xx -- "403" is truthy.
     function Util.api_write(verb, url, token, opts)
         opts = opts or {}
         local headers = {"Authorization: Bearer " .. token}

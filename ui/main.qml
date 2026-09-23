@@ -14,6 +14,7 @@ import QtQuick.Shapes
 import QtQuick.Effects
 import "views"
 import "components"
+import "Mark.js" as Mark
 
 Window {
     id: root
@@ -38,15 +39,6 @@ Window {
     // Rows wrap into `columns`, so the height is the number of ROWS needed,
     // capped at the theme's `lines` -- which is how rofi reads those two numbers
     // together rather than as a flat maximum.
-    // `overlayUp` STOOD HERE, and with it every branch that let a sheet decide the
-    // panel's shape: the panel took the sheet's width and height, the column of
-    // bars inside it was faded out so it would not lay itself out past the new
-    // bottom edge, and the body borrowed the sheet's line count.
-    //
-    // A sheet is a CARD now (see sheetCard), floating over an untouched panel the
-    // way the image viewer and the action menus do. There is nothing left for the
-    // panel to do about one, so all of it is gone -- including snapToCursor, which
-    // existed only to put the list back after the panel had finished resizing.
     readonly property int bodyHeight: {
         // THE ART VIEWER AND THE SHEETS DO NOT TOUCH THIS. Both are cards
         // floating over the menu, so the menu underneath keeps the shape it had
@@ -65,19 +57,8 @@ Window {
         return root.usedRows * (layout === "grid" ? zenon.cellHeightFor(root.cellW)
                                                   : zenon.rowHeight)
     }
-    // A CARD USED TO GROW THE PANEL. `ctxExtra` stood here: the room the card
-    // needed beyond what the menu already had, added to the panel so the card had
-    // somewhere to be. It could not be added to the LIST -- a RowList is a
-    // GridView flowing top to bottom, so changing its height changes how many
-    // rows fit in a column and the whole list re-flows underneath the card -- so
-    // it went to the panel instead and the list was centred in the extra space.
-    //
-    // Which is why a card over a SHORT list shoved that list upward: three rows
-    // of menu, a twelve-row card, and the panel grew nine rows to hold it with the
-    // three rows floating in the middle. The card is not inside the panel any
-    // more (see ctxLayer, now a child of the panel rather than of the body), so
-    // there is nothing to make room for and the panel never changes shape when a
-    // card opens. See root.cardY, which is what keeps it on screen instead.
+    // A card never grows the panel: it is a child of the panel floating over the
+    // list, not inside it. See root.cardY, which is what keeps it on screen.
     // Every bar in the column pays for itself, and each collapses to nothing
     // when it has nothing to say -- the input bar outside search, the message
     // bar with no caption and no trail, the notification between notifications,
@@ -396,6 +377,8 @@ Window {
         return id
     }
     property var failing: ({})
+    // The host's Shell exists in the app and not under qmlscene or a test loader.
+    readonly property bool hasShell: typeof Shell !== "undefined"
 
     // --- OPENING INSTANTLY ---------------------------------------------------
     // A menu is a place, not a payload: asking for one puts you there straight
@@ -413,7 +396,6 @@ Window {
     property var drawIds: ({})
     // Waiting long enough to say so. Drives the glow and nothing else.
     property bool blanked: false
-    readonly property bool loading: root.inFlight > 0
     // The rows are NOT cleared any more. Clearing them was how the body stopped
     // showing the previous menu during a wait, and the transition does that now
     // -- it fades the body out on its way to the next menu and leaves it out
@@ -535,7 +517,7 @@ Window {
         // output and takes every pointer event on it, so a browser tab opened
         // underneath could not be clicked; and the login is a page you have to
         // read, not a dialog you dismiss. Hiding hands back the keyboard as well.
-        if (typeof Shell !== "undefined") Shell.conceal()
+        if (root.hasShell) Shell.conceal()
         setupGuard.restart()
         root.call("setup", {}, root.finishSetup, function () { root.finishSetup(null) })
     }
@@ -543,7 +525,7 @@ Window {
         setupGuard.stop()
         root.setupBusy = false
         root.setupNeed = null
-        if (typeof Shell !== "undefined") Shell.reveal()
+        if (root.hasShell) Shell.reveal()
         if (!r) { root.notify("Sign-in failed"); return }
         var lack = root.toArray(r.lack)
         if (lack.length > 0) {
@@ -570,7 +552,7 @@ Window {
         id: setupGuard
         interval: 330000
         onTriggered: {
-            if (typeof Shell !== "undefined") Shell.reveal()
+            if (root.hasShell) Shell.reveal()
             root.notify("Sign-in is taking a while \u2014 finish it in your browser")
         }
     }
@@ -708,7 +690,7 @@ Window {
             // A play STARTED. The trail is not settled yet -- the step that
             // played is still on it and the draw that drops it has not arrived
             // -- so this only arms the record; applyDraw takes it once the trail
-            // describes the menu again. See originId.
+            // describes the menu again. See armOrigin.
             else if (name === "played") root.armOrigin = data.id || ""
             // ART BELONGS TO ROWS THAT ARE NOT ON SCREEN YET. The engine flushes
             // the rows first and follows with their covers, so while a draw is
@@ -1294,7 +1276,6 @@ Window {
             var oid = root.armOrigin.length ? root.armOrigin : root.playback.id
             var opos = root.trailEnd()
             root.armOrigin = ""
-            root.originId = oid
             root.originHops = root.hops.slice(0, opos)
             root.originPos = opos
         }
@@ -1979,12 +1960,8 @@ Window {
     // scrim, same card, same picture slot -- and a different shape, place and
     // caption, because it is a thing working rather than a thing to look at.
     readonly property bool listenMode: root.overlayTheme === "listen"
-    // THE PICTURE'S SIZE, TAKEN ONCE WHEN IT OPENS. This used to be read live off
-    // root.g -- which falls back to the MENU's geometry the moment overlayTheme
-    // clears, and a menu theme names no icon, so it landed on the 400 default. On
-    // the way out the listener's 300px image therefore jumped to 400 and the card
-    // stretched upward as it faded. An overlay's size is settled when it opens and
-    // has no business changing while it is up.
+    // THE PICTURE'S SIZE, TAKEN ONCE WHEN IT OPENS. An overlay's size is settled
+    // when it opens and has no business changing while it is up.
     // LATCHED WHEN THE OVERLAY OPENS, and deliberately not derived from anything.
     // listenMode flips the instant overlayTheme clears -- which is WHILE the card
     // is still fading out -- so every piece of geometry reading it recomputed
@@ -1994,10 +1971,6 @@ Window {
     //
     // Behaviour reads listenMode, which must flip at once -- the panel has to come
     // back, the poll has to stop. SHAPE reads these, which must not.
-    // `artIsListen` STOOD HERE, latched so the card's geometry would not recompute
-    // while it faded out -- the listener and the viewer were one card, so every
-    // number in it had two answers and the wrong one arrived mid-fade. They are
-    // two items now; this card is the viewer, and it has one answer for everything.
     property int artIcon: 400
     property int artPad: 5
     // WHAT SPOOT SAYS WHILE IT WORKS. A fixed line under a spinner is furniture;
@@ -2087,9 +2060,6 @@ Window {
     // -- left-aligns the lines it wraps onto. Only a text item centers each of
     // its own lines, which is what the bar has always done on one line and now
     // keeps doing on three.
-    function esc(s) {
-        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    }
     // text-decoration:none because Qt underlines anchors by default, and an
     // explicit colour because it would otherwise paint them all link-blue.
     function crumbSpan(col, body, href) {
@@ -2143,7 +2113,7 @@ Window {
             // The step you are ON says it in full; every step behind it keeps the
             // short name it is addressed by. See root.crumbHere.
             var name = (last && root.crumbHere.length) ? root.crumbHere : root.crumb[i]
-            out += root.crumbSpan(col, root.esc(name), last ? undefined : i)
+            out += root.crumbSpan(col, Mark.esc(name), last ? undefined : i)
         }
         // What you stepped back OUT of, held at the arrow's own grey so it reads
         // as a path not taken rather than another destination.
@@ -2168,7 +2138,7 @@ Window {
             out += root.crumbSpan(root.crumbHover === k ? zenon.foreground
                                                         : zenon.crumbArrow,
                                   root.crumbSep((root.fullRoots || []).indexOf(k) >= 0)
-                                  + root.esc(root.crumbAhead[j]), k)
+                                  + Mark.esc(root.crumbAhead[j]), k)
         }
         return out
     }
@@ -2219,12 +2189,6 @@ Window {
     // AN OVERLAY THAT *IS* THE PANEL BRINGS ITS OWN GEOMETRY -- a details sheet
     // slides over the rows and takes the whole window, so the window becomes the
     // shape the sheet asks for.
-    // NOTHING OVERRULES IT ANY MORE. This used to switch on `overlayTheme`, which
-    // meant an artist impression squeezed the menu behind it from 1000px down to
-    // art.rasi's 640 and sprang it back on close -- the main window being
-    // compressed. That was narrowed to sheets, and now that a sheet floats too
-    // there is no overlay left that reshapes the panel: `g` is simply the menu's.
-    readonly property var g: root.menuG
     // ...and the MENU's own geometry, which an overlay never overrules. The two
     // used to be one, and everything that lays out the body read the merged
     // answer -- so an image card floating over a list silently relaid the list
@@ -2500,7 +2464,6 @@ Window {
     // Alt+c has to restore: a position to walk to if the list is still on the
     // trail, and a segment to re-enter if it is not.
     property string armOrigin: ""
-    property string originId: ""
     property var originHops: []
     property int originPos: 0
     // Whether the recorded origin is still a prefix of where we are -- if it is,
@@ -2535,11 +2498,8 @@ Window {
     // WHERE YOU LEFT OFF. Empty as soon as either of the above says the question
     // has been answered, which is why no view needs to know any of this.
     //
-    // A `replaySession` TEST STOOD HERE, gating these on the setting from the UI
-    // side. The engine answers it now -- with Session Replay off and nothing
-    // played this session, Util.serve_playback reports no track at all -- so
-    // `playback.id` is already empty and a second copy of the rule over here was
-    // one more place to keep in agreement with it.
+    // Session Replay is the engine's to answer: with it off and nothing played
+    // this session, Util.serve_playback reports no track, so `playback.id` is empty.
     readonly property string lastId:
         (root.playbackLive || root.picked) ? "" : (root.playback.id || "")
     readonly property string lastAlbumId:
@@ -2726,11 +2686,6 @@ Window {
         root.artPath = ""
         root.overlayTheme = ""
         root.listenArming = false
-        // A CALL TO snapToCursor STOOD HERE, putting the list back after a sheet
-        // had finished resizing the panel: every column boundary moved with it,
-        // so the cursor's row was no longer where the scroll position said it
-        // was, and the list showed two half-columns of text. Nothing resizes the
-        // panel any more -- see sheetCard -- so there is nothing to put back.
     }
 
     // Overlays (art, sheets) arrive as EVENTS, before the response that carries
@@ -2847,7 +2802,7 @@ Window {
         }
         // The surface goes away only once the animation has played. Hiding first
         // and animating after would animate nothing, in a window nobody can see.
-        onFinished: if (typeof Shell !== "undefined") Shell.conceal()
+        onFinished: if (root.hasShell) Shell.conceal()
     }
     function showPanel() {
         root.opened = true
@@ -2921,9 +2876,9 @@ Window {
             // monitor unplugged) must not hold the poll on forever.
             onEngagedChanged: root.dockEngaged(screenName, engaged)
             Component.onDestruction: root.dockEngaged(screenName, false)
-            onOpenRequested: if (typeof Shell !== "undefined") Shell.reveal()
+            onOpenRequested: if (root.hasShell) Shell.reveal()
             onActionsRequested: {
-                if (typeof Shell !== "undefined") Shell.reveal()
+                if (root.hasShell) Shell.reveal()
                 root.openCard("track-actions")
             }
             onControlRequested: function (action, by) {
@@ -2933,7 +2888,7 @@ Window {
     }
 
     Connections {
-        target: typeof Shell !== "undefined" ? Shell : null
+        target: root.hasShell ? Shell : null
         // Every summon, cold or warm: the host calls reveal() for both.
         function onRevealed() { root.showPanel() }
         // `spoot --listen` at a shell that is already resident. A SIGNAL rather
@@ -2952,7 +2907,7 @@ Window {
     // shallow band you have to touch. Asked once, because the answer is about the
     // session and cannot change inside it.
     readonly property bool cursorTracked:
-        (typeof Shell !== "undefined") && Shell.cursorWatchable()
+        (root.hasShell) && Shell.cursorWatchable()
     // Watched only while the panel is away, which is the only time a dock is up.
     // Spoot starts revealed, so the watch starts off and the first dismiss turns
     // it on -- no second Component.onCompleted needed (there is already one on
@@ -2963,7 +2918,7 @@ Window {
     // -- dock switched off included, where nothing reads the answer at all.
     // Settings arrive after load, so they re-decide it as well as `opened` does.
     function syncCursorWatch() {
-        if (typeof Shell !== "undefined")
+        if (root.hasShell)
             Shell.watchCursor(!root.opened && root.settings.dock !== false)
     }
     onOpenedChanged: root.syncCursorWatch()
@@ -3401,8 +3356,7 @@ Window {
         // next -- the answer became "nowhere to jump to", while the list it came
         // out of was sitting right there on the trail. The next track is playing
         // from the same place; where you came from does not change because the
-        // song did. originId is still recorded, and is still what a cold start
-        // restores, but it no longer has to match for the jump to be possible.
+        // song did.
         if (root.originPos > 0 || root.originHops.length) {
             root.rememberPos()
             root.seekPlaying = true
@@ -3768,9 +3722,7 @@ Window {
                 // NOTHING IS ASKED OF THE ENGINE WHEN THE TRACK CHANGES. The
                 // marker and the cover are both bound to root.playback, so
                 // autoplay moving on repaints two rows and one picture and
-                // touches nothing else. A redraw stood here, and it was the last
-                // rofi-shaped thing in the hot path: rebuilding a menu of 672
-                // rows in Lua to say that a marker had moved one row down.
+                // touches nothing else.
             })
         }
     }
@@ -4031,7 +3983,7 @@ Window {
         // black box that showed behind every cover. The viewer draws its own
         // card on the surface now (see the art viewer, below the panel), and the
         // panel just sits there being the menu.
-        width: root.g.width
+        width: root.menuG.width
         height: root.menuHeight
         // IT RESIZES SMOOTHLY between menus of different heights. It used to
         // snap, at the instant the held draw was applied -- which is invisible
@@ -4171,19 +4123,6 @@ Window {
             // showed as the album cover clipping the frame on the left.
             anchors.margins: zenon.borderWidth
 
-            // AN INPUT BAR STOOD HERE, first in the column, drawn only by the
-            // search view. It is a FLOATING FIELD now -- see promptCard, which was
-            // already exactly this for New Playlist and Rename and had no business
-            // being two things.
-            //
-            // Its removal is also the "solid corners behind the rounded corners in
-            // search". This bar was a transparent Item with no ground of its own,
-            // so the panel's rounded corner showed THROUGH it -- and the message
-            // bar below was told to drop its own rounding on the grounds that
-            // something was above it. The result was a rounded corner in the
-            // panel's ground with the message bar's lighter grey squared off
-            // immediately beneath it: two corners, one of them a box. With nothing
-            // above it, the message bar is the top of the panel and rounds like it.
             // --- message bar (ZENON `message`) ---------------------------------
             //
             // A Column inside an Item, rather than one Rectangle whose height was
@@ -4232,10 +4171,6 @@ Window {
                     var q = Math.max(1, message.lineW * 4)
                     return Math.round(p * q) / q
                 }
-                // A `feather` AND A `headStart` STOOD HERE, sizing the soft edge
-                // of the wash that used to fill this bar. The progress is a line
-                // along the top border now (see progressLine below) and a line has
-                // an end rather than a leading edge to hide.
                 // NO `visible: height > 0`. In Qt Quick an item's `visible`
                 // reports its EFFECTIVE visibility, so a false parent makes every
                 // child read false too -- and this bar's height is added up from
@@ -4566,19 +4501,9 @@ Window {
 
                 // WHAT IS PLAYING, AT THE TOP OF THE PANEL.
                 //
-                // THE TITLE ROW STOOD HERE and is gone. It named the menu you were
-                // already looking at -- "Liked Tracks", over a list of liked
-                // tracks, above a trail whose last step said it a third time --
-                // and it cost a row of chrome on every menu to do it. The trail
-                // below says where you are, and says it navigably; the floating
-                // cards keep their own titles, because a card really is about
-                // something you cannot otherwise see.
-                //
-                // AND THE NOW-PLAYING STRIP CAME UP HERE from the foot of the
-                // panel to take the row. It is the one line that is never about
-                // the menu, so it is the one line worth a permanent place -- and
-                // up here it sits on the progress wash behind it, which is what
-                // lets the bar itself be the progress bar.
+                // The now-playing strip holds the top row: it is the one line that
+                // is never about the menu, and it sits on the progress wash, which is
+                // what lets the bar itself be the progress bar.
                 Item {
                     id: nowRow
                     width: parent.width
@@ -4651,18 +4576,9 @@ Window {
 
                     // HOW FAR THE LINE HAS BEEN WALKED, and how far it can be.
                     //
-                    // A Flickable STOOD HERE and had to go. Not because it scrolled
-                    // wrong -- it scrolled fine -- but because the fade could not be
-                    // built over it: a ShaderEffectSource pointed at a Flickable
-                    // captures nothing useful and its `hideSource` does not hide the
-                    // contentItem the rows actually live in, so the effect drew an
-                    // empty texture while the original went on drawing underneath.
-                    // Measured it directly: a `brightness: -1` on the effect changed
-                    // not one pixel. A plain Item captures the way every other
-                    // masked thing in spoot does.
-                    //
-                    // What that costs is drag-to-scroll, which nothing asked for.
-                    // The wheel is the gesture, and it is one property either way.
+                    // A plain Item rather than a Flickable, because the fade is built
+                    // over it: a ShaderEffectSource pointed at a Flickable captures
+                    // nothing useful. The wheel scrolls it.
                     readonly property real maxScroll: Math.max(0, crumbRow.width - width)
                     property real scrollX: 0
                     onMaxScrollChanged: scrollX = Math.min(scrollX, maxScroll)
@@ -5330,11 +5246,8 @@ Window {
                 }
             }
 
-            // A NOW-PLAYING STRIP STOOD HERE, at the foot of the panel, and it
-            // has moved to the TOP -- see nowRow, which took the row the title
-            // used to have. Nothing replaces it down here: the column ends with
-            // the notice bar, and whatever is last in it wears the panel's bottom
-            // corners (see panel.footCorner).
+            // The column ends with the notice bar, and whatever is last in it wears
+            // the panel's bottom corners (see panel.footCorner).
         }
         // (the sheet card is declared after the floating cards, below)
 
@@ -5453,10 +5366,8 @@ Window {
             ClickShield { onDismissed: root.dismissTop() }
                 // The card's own, and this is the one no compositor could ever
                 // draw: the thing it has to sit on is inside the same surface.
-                // Twenty lines of grown-shape-capture-blur stood here and are
-                // now in Shadow.qml, which the panel and the art viewer share --
-                // see there for why a shadow is a bigger shape rather than a
-                // wide blur.
+                // See Shadow.qml, shared with the panel and the art viewer, for why
+                // a shadow is a bigger shape rather than a wide blur.
                 Shadow {
                     theme: zenon
                     target: ctxCard
@@ -5850,7 +5761,7 @@ Window {
             width: root.sheetRows.length
                    ? Math.min(keySheet.naturalWidth + zenon.sheetPad * 2,
                               root.width - zenon.sheetPad * 4)
-                   : root.g.width
+                   : root.menuG.width
             height: Math.min((root.sheetRows.length ? keySheet.contentHeight
                                                     : sheetText.implicitHeight)
                              + zenon.sheetPad * 2 + sheetTitleBar.height,
@@ -6139,16 +6050,8 @@ Window {
         // the card so the card's own contents stay clickable above it.
         ClickShield { onDismissed: root.dismissTop() }
 
-        // The menu is still there, just behind. Dark enough that the picture
-        // is what you are looking at, light enough that you can see you have
-        // not gone anywhere.
-        //
-        // A SCRIM STOOD HERE, dimming the whole output behind the card. It went
-        // for the listener first -- a small thing working away in a corner has no
-        // business blacking out the machine -- and then for the image viewer too,
-        // for the same reason: spoot is a panel on your desktop, not something
-        // that takes the desktop over while you look at a cover. Each card carries
-        // its own ground and its own frame, which is enough to sit on.
+        // No scrim over the whole output: spoot is a panel on your desktop, not
+        // something that takes it over while you look at a cover.
 
         // A CARD FLOATS, SO IT CASTS. The viewer and the listener are the last
         // two things on the surface that did not, and both of them are drawn over
@@ -6230,8 +6133,6 @@ Window {
             // and the 2px rule around it.
             color: zenon.cardGround
             radius: zenon.radius
-            border.width: 0
-            border.color: zenon.borderCol
             clip: true
 
             // THE FRAME AND THE TITLE BAR, declared before everything they sit
@@ -6268,15 +6169,6 @@ Window {
                 topRightRadius: zenon.radius - zenon.artBorder
             }
 
-            // THREE EXPANDING RINGS STOOD HERE, chasing each other outward on a
-            // stagger to say "receiving" during the thirty-second wait. They said
-            // it over the top of the thing that was already saying it -- the line
-            // underneath, which changes every time and is the part with any
-            // personality -- and they said it loudest: a ring sweeping past the
-            // words is what the eye follows, so the one-liner was furniture
-            // behind an animation. The glyph still breathes and the caption still
-            // pulses on the same beat; that is enough for a card that is asking
-            // you to wait.
 
             // THE CAPTION SITS ABOVE THE PICTURE, as it did in rofi: art.rasi
             // and imp.rasi both order their mainbox [message, listview].
@@ -6354,20 +6246,10 @@ Window {
                 smooth: true
                 opacity: status === Image.Ready ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 160 } }
-                // VIEWER ONLY. The listener's picture is a glyph with room
-                // around it on all four sides, so the card's corners are already
-                // clear of it and a mask would be a texture drawn for nothing.
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     maskEnabled: true
                     maskSource: artMask.texture
-                }
-                // A slow breath while listening, so the icon is alive too.
-                SequentialAnimation on scale {
-                    loops: Animation.Infinite
-                    running: root.overlayTheme === "listen"
-                    NumberAnimation { from: 1.0; to: 1.06; duration: 900; easing.type: Easing.InOutSine }
-                    NumberAnimation { from: 1.06; to: 1.0; duration: 900; easing.type: Easing.InOutSine }
                 }
             }
         }

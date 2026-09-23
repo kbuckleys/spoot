@@ -46,13 +46,9 @@ return function(Util, ctx)
         os.execute("rm -f " .. shell_quote(P.mass) .. "/search_*.json 2>/dev/null")
     end
 
-    -- One search, one shape: all four types in one request, P.max of each. Neither
-    -- the type list nor the limit is a parameter any more -- there is no second
-    -- caller to vary them, and both belonged to the type picker that is gone.
-    -- The one list of what a search covers. It used to be three hand-maintained
-    -- copies -- the type= parameter, the plural keys the response is unwrapped by,
-    -- and format_search_results' display order -- which is exactly the drift the
-    -- comments around here keep warning about. `key` is the plural Spotify answers
+    -- One search, one shape: every type below in one request, P.max of each.
+    -- The one list of what a search covers -- the type= parameter, the plural keys
+    -- the response is unwrapped by, and the display order all come from it. `key` is the plural Spotify answers
     -- with and the _stype every row is stamped with; `t` is the singular the
     -- endpoint asks for. Order is display order.
     Util.SEARCH_TYPES = {
@@ -159,7 +155,7 @@ return function(Util, ctx)
     end
 
     -- One search, described once. api_search issues it through api_get; the
-    -- parallel prefetcher below builds a curl for the same thing, and they must
+    -- parallel prefetcher (Util.search_prefetch) batches the same thing, and they must
     -- agree on the query, the cache key and the shape stored under it or the
     -- prefetch would fill a cache api_search never reads.
     function Util.search_query(query)

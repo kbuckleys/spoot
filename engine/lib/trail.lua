@@ -21,8 +21,8 @@ return function(Util, ctx)
     --
     -- Rows are rendered from Util.parts_from_stack, the same function the breadcrumb
     -- and mode 1 use, so a step can never be named one way here and another there.
-    -- The destination reads first and its context recedes behind it; rofi filters on
-    -- the whole line, so typing either one finds the row.
+    -- The destination reads first and its context recedes behind it; the filter
+    -- matches the whole line, so typing either one finds the row.
     function Util.menu_hist_rows(live)
         local rows, entries = {}, {}
         local function reachable(path) return Util.stack_prefix(path, live) end
