@@ -31,7 +31,7 @@ awk '/^local Util = \{\}/ { limit = NR }
     || { echo "FAIL: spoot.lua reaches Util before it is declared (above)"; exit 1; }
 
 # Shuffle is toggled twice so the account is left exactly as it was found.
-printf '%s\n' \
+REQS=$(printf '%s\n' \
   '{"id":1,"cmd":"ping"}' \
   '{"id":2,"cmd":"playback"}' \
   '{"id":3,"cmd":"control","args":{"action":"shuffle"}}' \
@@ -44,9 +44,14 @@ printf '%s\n' \
   '{"id":10,"cmd":"view","args":{"name":"saved-albums","path":[{"i":1,"alt":true}]}}' \
   '{"id":11,"cmd":"view","args":{"name":"search","path":["aurora"]}}' \
   '{"id":12,"cmd":"open","args":{"tile":"library"}}' \
-  '{"id":13,"cmd":"open","args":{"tile":"library","path":[1]}}' \
+  '{"id":13,"cmd":"open","args":{"tile":"library","path":[1]}}')
+# One id per line, numbered from 1, so the count IS the highest id expected.
+SMOKE_N=$(printf '%s\n' "$REQS" | grep -c '"id":')
+export SMOKE_N
+printf '%s\n' "$REQS" \
 | timeout 300 "${SPOOT_BIN:-../bin/spoot}" --serve 2>&1 | python3 -c '
-import json, sys
+import json, os, sys
+n = int(os.environ["SMOKE_N"])
 seen, bad = set(), []
 for line in sys.stdin:
     try: d = json.loads(line)
@@ -61,7 +66,7 @@ for line in sys.stdin:
     # quietly, so empty results are reported rather than passed over.
     if rows is not None and len(rows) == 0:
         bad.append((i, "answered ok but returned no rows"))
-missing = [i for i in range(1, 14) if i not in seen]
+missing = [i for i in range(1, n + 1) if i not in seen]
 for i, why in bad: print(f"  FAIL id={i}: {why}")
 for i in missing: print(f"  FAIL id={i}: no response")
 print("SMOKE OK" if not bad and not missing else "SMOKE FAILED")

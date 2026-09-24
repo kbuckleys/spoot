@@ -24,13 +24,10 @@ return function(Util)
     end
 
     -- The rendition of a PLAYLIST cover. The last byte of the prefix is a size code,
-    -- and there are FOUR, not the two this said before it was swept properly: 01 is
+    -- and there are FOUR: 01 is
     -- 64x64, 02 is 300x300 -- what the API hands back as images[1] -- 03 is 640x640
     -- and 04 is 1280x1280. 05 and 06 do not exist, so 04 is as large as a playlist
     -- gets. Confirmed against every playlist on this account.
-    --
-    -- The old comment claimed 03 was the top, which is why the full-screen viewer
-    -- spent its life upscaling 640 into a 1000px window.
     --
     -- Anchored to that exact prefix on purpose, and it matches barely half of what
     -- is cached: ab67706c personalised covers (one size only), album-art URLs, and
@@ -74,17 +71,14 @@ return function(Util)
         return tostring(os.time())
     end
 
-    -- Is this file something rofi can actually draw, and did all of it arrive?
+    -- Is this file something the UI can actually draw, and did all of it arrive?
     --
-    -- This used to accept JPEG and nothing else, which was wrong about what Spotify
-    -- serves: 2 of the 50 category icons are PNG, and roughly a tenth of playlist
-    -- search results are WebP (user-uploaded covers on image-cdn-*.spotifycdn.com).
-    -- Every one of those was downloaded, rejected, and queued again on the NEXT
-    -- draw, so Categories and playlist search each paid ~3 s per open, reopen and
-    -- back -- forever, since the file could never be accepted. rofi renders all
-    -- three formats (gdk-pixbuf identifies images by content, not by extension),
-    -- so the files are stored exactly as they arrive under their existing .jpg
-    -- path and the suffix is cosmetic.
+    -- Not only JPEG: 2 of the 50 category icons are PNG, and roughly a tenth of
+    -- playlist search results are WebP (user-uploaded covers on
+    -- image-cdn-*.spotifycdn.com). Rejecting those queued them again on every draw,
+    -- forever. Qt identifies images by content, not by extension, so the files are
+    -- stored exactly as they arrive under their .jpg path and the suffix is
+    -- cosmetic.
     --
     -- Still a real check, not a rubber stamp: each format is verified end-to-end so
     -- a truncated download is caught, which is the reason this function exists.
@@ -164,11 +158,15 @@ return function(Util)
     -- code == nil means curl reported nothing for this url at all: connection
     -- refused, DNS, or timeout. `truncated` is a size mismatch against the
     -- Content-Length, i.e. the transfer was cut short.
+    -- Neither transport ever says nil: a request the clock cut off, or one that
+    -- never started, comes back as "0" from the host and "000" from curl. Both
+    -- are the never-reached-the-server case, and were being written off as dead.
     Util.art_retry_worthwhile = function(code, truncated)
         if code == nil then return true end          -- never reached the server
         if truncated then return true end            -- arrived short
         local n = tonumber(code)
         if not n then return false end
+        if n == 0 then return true end               -- no answer at all
         return n == 408 or n == 429 or n >= 500      -- server said "later"
     end
 end

@@ -6,10 +6,8 @@
 
 // THE KEYMAP. One file, no rebuild to change it, and no ceiling.
 //
-// rofi allowed nineteen custom bindings and needed a whole subprocess (bsmon) to
-// notice a Backspace, because a dmenu process cannot report a key it does not
-// own. None of that applies now: every key below is just a key, several do
-// different things depending on what is on screen, and adding one costs a line.
+// Every key below is just a key, several do different things depending on what
+// is on screen, and adding one costs a line.
 //
 // `app` is the shell (main.qml). Everything routes through its functions rather
 // than reaching into views, so a binding cannot depend on which view is loaded.
@@ -29,6 +27,13 @@ Item {
         // ...and the listener, which no longer has a picture to be recognised by:
         // it is a pill now (see main.qml's listenPill), so `artPath` is empty
         // while it is up and this branch stopped covering it.
+        // A bare modifier or a held key's repeat is not a press anyone meant as
+        // "close": it is the start of a chord, or the key that opened this.
+        var bare = e.key === Qt.Key_Shift || e.key === Qt.Key_Control
+                || e.key === Qt.Key_Alt || e.key === Qt.Key_Meta
+                || e.key === Qt.Key_AltGr || e.key === Qt.Key_Super_L
+                || e.key === Qt.Key_Super_R
+        if (app.overlayAsked && (bare || e.isAutoRepeat)) { e.accepted = true; return }
         if (app.overlayAsked) {
             // GIVING UP ON THE LISTENER IS GIVING UP. You did not open spoot to
             // browse -- you asked it to name a song -- so cancelling before it
@@ -106,12 +111,9 @@ Item {
             case Qt.Key_Return:
             case Qt.Key_Enter:    app.openMain();                     break
             case Qt.Key_Delete:   app.goHome();                       break
-            // ALT+1..9 STOOD HERE, one key per breadcrumb step. Nine bindings
-            // to reach nine places, none of them labelled with its own number,
-            // and all of them a worse version of the two that already do this:
-            // Tab lists the whole path by name, and a crumb step is clickable.
-            // The steps are still reachable -- see app.jumpToCrumb, which both
-            // of those call.
+            // No Alt+1..9 per breadcrumb step: Tab lists the whole path by
+            // name, and a crumb step is clickable -- see app.jumpToCrumb, which
+            // both of those call.
             default: return
             }
             e.accepted = true
@@ -179,8 +181,8 @@ Item {
             break
         case Qt.Key_Return:
         case Qt.Key_Enter:
-            // Shift+Return is the action menu everywhere in the rofi build, and
-            // it is one flag on the same path step rather than a second route.
+            // Shift+Return is the action menu everywhere, and it is one flag on
+            // the same path step rather than a second route.
             app.activateCurrent(shift)
             break
         case Qt.Key_Space:

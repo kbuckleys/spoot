@@ -7,12 +7,8 @@
 // A thumbnail grid -- main.rasi's shape, and the one every album/artist/
 // playlist/show grid inherits.
 //
-// The cover loading is where rofi's worst bug goes to die. rofi's icon fetcher
-// caches by path with no invalidation, so a cover that landed a moment after the
-// menu opened was never looked at again -- which is why spoot.lua paints
-// placeholders rather than naming a file that is not on disk yet. QML's Image
-// reloads when the source changes and retries on its own, so a late cover simply
-// appears. The placeholder logic in the engine is harmless and stays until P4.
+// Covers the engine has not fetched yet arrive later as art events; QML's Image
+// reloads when the source changes, so a late cover simply appears.
 import QtQuick
 import "../Mark.js" as Mark
 import "../Scroll.js" as Scroll
@@ -79,6 +75,9 @@ GridView {
     // because closing whatever is in front is the app's business, not this
     // file's.
     property bool inert: false
+    // False while the panel is hidden: the last-pick glow is the one thing here
+    // that animates forever, and nobody is looking.
+    property bool live: true
     // A PRESS LANDED, whatever it turns out to mean. Reported so the app can
     // stop anything that MOVES this list while a click is being made: a
     // double click is two presses, and a list that scrolls between them hands
@@ -106,18 +105,7 @@ GridView {
         duration: grid.theme.wheelMs; easing.type: Easing.OutCubic
     }
 
-    // TWO GRADIENT BANDS STOOD HERE, half a cell tall, one against each edge of
-    // the viewport: a scrolling grid was supposed to fade its clipped rows into
-    // the panel rather than cut them. They were switched on by `atYBeginning`
-    // and `atYEnd` -- and the note beside them warned about precisely what they
-    // then did: "a permanent shadow there would just be a dark band".
-    //
-    // Measured on Main, which does not scroll at all: the panel ground under the
-    // covers ran from 15 down to 4 across the bottom half of the body. A shadow
-    // inside the window, cast by nothing, on the first view anyone sees.
-    //
-    // Gone rather than fixed. What they were for -- a row sliced mid-tile
-    // reading as damage -- is a real thing, and this was not the way: the panel
+    // NO EDGE FADE. A row sliced mid-tile would read as damage, but the panel
     // sizes itself to whole rows (see usedRows), so a grid is cut at a row
     // boundary, not through one.
 
@@ -175,7 +163,7 @@ GridView {
             border.color: grid.theme.fade(grid.theme.playing, 0.55)
             SequentialAnimation on opacity {
                 loops: Animation.Infinite
-                running: cell.lastPick
+                running: cell.lastPick && grid.live
                 NumberAnimation { from: 0.3; to: 1.0; duration: 1100
                                   easing.type: Easing.InOutSine }
                 NumberAnimation { from: 1.0; to: 0.3; duration: 1100
@@ -385,9 +373,8 @@ GridView {
                 if (grid.inert) { grid.rowClicked(index); return }
                 grid.currentIndex = index
                 if (m.button === Qt.RightButton) { grid.picked(index, true); return }
-                // THE THIRD BUTTON QUEUES. It had no meaning at all before --
-                // rofi had no third button to bind -- and "play this next" is
-                // the verb people reach for most often after play itself.
+                // THE THIRD BUTTON QUEUES: "play this next" is the verb people
+                // reach for most often after play itself.
                 if (m.button === Qt.MiddleButton) { grid.rowQueued(index); return }
                 grid.rowClicked(index)
             }

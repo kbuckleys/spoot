@@ -7,12 +7,21 @@
 cmake_minimum_required(VERSION 3.21)
 project(spoot LANGUAGES CXX)
 
+# OPTIMISED UNLESS ASKED OTHERWISE. With no build type CMake passes no -O at
+# all, and `setup` configures without one -- so the binary everyone runs was an
+# unoptimised build. Multi-config generators choose per build and are left alone.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Gui Qml Quick Network DBus)
-find_package(LayerShellQt REQUIRED)
+# 6.5: QtQuick.Effects (MultiEffect) and LayerShellQt's implicit layer surfaces.
+find_package(Qt6 6.5 REQUIRED COMPONENTS Gui Qml Quick Network DBus)
+# 6.1: Window::setScreen and setWantsToBeOnActiveScreen, which placement needs.
+find_package(LayerShellQt 6.1 REQUIRED)
 
 # The engine runs INSIDE this binary now -- see LuaWorker in src/main.cpp. Only
 # the interpreter is linked in; engine/spoot.lua is still read from disk at
@@ -31,7 +40,7 @@ foreach(_lua_mod lua5.5 lua-5.5 lua5.4 lua-5.4 lua)
     endif()
 endforeach()
 if(NOT LUA_FOUND)
-    message(FATAL_ERROR "no Lua found via pkg-config -- looked for lua5.5, lua5.4 and lua. "
+    message(FATAL_ERROR "no Lua found via pkg-config -- looked for lua5.5, lua-5.5, lua5.4, lua-5.4 and lua. "
                         "Install your distribution's Lua development package (5.4 or newer).")
 endif()
 
@@ -42,6 +51,7 @@ endif()
 # the guards can be run against it:
 #
 #   cmake -S . -B build-tsan -DSPOOT_TSAN=ON && cmake --build build-tsan
+#   export TSAN_OPTIONS=suppressions=$PWD/src/tsan.supp
 #   SPOOT_BIN=../bin/spoot-tsan sh engine/smoke.sh
 #   SPOOT_BIN=../bin/spoot-tsan sh engine/views.sh
 #   SPOOT_BIN=./bin/spoot-tsan  sh ui/check.sh

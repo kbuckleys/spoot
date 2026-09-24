@@ -13,23 +13,27 @@
 return function(Util, ctx)
     local P = ctx.P
     local read_file, shell, shell_quote, trim = ctx.read_file, ctx.shell, ctx.shell_quote, ctx.trim
+    local safe_decode = ctx.safe_decode
 
     -- ============================================================================
     -- WHAT THIS MACHINE HAS
     -- ============================================================================
     --
-    -- A dependency SYSTEM used to live here: a table of every program spoot shells
-    -- out to, a package manager per distribution, a way to become root, and an
-    -- installer that ran on first launch and raised an authentication dialog over
-    -- spoot's own surface to finish. All of it is gone, and the reason is that it
-    -- was in the wrong program. `setup` installs everything before spoot ever runs,
-    -- so by the time this file is loaded the question has already been answered.
+    -- No installing happens here. `setup` installs everything before spoot ever
+    -- runs, so by the time this file is loaded the question has been answered.
     --
     -- What survives is the one-line question itself, because three places that have
     -- nothing to do with installing anything still need to ask it: the notification
     -- fallback, the device check, and the login preconditions below.
+    -- Remembered once found: a program does not leave PATH mid-session, and the
+    -- notification fallback asks on every toast. A miss is asked again, so
+    -- installing something while spoot runs is still noticed.
+    Util._have = {}
     function Util.have(bin)
-        return trim(shell("command -v " .. shell_quote(bin) .. " 2>/dev/null") or "") ~= ""
+        if Util._have[bin] then return true end
+        local ok = trim(shell("command -v " .. shell_quote(bin) .. " 2>/dev/null") or "") ~= ""
+        if ok then Util._have[bin] = true end
+        return ok
     end
 
     -- The other half of "is this machine ready" -- programs are not enough, the two
@@ -92,8 +96,8 @@ return function(Util, ctx)
     -- SAYING WHAT IS HAPPENING WHILE THE PANEL IS HIDDEN. Both logins put a page in
     -- your browser, and the UI takes itself off screen for the duration -- so its own
     -- notice bar is exactly what you cannot see. Two unexplained browser tabs in a
-    -- row is a worse first run than two explained ones. Silent if notify-send is not
-    -- installed, which is why it is optional rather than required.
+    -- row is a worse first run than two explained ones. Silent where no
+    -- notification daemon answers, which is why it is optional rather than required.
     function Util.setup_notify(title, body)
         Util.notify{title = title, body = body or ""}
     end
@@ -154,8 +158,8 @@ return function(Util, ctx)
     end
 
     -- WHAT A FIRST RUN STILL OWES, in the order it has to happen. Dependencies come
-    -- first and are not negotiable: the account login needs openssl to build the
-    -- challenge and xdg-open to show you the page. Authorising before those exist
+    -- first and are not negotiable: the account login needs xdg-open to show you
+    -- the page, and openssl to build the challenge when there is no host to. Authorising before those exist
     -- fails two ways.
     --
     -- Reported as state rather than as a verdict, so the caller can say what it is
@@ -167,12 +171,17 @@ return function(Util, ctx)
         -- survives only as the fallback for a spoot running under a bare
         -- interpreter, which is not the thing being set up here -- listing either
         -- would block a sign-in over a program the sign-in does not use.
-        local names = {"openssl", "xdg-open"}
+        local names = {"xdg-open"}
+        if not (Util.host and Util.host.pkce) then names[#names + 1] = "openssl" end
         local lack = {}
         for _, b in ipairs(names) do
             if not Util.have(b) then lack[#lack + 1] = b end
         end
-        return {token = read_file(P.token) ~= nil,
+        -- A LOGIN THAT CAN BE USED, not a file that exists. An empty or corrupt
+        -- token.json is "" or junk -- both truthy -- and read as signed in, the
+        -- same trap device_ready above already steps around.
+        local tok = safe_decode(read_file(P.token))
+        return {token = type(tok) == "table" and type(tok.refresh_token) == "string",
                 device = Util.device_ready(),
                 lack = lack}
     end

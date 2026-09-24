@@ -67,6 +67,8 @@
 #include <QRegularExpression>
 #include <QUrlQuery>
 #include <QThreadStorage>
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 #include <lua.hpp>
 #include <csignal>
 #include <cstdlib>
@@ -253,6 +255,8 @@ public:
         lua_setfield(L, -2, "with_lock");
         lua_pushcclosure(L, &Natives::l_shared, 0);
         lua_setfield(L, -2, "shared");
+        lua_pushcclosure(L, &Natives::l_pkce, 0);
+        lua_setfield(L, -2, "pkce");
         // THE LOGIN CALLBACK. Two calls rather than one so the socket is bound
         // BEFORE the browser is opened: bound after, a fast redirect could reach
         // a port nobody was listening on yet.
@@ -542,6 +546,11 @@ private:
                 continue;
             }
             QObject::disconnect(rep, nullptr, nullptr, nullptr);
+            // CUT OFF, whatever the status line said. A reply aborted by the clock
+            // mid-body keeps its 200, and `size` below is only what arrived -- so
+            // without this a truncated cover looked like a finished one that simply
+            // was not an image, and was written off rather than retried.
+            const bool cut = !rep->isFinished() || rep->error() != QNetworkReply::NoError;
             if (!rep->isFinished()) rep->abort();
             const int code = rep->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QByteArray body = rep->readAll();
@@ -559,6 +568,7 @@ private:
             lua_newtable(L);
             lua_pushinteger(L, code);  lua_setfield(L, -2, "code");
             lua_pushinteger(L, wrote); lua_setfield(L, -2, "size");
+            if (cut) { lua_pushboolean(L, 1); lua_setfield(L, -2, "cut"); }
             // Error bodies included: a caller reading `body` checks `code` first,
             // the way it checked for the file before.
             if (bodies) {
@@ -956,9 +966,30 @@ private:
         return 1;
     }
 
+    // ── THE LOGIN'S SECRETS ──────────────────────────────────────────────────
+    // spoot.pkce() -> verifier, challenge, state. A PKCE verifier (RFC 7636: 43-
+    // 128 unreserved characters), its S256 challenge, and a hex state, all from
+    // the system CSPRNG -- what three openssl pipelines did, without a process.
+    static int l_pkce(lua_State *L) {
+        auto *rng = QRandomGenerator::system();
+        QByteArray raw(96, Qt::Uninitialized);
+        rng->fillRange(reinterpret_cast<quint32 *>(raw.data()), int(raw.size() / 4));
+        const auto b64url = QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals;
+        const QByteArray verifier = raw.toBase64(b64url);            // 128 chars
+        const QByteArray challenge =
+            QCryptographicHash::hash(verifier, QCryptographicHash::Sha256).toBase64(b64url);
+        QByteArray st(16, Qt::Uninitialized);
+        rng->fillRange(reinterpret_cast<quint32 *>(st.data()), int(st.size() / 4));
+        const QByteArray state = st.toHex();
+        lua_pushlstring(L, verifier.constData(), size_t(verifier.size()));
+        lua_pushlstring(L, challenge.constData(), size_t(challenge.size()));
+        lua_pushlstring(L, state.constData(), size_t(state.size()));
+        return 3;
+    }
+
     static int l_clip(lua_State *L) {
         const char *op = luaL_optstring(L, 1, "get");
-        const QByteArray text = luaL_optstring(L, 2, "") ? QByteArray(luaL_optstring(L, 2, "")) : QByteArray();
+        const QByteArray text(luaL_optstring(L, 2, ""));
         const bool set = QByteArray(op) == "set";
         QString out;
         auto work = [&] {
@@ -1154,20 +1185,19 @@ class JobPool;
 static void installJob(lua_State *L, JobPool *pool);
 
 // ── BACKGROUND JOBS ──────────────────────────────────────────────────────────
-// What `nohup lua spoot.lua --prefetch-art-batch &` was. Five jobs use this --
-// artwork prefetch, the playlist index, revalidation, lyrics, the notification
-// helper -- and each one used to be a process: a fork, an exec, and a fresh
-// 13,400-line script parsed from disk before it could do anything.
+// Artwork prefetch, the playlist index, revalidation, lyrics, the notification
+// helper -- each runs here rather than as a process: no fork, no exec, and no
+// fresh script parsed from disk before it can do anything.
 //
 // A JOB IS STILL COMPLETELY ISOLATED. It gets a lua_State of its own, which
 // shares no memory whatsoever with the engine's -- separate heap, separate
 // globals, separate everything, the same isolation the fork had -- and it is
 // DISPOSED of when the job ends, so its memory leaves with it exactly as a
-// process' did. What it does not get is the fork.
+// process' would. What it does not get is the fork.
 //
 // The state has no `emit` and no `next`: a job does not serve. It reads its
-// arguments from `arg` and takes the same entry point the process took, which
-// is why not one line of any job's code had to change.
+// arguments from `arg` and takes the same entry point `spoot --flag` takes, so
+// a job runs identically hosted or as a process of its own.
 class JobRunner : public QObject {
     Q_OBJECT
 public:
@@ -1430,16 +1460,15 @@ static void installJob(lua_State *L, JobPool *pool) {
 // ---------------------------------------------------------------------------
 // THE ENGINE, IN THIS PROCESS.
 //
-// It used to be `lua spoot.lua --serve` on the other end of a pipe. It is the
-// same script, unchanged and still read from disk, running on a worker thread
-// inside this binary -- so editing engine/spoot.lua still costs a restart and
+// The same script `lua spoot.lua --serve` runs, still read from disk, running
+// on a worker thread inside this binary -- so editing engine/spoot.lua still costs a restart and
 // not a rebuild.
 //
 // WHAT CROSSES THE THREAD BOUNDARY IS BYTES. The worker and the GUI thread
-// exchange the very ndjson lines they exchanged over the pipe: QByteArray in,
+// exchange the very ndjson lines `--serve` speaks over a pipe: QByteArray in,
 // QByteArray out, never a live object and never a shared structure. That is the
 // whole of the concurrency design -- with nothing shared there is nothing to
-// race over, and the process boundary's semantics survive its removal.
+// race over.
 //
 // The worker runs NO event loop of its own -- it blocks inside Lua -- and
 // requests reach it through a plain mutex-guarded queue rather than a queued
@@ -1642,6 +1671,14 @@ private slots:
     // isolation, it is a zombie -- and the fix is cheap, because spoot already
     // restores its session and its trail, so a respawn lands back where you were.
     void died(const QString &err) {
+        // THE WORKER AND ITS THREAD ARE ALREADY GOING: both deleteLater themselves
+        // once the thread finishes (see spawn). Forgotten here, before any early
+        // return, so nothing -- request(), shutdown() at quit -- can reach them
+        // afterwards. The wait is short: run() has returned, so the thread is only
+        // unwinding.
+        if (m_thread) m_thread->wait(2000);
+        m_worker = nullptr;
+        m_thread = nullptr;
         if (m_stopping) return;
         if (!err.isEmpty()) qWarning("spoot: engine error: %s", qPrintable(err));
         // A CRASH LOOP MUST NOT BE ANSWERED WITH AN INFINITE ONE. Five deaths in
@@ -1798,11 +1835,10 @@ public:
     }
     // HANDED IN BY THE QML THAT DECLARES IT, from Component.onCompleted -- which
     // runs while the window still has no platform window, which is the one moment
-    // LayerShellQt::Window::get() can turn it into a layer surface.
+    // LayerShellQt::Window::get() can turn it into a layer surface. (Not
+    // findChild: a Window declared inside another Window is not a QObject child
+    // of it.)
     //
-    // findChild STOOD HERE and found nothing: a Window declared inside another
-    // Window is not a QObject child of it, so the dock was configured never,
-    // registered never, and the whole feature was one silent early return.
     // WHERE THE POINTER IS, WITHOUT OWNING THE GROUND IT IS OVER.
     //
     // The dock has to know you are approaching before you arrive, and a Wayland
@@ -2075,15 +2111,13 @@ private:
 };
 
 // ── SURVIVING A FAULT ────────────────────────────────────────────────────────
-// The engine used to be a process of its own, so a fault in it left the window
-// up and useless -- which is why Engine already respawns it. Now that everything
-// is in here, a fault takes the window with it, and the honest answer is not to
-// pretend that cannot happen but to come straight back.
+// Engine respawns a dead Lua worker, but a fault in native code takes the
+// window with it, and the honest answer is not to pretend that cannot happen
+// but to come straight back.
 //
 // spoot restores its session, its trail and its scroll position on a cold start,
 // so an execv of ourselves lands on the menu that was open. What the user sees is
-// a blink. That is strictly better than what a separated engine gave: there, a
-// crash in the UI half was simply the end.
+// a blink.
 //
 // THREE STRIKES. A fault that happens every time -- a bad build, a missing
 // library -- must not become an infinite respawn that buries its own reason, so
@@ -2224,7 +2258,13 @@ int main(int argc, char *argv[]) {
     // If one is already resident, hand it the request and leave. Done before the
     // engine is spawned or any QML is loaded, so a second invocation costs a
     // socket round trip rather than a process.
-    const QString sockName = QStringLiteral("spoot-%1").arg(qEnvironmentVariable("USER", "u"));
+    // IN THE USER'S OWN RUNTIME DIR when there is one. A bare name resolves under
+    // /tmp, where any other account can create it first -- and a spoot that finds
+    // it answering hands its request over and exits. $XDG_RUNTIME_DIR is 0700.
+    const QString runDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const QString sockName = runDir.isEmpty()
+        ? QStringLiteral("spoot-%1").arg(qEnvironmentVariable("USER", "u"))
+        : runDir + QStringLiteral("/spoot.sock");
     {
         QLocalSocket probe;
         probe.connectToServer(sockName);
@@ -2247,11 +2287,12 @@ int main(int argc, char *argv[]) {
     // A minute up is a session that started, so the next fault is a fresh one
     // and gets its own three tries -- see crashguard.
     QTimer::singleShot(60000, &app, [] { crashguard::clearGeneration(); });
+    // Parented to the app so it is destroyed with it rather than leaked.
     Shell *shell = new Shell();
+    shell->setParent(&app);
     qml.rootContext()->setContextProperty("Engine", &engine);
     qml.rootContext()->setContextProperty("Shell", shell);
-    // --listen opens straight on the Listen view, the way the rofi build's one
-    // rofi-opening flag does today.
+    // --listen opens straight on the Listen view.
     // WHAT THE DOCK SAW, on demand. It is built against wlr-layer-shell -- which
     // every compositor spoot can run on implements -- but only Hyprland answers
     // `cursorpos`, so everywhere else the hot spot rides on a probe surface being
@@ -2356,8 +2397,7 @@ int main(int argc, char *argv[]) {
         }
         // LIVE RELOAD. Every view lives in a .qml file read at runtime, so an
         // edit can take effect in the running shell -- no rebuild, and no
-        // closing the menu you are looking at, which was never possible when a
-        // menu was a rofi process that had already exited.
+        // closing the menu you are looking at.
         if (qEnvironmentVariableIsSet("SPOOT_DEV")) {
             auto *watch = new QFileSystemWatcher(&app);
             QDirIterator it(root + "/ui", {"*.qml"}, QDir::Files, QDirIterator::Subdirectories);
@@ -2389,6 +2429,7 @@ int main(int argc, char *argv[]) {
         // first is the difference between "resident" and "never starts again".
         QLocalServer::removeServer(sockName);
         auto *server = new QLocalServer(&app);
+        server->setSocketOptions(QLocalServer::UserAccessOption);
         server->listen(sockName);
         // CLOSE ON EXEC. Without this the listening socket is inherited by every
         // child -- each forked job, and, fatally, the execv the crash handler
@@ -2402,6 +2443,9 @@ int main(int argc, char *argv[]) {
         }
         QObject::connect(server, &QLocalServer::newConnection, [server, shell, &qml] {
             QLocalSocket *c = server->nextPendingConnection();
+            if (!c) return;
+            // A client that connects and says nothing must not leave its socket behind.
+            QObject::connect(c, &QLocalSocket::disconnected, c, &QObject::deleteLater);
             QObject::connect(c, &QLocalSocket::readyRead, [c, shell] {
                 const QByteArray cmd = c->readAll().trimmed();
                 // Revealed FIRST, so the view opens onto a window that is already

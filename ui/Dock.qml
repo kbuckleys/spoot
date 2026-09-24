@@ -30,11 +30,12 @@ Window {
     // Mapped and unmapped by the host, which is also the only thing that knows
     // whether the panel is up. See Shell::dockRegion and Shell::reveal.
     visible: false
+    readonly property bool hasShell: typeof Shell !== "undefined"
     // REGISTERED BEFORE IT IS SHOWN. The host turns this into a layer surface,
     // and that can only be done to a window that has no platform window yet --
     // which is exactly what Component.onCompleted describes. See
     // Shell::registerDock.
-    Component.onCompleted: if (typeof Shell !== "undefined")
+    Component.onCompleted: if (dock.hasShell)
                               Shell.registerDock(dock, dock.screenName)
 
     // THE FREE AREA, measured by the compositor rather than guessed at.
@@ -49,7 +50,7 @@ Window {
         color: "transparent"
         flags: Qt.FramelessWindowHint
         visible: false
-        Component.onCompleted: if (typeof Shell !== "undefined")
+        Component.onCompleted: if (dock.hasShell)
                                   Shell.registerProbe(probe, dock.screenName)
     }
     // What a bar has taken, on the axis the dock lives on. Zero where nothing
@@ -199,14 +200,9 @@ Window {
     // ARRIVED, OR NOT ARRIVED, read off where the pointer IS rather than written
     // by the last motion event that happened to be delivered.
     //
-    // A HANDLER STOOD HERE and that is "the hot spot sometimes does not trigger",
-    // and on another machine "does not work at all". `onPositionChanged` fires on
-    // MOTION -- and the gesture people actually make is to throw the pointer at
-    // the edge and STOP. The compositor then delivers an enter and no motion
-    // inside the band at all, so nothing ever set this, `near` never reached
-    // touchAt and the pill never came. Whether it worked was down to whether your
-    // hand kept moving after you arrived, which is why it looked intermittent
-    // here and dead elsewhere.
+    // Not an `onPositionChanged` handler: that fires on MOTION, and the gesture
+    // people actually make is to throw the pointer at the edge and STOP. The
+    // compositor then delivers an enter and no motion inside the band at all.
     //
     // As a binding the question is asked whenever any part of the answer moves,
     // and `containsMouse` is what the compositor's own enter and leave already
@@ -300,7 +296,7 @@ Window {
                         pill.width + dock.slack * 2, bot - top)]
     }
     onRegionChanged: {
-        if (typeof Shell !== "undefined") Shell.dockRegion(dock, dock.region)
+        if (dock.hasShell) Shell.dockRegion(dock, dock.region)
         // WHAT THIS COMPOSITOR ACTUALLY GAVE US. The dock is built against
         // wlr-layer-shell, which KWin, sway, wayfire and Hyprland all implement --
         // and only Hyprland can be asked where the pointer is, so everywhere else
@@ -503,6 +499,9 @@ Window {
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: true
+                    // A thumbnail's worth, not the 640px cover it is read from:
+                    // one of these is held per screen for as long as spoot runs.
+                    sourceSize: Qt.size(128, 128)
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -650,7 +649,10 @@ Window {
                     var dur = dock.playback.duration || 0
                     if (dur <= 0) return
                     var want = Math.max(0, Math.min(1, m.x / rule.width)) * dur
-                    dock.controlRequested("seek", Math.round((want - dock.positionMs) / 1000))
+                    // A click on the playhead itself moves nothing, and a zero
+                    // would reach the engine as "no amount" -- its 10s default.
+                    var by = Math.round((want - dock.positionMs) / 1000)
+                    if (by !== 0) dock.controlRequested("seek", by)
                 }
             }
         }

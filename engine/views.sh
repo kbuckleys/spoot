@@ -19,6 +19,8 @@ set -e
 cd "$(dirname "$0")"
 GOLDEN=views.golden
 OUT=$(mktemp)
+# Gone however this ends -- a probe that raises must not leave it behind.
+trap 'rm -f "$OUT"' EXIT
 
 python3 - "$OUT" <<'PY'
 import json, os, select, subprocess, sys
@@ -187,6 +189,8 @@ PY
 
 if [ "$1" = "--record" ]; then
     mv "$OUT" "$GOLDEN"
+    # mktemp makes 0600; the recording is an ordinary file in the repo.
+    chmod 644 "$GOLDEN"
     echo "recorded $(wc -l < "$GOLDEN") views to $GOLDEN"
     exit 0
 fi
