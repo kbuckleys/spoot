@@ -1,4 +1,0 @@
-# Build output. The binary lands in bin/ beside ui/ and engine/ (see CMakeLists.txt).
-bin/
-build/
-build-*/
