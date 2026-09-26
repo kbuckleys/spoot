@@ -16,21 +16,8 @@
 set -e
 cd "$(dirname "$0")/.."
 LOG=$(mktemp)
-APP=""
-# Whatever happens, the app this started goes and the log with it.
-trap 'if [ -n "$APP" ]; then kill "$APP" 2>/dev/null || true; fi; rm -f "$LOG"' EXIT
-trap 'exit 130' INT TERM
-# A resident spoot answers the socket and the new one hands off and exits, so it
-# has to go -- but it may be the session you are using, so only when told.
-if pgrep -x spoot >/dev/null 2>&1; then
-    if [ "${SPOOT_CHECK_KILL:-0}" = 1 ]; then
-        pkill -x spoot 2>/dev/null || true
-        sleep 1
-    else
-        echo "spoot is running -- quit it first, or set SPOOT_CHECK_KILL=1"
-        exit 1
-    fi
-fi
+pkill -x spoot 2>/dev/null || true
+sleep 1
 
 # NO FIRST-RUN FLOW HERE. On a machine with no token spoot now hides itself and
 # waits for a browser login, which this script has no way to complete -- it would
@@ -47,9 +34,7 @@ sleep 5
 # here since dismiss() stopped meaning "go back": every key after it went to
 # whatever had focus instead, so the last third of this drive had quietly been
 # testing nothing. Backspace is the key that goes back one level.
-if ! command -v wtype >/dev/null 2>&1; then
-    echo "note: wtype is not installed -- only the first draw is checked, no keys are driven"
-else
+if command -v wtype >/dev/null 2>&1; then
     wtype -M alt -k l -m alt; sleep 2             # a list
     wtype -M shift -k Return -m shift; sleep 2    # an action menu
     wtype -k BackSpace; sleep 2                   # back to the list
@@ -60,24 +45,23 @@ else
 fi
 
 kill "$APP" 2>/dev/null || true
-wait "$APP" 2>/dev/null || true
-APP=""
+sleep 1
 
 # ReferenceError and TypeError are the shapes a deleted id or function takes;
 # "failed to load component" is the shape an unbalanced brace takes, and this
 # check passed clean through one of those -- the app never started at all and
 # nothing in the log matched, because a file that does not parse cannot go on to
 # throw a TypeError.
-# "is not installed" / "plugin ... unavailable" rather than a bare "unavailable":
-# the engine's own messages say that word about tracks.
-if grep -nE "ReferenceError|TypeError|is not a function|is not defined|Cannot assign|Unable to assign|failed to load component|Expected token|Syntax error|is not a type|module \"[^\"]*\" is not installed|plugin .* unavailable" "$LOG"; then
+if grep -nE "ReferenceError|TypeError|is not a function|is not defined|Cannot assign|Unable to assign|failed to load component|Expected token|Syntax error|is not a type|unavailable" "$LOG"; then
     echo "QML CHECK FAILED"
+    rm -f "$LOG"
     exit 1
 fi
 # ...and the positive half, which is what actually proves it ran: main.qml logs
 # one of these per draw. No draws means no window, however quiet the log was.
 if ! grep -q "render:" "$LOG"; then
     echo "QML CHECK FAILED -- the app never drew anything"
+    rm -f "$LOG"
     exit 1
 fi
 
@@ -93,6 +77,8 @@ EMPTY=$(grep -o "render: rows=[0-9]*" "$LOG" | grep -c "rows=0" || true)
 if [ "$EMPTY" -gt 0 ]; then
     echo "QML CHECK FAILED -- $EMPTY draw(s) came up empty:"
     grep -n "render: rows=0 " "$LOG"
+    rm -f "$LOG"
     exit 1
 fi
 echo "QML CHECK OK ($(grep -c "render:" "$LOG") draws, none empty)"
+rm -f "$LOG"

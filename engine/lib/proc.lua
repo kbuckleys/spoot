@@ -112,23 +112,27 @@ return function(Util, ctx)
         return s
     end
 
-    -- Reduces a row to the plain text that is displayed, so a row built here and
-    -- the same row echoed back compare equal.
+    -- Reduces a row to the plain text rofi actually displays, so a row built here
+    -- and the same row echoed back by rofi compare equal (see row_of).
     --
-    -- ONLY THE MARKUP REGIONS LOSE THEIR TAGS. Every tag spoot emits is wrapped in
-    -- Util.markup's \1..\2 sentinels, so that is where tags are removed -- and
-    -- nowhere else. Stripping every `<...>` in the string ate real text: a track
-    -- called "<Untitled>" came out empty, "I <3 U >" lost its middle.
-    --
-    -- The region is UNWRAPPED, not deleted: rows wrap tag AND content
-    -- ("Shuffle <b>ON</b>", every dimmed action row), and the content stays.
+    -- The \1..\2 region is UNWRAPPED, not deleted. Deleting worked only when the
+    -- blob held nothing but a tag; it ate the text of rows wrapping tag AND content
+    -- ("Shuffle <b>ON</b>", every dimmed action row), which reduced to "" and so
+    -- matched no saved cursor and no echoed row. Unwrapping exposes the tags for
+    -- the gsub below, landing tag-only wrappers on the same result as before.
     function Util.strip_markup(s)
         if not s then return s end
         s = tostring(s)
         -- Same early-out, and for the same reason, as Util.pango_escape above:
-        -- nearly every row carries no markup at all.
-        if not s:find("\1", 1, true) then return s end
-        -- Parenthesised so this returns ONE value: gsub also hands back a count.
-        return (s:gsub("\1(.-)\2", function(m) return (m:gsub("<[^>]+>", "")) end))
+        -- row_of runs this twice per row on every selection, and neither gsub can
+        -- match without one of these two bytes -- the first needs \1, the second
+        -- needs '<'. Nearly every row has neither.
+        if not s:find("[\1<]") then return s end
+        s = s:gsub("\1(.-)\2", "%1")
+        -- Parenthesised so this returns ONE value. gsub also hands back a match
+        -- count, and every call site here happens to discard it -- but the day one
+        -- of them is used as a function's last argument, that count silently
+        -- becomes an extra argument.
+        return (s:gsub("<[^>]+>", ""))
     end
 end

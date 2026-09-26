@@ -28,18 +28,26 @@ return function(Util, ctx)
     -- transport failure), so the two agree on every value curl can produce, and
     -- loosening nothing means this cannot reject a response the old code accepted.
     function Util.is2xx(r)
-        return r ~= nil and tostring(r):match("^2%d%d$") ~= nil
+        return r ~= nil and r:match("2..") ~= nil
     end
 
+    -- Every authenticated write to the Spotify API (18 call sites).
+    --   timeout  --max-time, default 5; player endpoints pass 3. Keep the split.
+    --   body     table is encoded, string sent as-is. Adds Content-Type.
+    --   len0     bodyless PUT/POST endpoints 411 without it. Ignored if body set.
+    --   raw      return the response body, not the status (create-playlist).
+    -- Returns the status string, or the body under raw, or nil. Test with
+    -- Util.is2xx -- "403" is truthy.
     -- ONE REQUEST, DESCRIBED RATHER THAN SPELLED OUT.
     --
-    -- A request says what it wants and this decides how it travels: natively through the host when the
+    -- Six sites used to hand-build a curl command line. A request now says what it
+    -- wants and this decides how it travels: natively through the host when the
     -- engine is embedded in the binary, and through curl when the script is run
     -- standalone -- which both engine guards and the `printf | lua ... --serve`
     -- probe do, so that path is not legacy, it is the debugging route.
     --
     -- The curl branch is not a second implementation of anything. It is the ONLY
-    -- copy of "how to build a curl".
+    -- copy of "how to build a curl", where there used to be six.
     --
     --   req  {method=, url=, headers={...}, body=, timeout=, compressed=}
     --   ->   {code=<number>, body=<string>, headers=<string>}
@@ -72,35 +80,23 @@ return function(Util, ctx)
     local NET_DOWN_SECS = 3
     Util.net_down_until = 0
 
-    -- WHERE THE GATE LIVES: process-wide in the host's shared store, so the engine
-    -- and every job agree on one outage rather than each paying its own timeout
-    -- to discover it; per state outside a host, where there is only one.
-    local function net_until(v)
-        local shared = Util.host and Util.host.shared
-        if v == nil then
-            if shared then return shared("net-down") or 0 end
-            return Util.net_down_until or 0
-        end
-        if shared then shared("net-down", v) else Util.net_down_until = v end
-    end
-
     -- The gate and NOTHING ELSE. Saying so is api_get's job, beside the 429 and the
     -- 401: ui_say is a local declared several thousand lines below this, so a call
     -- from here would be a global lookup and a nil call -- and this runs on every
     -- request in the app, including from background jobs that have nobody to tell.
     function Util.net_note(code)
         if code and code > 0 then
-            net_until(0)
+            Util.net_down_until = 0
             Util.net_said = false
             return
         end
-        net_until(os.time() + NET_DOWN_SECS)
+        Util.net_down_until = os.time() + NET_DOWN_SECS
     end
 
     -- Is the gate shut right now? Read by Util.http and Util.curl_batch, which are
     -- the only two ways out of this process.
     function Util.net_down()
-        return os.time() < net_until()
+        return os.time() < (Util.net_down_until or 0)
     end
 
     -- IS SPOTIFY STILL SAYING "LATER"? Seconds remaining, or 0.
@@ -132,15 +128,6 @@ return function(Util, ctx)
     function Util.shared_put(name, file, v)
         if Util.host and Util.host.shared then Util.host.shared(name, v); return end
         if v == nil then os.remove(file) else Util.secure_write(file, v) end
-    end
-
-    -- ONE WRITER AT A TIME, across every Lua state in the process -- the engine
-    -- and each job are separate states on separate threads, and a file they all
-    -- read-merge-write loses whichever update lands first. The host's named lock
-    -- when there is one; outside it there is one process and nothing to race.
-    function Util.locked(name, fn)
-        if Util.host and Util.host.with_lock then return Util.host.with_lock(name, fn) end
-        return fn()
     end
 
     function Util.rate_cool()
@@ -272,8 +259,10 @@ return function(Util, ctx)
     -- it -- and there is nothing a well-behaved client can do about that from its own
     -- side.
     --
-    -- REGISTERING YOUR OWN IS NOT THE FIX IT LOOKS LIKE. In November 2024 Spotify
-    -- closed a set of endpoints to every app created after that date. The fallback id predates the change and still reaches them; a
+    -- REGISTERING YOUR OWN IS NOT THE FIX IT LOOKS LIKE, and this note used to say it
+    -- was ("two minutes, and hands you the whole quota"). That was written before
+    -- November 2024, when Spotify closed a set of endpoints to every app created
+    -- after that date. The fallback id predates the change and still reaches them; a
     -- new one does not, and answers 403 or 404 instead:
     --
     --   browse/categories                 Categories
@@ -294,7 +283,7 @@ return function(Util, ctx)
     -- Validated rather than trusted: a Spotify app id is 32 hex characters, and a
     -- file holding a pasted-in newline, a URL or half a word would otherwise turn
     -- every request into a 400 with nothing saying why. Anything that is not an id
-    -- falls back, so a bad paste degrades to the shared id instead of breaking
+    -- falls back, so a bad paste degrades to the old behaviour instead of breaking
     -- authentication.
     --
     -- Read fresh each time rather than memoised: it changes about once in the life of
@@ -323,23 +312,13 @@ return function(Util, ctx)
     Util.REQLOG = os.getenv("SPOOT_REQLOG")
     function Util.req_log(req, code)
         if not Util.REQLOG then return end
-        -- Private from the first byte: it names every request the account made.
-        if not Util._reqlog_made then
-            Util._reqlog_made = true
-            local e = io.open(Util.REQLOG, "a")
-            if e then e:close(); os.execute("chmod 600 " .. shell_quote(Util.REQLOG) .. " 2>/dev/null") end
-        end
         local f = io.open(Util.REQLOG, "a")
         if not f then return end
         -- The BODY too, for writes: a play is entirely described by its body -- which
         -- context, which offset -- and without it the log says a play happened but
-        -- not what it asked for. EXCEPT a login's: a refresh token or an
-        -- authorization code is a credential, and a debug log is not a place for one.
+        -- not what it asked for.
         local body = req.body
         if type(body) == "table" then body = "(table)" end
-        if tostring(req.url or ""):match("^https?://accounts%.spotify%.com") then
-            body = body and "(redacted)" or nil
-        end
         f:write(string.format("%s\t%s\t%s\t%s\t%s\n", tostring(Util.mono and Util.mono() or os.time()),
             tostring(code or "-"), tostring(req.method or "GET"), tostring(req.url or "?"),
             tostring(body or "")))
@@ -378,46 +357,21 @@ return function(Util, ctx)
             return r
         end
         local hdr = Util.api_hdr_path()
+        -- Backgrounded, output discarded, nothing awaited -- the shell's answer to
+        -- what `bg` asks for.
+        local bg_tail = req.bg and " > /dev/null 2>&1 &" or ""
         local c = {"curl -s --max-time ", tostring(req.timeout or 10)}
         if req.compressed then c[#c+1] = " --compressed" end
-        if req.connect_timeout then
-            c[#c+1] = " --connect-timeout " .. tostring(tonumber(req.connect_timeout) or 5)
-        end
-        -- No header dump for `bg`: nothing reads it, and a backgrounded curl
-        -- writing the shared file could clobber a foreground request's Retry-After.
-        if not req.bg then c[#c+1] = " -D " .. shell_quote(hdr) end
-        c[#c+1] = " -w '\\n%{http_code}'"
-        if req.method and req.method ~= "GET" then c[#c+1] = " -X " .. shell_quote(req.method) end
-        -- HEADERS IN A CONFIG FILE, not on argv. An Authorization header on the
-        -- command line is readable by every local user through /proc for as long
-        -- as the request runs; the config sits in the 0700 scratch directory,
-        -- which is how Util.curl_batch has always sent its token.
-        local cfg
-        if req.headers and #req.headers > 0 then
-            cfg = Util.tmpfile("curlhdr")
-            local f = io.open(cfg, "w")
-            if f then
-                for _, h in ipairs(req.headers) do
-                    f:write('header = "', Util._curl_cfg_quote(h), '"\n')
-                end
-                f:close()
-                c[#c+1] = " -K " .. shell_quote(cfg)
-            else
-                cfg = nil
-            end
-        end
-        -- --data-raw, not -d: -d reads a FILE when the body starts with "@".
-        if req.body ~= nil then c[#c+1] = " --data-raw " .. shell_quote(req.body) end
+        c[#c+1] = " -D " .. shell_quote(hdr) .. " -w '\\n%{http_code}'"
+        if req.method and req.method ~= "GET" then c[#c+1] = " -X " .. req.method end
+        for _, h in ipairs(req.headers or {}) do c[#c+1] = " -H " .. shell_quote(h) end
+        if req.body ~= nil then c[#c+1] = " -d " .. shell_quote(req.body) end
         c[#c+1] = " " .. shell_quote(req.url)
         if req.bg then
-            -- Backgrounded, output discarded, nothing awaited -- and the config
-            -- removed once curl has finished with it.
-            os.execute("{ " .. table.concat(c) .. " > /dev/null 2>&1"
-                .. (cfg and ("; rm -f " .. shell_quote(cfg)) or "") .. "; } &")
+            os.execute(table.concat(c) .. bg_tail)
             return {code = 0, body = "", headers = ""}
         end
         local r = shell(table.concat(c)) or ""
-        if cfg then os.remove(cfg) end
         local out = {code = tonumber(r:match("\n(%d+)\n?$")) or 0,
                      body = r:match("^(.-)\n%d+\n?$") or "",
                      headers = read_file(hdr) or ""}
@@ -440,6 +394,16 @@ return function(Util, ctx)
     Util.mpris_fmt = "{{title}}\x1f{{artist}}\x1f{{album}}\x1f{{mpris:artUrl}}"
         .. "\x1f{{mpris:trackid}}\x1f{{mpris:length}}"
 
+    -- The one reader of Util.mpris_fmt. The daemon's --follow stream emits a line
+    -- in this format per track change, so it splits them with this too rather than
+    -- carrying a second copy of the field order.
+    -- ONE NOTIFICATION, wherever it is raised from. Embedded this is the D-Bus call
+    -- that notify-send makes after paying for a process to make it; outside, it is
+    -- notify-send. Three sites raised notifications with three hand-built command
+    -- lines, which is how one of them ended up as the only one that could carry an
+    -- icon.
+    --
+    -- `urgency` is the spec's: 0 low, 1 normal, 2 critical.
     -- WHAT THE DAEMON ON THIS MACHINE CAN DO, asked once.
     --
     -- Every toast was shaped for a daemon that parses markup, draws action buttons
@@ -480,13 +444,6 @@ return function(Util, ctx)
         return "\n"
     end
 
-    -- ONE NOTIFICATION, wherever it is raised from. Embedded this is the D-Bus call
-    -- that notify-send makes after paying for a process to make it; outside, it is
-    -- notify-send. Three sites raised notifications with three hand-built command
-    -- lines, which is how one of them ended up as the only one that could carry an
-    -- icon.
-    --
-    -- `urgency` is the spec's: 0 low, 1 normal, 2 critical.
     function Util.notify(o)
         if Util.host and Util.host.notify then
             if Util.host.notify(o) then return true end
@@ -523,9 +480,6 @@ return function(Util, ctx)
         os.execute("sleep " .. tostring(secs))
     end
 
-    -- The one reader of Util.mpris_fmt. The daemon's --follow stream emits a line
-    -- in this format per track change, so it splits them with this too rather than
-    -- carrying a second copy of the field order.
     function Util.mpris_split(line)
         if not line then return nil end
         local title, artist, album, art, tid, len = trim(line):match(
@@ -563,8 +517,6 @@ return function(Util, ctx)
             local m = Util.mpris_split(run("metadata -f " .. shell_quote(Util.mpris_fmt)))
             if not m then return {ok = false} end
             return {ok = true, value = m}
-        elseif (op == "setvol" or op == "setpos" or op == "seek") and tonumber(v) == nil then
-            return {ok = false}
         elseif op == "setvol" then
             return did("volume " .. string.format("%.2f", v))
         elseif op == "setpos" then
@@ -573,23 +525,11 @@ return function(Util, ctx)
             -- playerctl spells a relative seek "10+" / "10-" rather than with a sign.
             return did("position " .. string.format("%.2f", math.abs(v)) .. (v < 0 and "-" or "+"))
         end
-        -- Named verbs only: `op` goes onto a shell line unquoted.
-        local VERBS = {play = true, pause = true, ["play-pause"] = true,
-                       next = true, previous = true, stop = true}
-        if not VERBS[op] then return {ok = false} end
         return did(op)
     end
 
-    -- Every authenticated write to the Spotify API (18 call sites).
-    --   timeout  --max-time, default 5; player endpoints pass 3. Keep the split.
-    --   body     table is encoded, string sent as-is. Adds Content-Type.
-    --   len0     bodyless PUT/POST endpoints 411 without it. Ignored if body set.
-    --   raw      return the response body, not the status (create-playlist).
-    -- Returns the status string, or the body under raw, or nil. Test with
-    -- Util.is2xx -- "403" is truthy.
-    -- The headers and body of an authenticated write, shared by the awaited and
-    -- the fire-and-forget form so the two cannot disagree about either.
-    local function write_parts(token, opts)
+    function Util.api_write(verb, url, token, opts)
+        opts = opts or {}
         local headers = {"Authorization: Bearer " .. token}
         local body
         if opts.body ~= nil then
@@ -598,12 +538,6 @@ return function(Util, ctx)
         elseif opts.len0 then
             headers[#headers+1] = "Content-Length: 0"
         end
-        return headers, body
-    end
-
-    function Util.api_write(verb, url, token, opts)
-        opts = opts or {}
-        local headers, body = write_parts(token, opts)
         local r = Util.http{method = verb, url = url, headers = headers, body = body,
                             timeout = opts.timeout or 5}
         -- The contract callers have always had: the status as a STRING for
@@ -625,10 +559,11 @@ return function(Util, ctx)
     -- the round trip must not cost a frame (shuffle/repeat toggles).
     function Util.api_write_bg(verb, url, token, opts)
         opts = opts or {}
-        local headers, body = write_parts(token, opts)
+        local headers = {"Authorization: Bearer " .. token}
+        if opts.len0 then headers[#headers+1] = "Content-Length: 0" end
         -- `bg` is honoured natively (issue it, wait for nothing) and by the curl
-        -- branch, which backgrounds the process.
-        Util.http{method = verb, url = url, headers = headers, body = body,
+        -- branch, which backgrounds the process the way this always did.
+        Util.http{method = verb, url = url, headers = headers,
                   timeout = opts.timeout or 5, bg = true}
     end
 end

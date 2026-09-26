@@ -36,10 +36,11 @@ return function(Util, ctx)
     Util.UI_SETTINGS = {
         {key = "replay", default = true, kind = "bool", label = "Session Replay",
          why = "reopen the menu you were in when spoot last closed"},
-        -- SOLID BY DEFAULT. With a backdrop, covers and a floating card all
-        -- layered inside the panel, a translucent ground is the desktop showing
-        -- through three things at once. Still adjustable down to 50 for anyone who
-        -- wants it.
+        -- SOLID BY DEFAULT. It shipped at 80, from the rofi build where the panel
+         -- was the whole of what spoot drew; with a backdrop, covers and a floating
+         -- card all layered inside it, a translucent ground is the desktop showing
+         -- through three things at once. Still adjustable down to 50 for anyone who
+         -- wants it.
         {key = "opacity", default = 100, kind = "range", min = 50, max = 100, step = 5,
          label = "Opacity", unit = "%", why = "how solid the panel's ground is"},
         -- THE EDGE, and whether it is there at all. On by default: it is the only
@@ -189,22 +190,9 @@ return function(Util, ctx)
     --
     -- Every caller assigns or compares -- never concatenates -- for the reason
     -- spelled out above Util.strip_markup.
-    -- ONE READ PER DRAW, NOT ONE PER ROW. Util.episode_progress asks for every
-    -- episode row it renders, and a show's list is two hundred of them -- each a
-    -- read and a decode of the same file. Held for two seconds, which covers a
-    -- draw; this state's own writes replace it at once, and another state's
-    -- (the recorder in a job) are picked up two seconds later.
-    function Util.eresume_map()
-        local now = os.time()
-        if Util._eres and now - Util._eres_at < 2 then return Util._eres end
-        local m = disk_get(P.eresume)
-        Util._eres, Util._eres_at = (type(m) == "table") and m or {}, now
-        return Util._eres
-    end
-
     function Util.eresume_get(id)
         if not id then return nil, false end
-        local m = Util.eresume_map()
+        local m = disk_get(P.eresume)
         local e = type(m) == "table" and m[id]
         if type(e) ~= "table" then return nil, false end
         local ms = tonumber(e.ms)
@@ -219,7 +207,6 @@ return function(Util, ctx)
     function Util.eresume_put(id, ms, dur)
         if not id then return false end
         ms = tonumber(ms) or 0
-        -- Fresh from disk, never the memo: this rewrites the whole file.
         local m = disk_get(P.eresume)
         if type(m) ~= "table" then m = {} end
         local prev = type(m[id]) == "table" and tonumber(m[id].ms) or nil
@@ -253,7 +240,6 @@ return function(Util, ctx)
             end
         end
         disk_set(P.eresume, m)
-        Util._eres, Util._eres_at = m, os.time()
         return true
     end
 
@@ -269,20 +255,13 @@ return function(Util, ctx)
     -- hit is treated as a failure rather than guessed at, and the caller falls back
     -- to a real refresh.
     function Util.cache_touch(path)
-        -- Locked like every other read-modify-write of a shared cache: a refresh
-        -- landing between the read and the write below would otherwise be
-        -- overwritten with the old payload, stamped as current.
-        return Util.locked("cache:" .. path, function()
-            local raw = read_file(path)
-            if not raw then return false end
-            -- Counted first: a replace capped at one could never see a second hit.
-            local _, hits = raw:gsub('"fetched_at":%s*%d+', "%0")
-            if hits ~= 1 then return false end
-            local out = raw:gsub('"fetched_at":%s*%d+', '"fetched_at":' .. os.time(), 1)
-            -- write_file answers os.rename's nil-on-failure, not false, so this is a
-            -- truthiness test rather than a comparison.
-            return not not write_file(path, out)
-        end)
+        local raw = read_file(path)
+        if not raw then return false end
+        local out, n = raw:gsub('"fetched_at":%s*%d+', '"fetched_at":' .. os.time(), 1)
+        if n ~= 1 then return false end
+        -- write_file answers os.rename's nil-on-failure, not false, so this is a
+        -- truthiness test rather than a comparison.
+        return not not write_file(path, out)
     end
 
     -- view_pos (cursor memory) is read on essentially every menu draw and rewritten
@@ -394,13 +373,14 @@ return function(Util, ctx)
     -- Which results page each query was last left on, keyed by the query itself.
     --
     -- A SIBLING of the history list rather than something stored inside it:
-    -- Util.hist_get's return value IS the row array the menu draws, so its entries have
+    -- Util.hist_get's return value IS the row array rofi draws, so its entries have
     -- to stay bare strings. It rides in the same file because it is the same fact --
     -- what you did with a query last time -- and because removing a query from the
     -- history is then the one place that has to forget its page too.
     --
-    -- Per query, not one entry for every search, or the page you left one query
-    -- on would be the page the NEXT one opened on. A query with no record is a query never filtered, which is what makes All the default
+    -- This used to be a single view_pos entry shared by every search, so the page
+    -- you left one query on was the page the NEXT one opened on. Per query, a query
+    -- with no record is a query never filtered, which is what makes All the default
     -- for anything new without a special case for it.
     P.hist_page_key = "search-page"
 
@@ -506,8 +486,7 @@ return function(Util, ctx)
             if type(x) ~= "table" or type(y) ~= "table" then return false end
             if x.view ~= y.view then return false end
             for _, k in ipairs({"track_id", "album_id", "artist_id", "playlist_id",
-                                "category_id", "show_id", "episode_id", "setting",
-                                "query", "category", "genre"}) do
+                                "category_id", "query", "category", "genre"}) do
                 if x[k] ~= y[k] then return false end
             end
         end

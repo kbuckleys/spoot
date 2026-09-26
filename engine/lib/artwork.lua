@@ -31,6 +31,7 @@ return function(Util, ctx)
     Util.fetch_art = function(url, art_path, opts)
         opts = opts or {}
         local attempts = opts.attempts or 3
+        local connect_timeout = opts.connect_timeout or 5
         local timeout = opts.timeout or 10
         for attempt = 1, attempts do
             local tmp = art_path .. ".tmp" .. Util._rand_suffix()
@@ -38,10 +39,7 @@ return function(Util, ctx)
             -- transport is in play rather than owning a seventh curl command line.
             -- The header dump the old form needed for Content-Length is gone with it:
             -- the headers come back as a string either way.
-            -- connect_timeout reaches the curl transport; the native one has a
-            -- single deadline, which `timeout` already bounds.
-            local r = Util.http{url = url, timeout = timeout,
-                                connect_timeout = opts.connect_timeout or 5}
+            local r = Util.http{url = url, timeout = timeout}
             local code = tostring(r.code):match("%d%d%d")
             local cl = tonumber((r.headers or ""):match("[Cc]ontent%-[Ll]ength:%s*(%d+)"))
             -- NOTHING IS WRITTEN FOR A FAILED FETCH -- what `curl -sf` bought. A file
@@ -125,16 +123,13 @@ return function(Util, ctx)
             if not res then return nil end
             -- One answer is enough to know the link is alive; one failure is not
             -- enough to know it is dead, because a batch can lose a page on its own.
-            -- So only an ALL-ZERO batch arms the gate -- and only a batch aimed at
-            -- SPOTIFY, by the rule Util.net_seen states: a cover batch the CDN did
-            -- not answer is that host being slow, not the API being unreachable.
-            local best, any = 0, false
+            -- So only an ALL-ZERO batch arms the gate.
+            local best = 0
             for out, r in pairs(res) do
-                any = true
-                got[out] = {code = tostring(r.code), size = r.size, body = r.body, cut = r.cut}
+                got[out] = {code = tostring(r.code), size = r.size, body = r.body}
                 if (tonumber(r.code) or 0) > best then best = tonumber(r.code) or 0 end
             end
-            if any and jobs[1] then Util.net_seen({url = jobs[1].url}, best) end
+            Util.net_note(best)
             return got
         end
         local cfg = Util.tmpfile("curlcfg")
@@ -200,39 +195,8 @@ return function(Util, ctx)
     Util.ART_BATCH_CONNECT  = 2
     Util.ART_BATCH_BUDGET   = 8   -- seconds, whole call
 
-    -- A COVER THAT IS NOT THERE, remembered for half an hour. A 404 or an image
-    -- that will never decode was re-requested on every draw of every grid that
-    -- held it, because only the id-keyed kinds record a write-off in their index.
-    -- Kept in the host's shared store when there is one, so the engine and the
-    -- prefetch jobs agree; per state otherwise.
-    Util.ART_DEAD_TTL = 1800
-    function Util.art_dead(url)
-        local at
-        if Util.host and Util.host.shared then at = Util.host.shared("artdead:" .. url)
-        else at = Util._dead_art and Util._dead_art[url] end
-        return at ~= nil and os.time() - at < Util.ART_DEAD_TTL
-    end
-    function Util.art_mark_dead(url)
-        if Util.host and Util.host.shared then Util.host.shared("artdead:" .. url, os.time())
-        else Util._dead_art = Util._dead_art or {}; Util._dead_art[url] = os.time() end
-    end
-
     Util._art_batch = function(items)
-        -- NOTHING TO FETCH FOR A FILE ALREADY WHOLE, or for one known to be gone.
-        -- A grid's tail is spooled again on every redraw, and the worker used to
-        -- download every entry whether or not an earlier chunk had landed it.
-        -- Hash-named covers only: an id-keyed file keeps its path when its art
-        -- changes, so being on disk says nothing about being current.
-        local todo = {}
-        for _, pd in ipairs(items) do
-            if not pd.art_key and Util._art_valid_file(pd.path) then
-                pd.ok = true
-            elseif Util.art_dead(pd.url) then
-                pd.dead = true
-            else
-                todo[#todo+1] = pd
-            end
-        end
+        local todo = items
         local started = Util.mono() or 0
         for pass = 1, 3 do
             if #todo == 0 then break end
@@ -268,8 +232,8 @@ return function(Util, ctx)
                     -- r.size is what curl actually wrote. It can only disagree with
                     -- the transfer curl reported as complete if the transfer was
                     -- cut short, which is the one retryable kind of bad body.
-                    local truncated = (r and r.cut) and true or false
-                    if not truncated and r and Util.is2xx(r.code) then
+                    local truncated = false
+                    if r and Util.is2xx(r.code) then
                         local fh = io.open(pd.tmp, "rb")
                         if fh then truncated = fh:seek("end") ~= r.size; fh:close() end
                     end
@@ -277,7 +241,6 @@ return function(Util, ctx)
                         retry[#retry+1] = pd
                     else
                         pd.dead = true   -- so the caller can stop asking for it
-                        Util.art_mark_dead(pd.url)
                     end
                     os.remove(pd.tmp)
                 end
@@ -290,6 +253,12 @@ return function(Util, ctx)
         end
     end
 
+    -- Hands the tail of a thumbnail grid to a detached copy of ourselves so the menu
+    -- can draw now and the rest of the covers are warm by the next visit. Routed
+    -- through spoot.lua rather than a backgrounded bare curl so the tail gets the
+    -- same status + byte-count + JPEG validation and atomic rename as the sync path;
+    -- a prefetch killed mid-flight can then never leave a truncated file sitting at
+    -- a final art path, where every later run would trust it.
     -- Covers per spool file. A CHUNK SIZE, not a limit on how much of a grid gets
     -- fetched: the worker drains every file in the spool, so a 1496-album
     -- discography becomes seven of these and all of it lands. Chunked rather than
@@ -309,19 +278,19 @@ return function(Util, ctx)
     -- a prefetch killed mid-flight can then never leave a truncated file sitting at
     -- a final art path, where every later run would trust it.
     --
-    -- SPOOLED, not handed to one process: the work is always written down, so a
-    -- tail queued while a worker is running is drained by it rather than lost, and
-    -- the in-flight check only decides whether a NEW worker is needed.
+    -- SPOOLED, not handed to one process. This used to return outright when a worker
+    -- was already alive, which threw the whole tail away -- and a grid you are
+    -- sitting in produces no next draw to re-queue from, so those tiles stayed
+    -- placeholders until you pressed F5. A worker lives ~3s per chunk, so any grid
+    -- opened just after another one lost its covers, which is precisely the "it
+    -- works sometimes" this is meant to end. Now the work is always written down;
+    -- the pidfile only decides whether a NEW worker is needed to drain it.
     --
     -- Answers the tail_action recorded in the thumbnail log.
     function Util.spawn_art_prefetch(list, kind)
         if not list or #list == 0 then return "empty" end
         local dir = Util.art_spool_dir()
-        -- Once per state rather than a fork per spool.
-        if not Util._spool_made then
-            os.execute("mkdir -p " .. shell_quote(dir))
-            Util._spool_made = true
-        end
+        os.execute("mkdir -p " .. shell_quote(dir))
         local n = 0
         for i = 1, #list, Util.PREFETCH_MAX do
             -- Zero-padded so a plain lexicographic sort is oldest-first, and written
@@ -419,7 +388,10 @@ return function(Util, ctx)
 
     -- WHAT A ROW WEARS WHEN IT WILL NEVER HAVE REAL ARTWORK.
     --
-    -- A glyph, not a picture of one. The font is the one dependency spoot cannot
+    -- Ten 300x300 PNGs shipped in engine/assets/ and stood here. They were pictures
+    -- OF nerd icons -- an icon rasterised, saved, loaded back off disk, decoded and
+    -- scaled into a 150px tile -- so the grid paid an image load per placeholder to
+    -- draw a glyph the font already has. The font is the one dependency spoot cannot
     -- run without (ttf-jetbrains-mono-nerd, see the README), so the glyph is always
     -- there and always the right size: it is text, it scales to the tile, it takes
     -- the theme's colour, and nothing is fetched, decoded or cached to draw it.
@@ -469,6 +441,16 @@ return function(Util, ctx)
     Util.ART_GENRE      = Util.art_glyph("genre")
     Util.ART_CATEGORIES = Util.art_glyph("categories")
 
+    -- Playlist covers are cached ONE FILE PER PLAYLIST, keyed by playlist id rather
+    -- than by art hash. Spotify regenerates these constantly -- weekly editorial
+    -- refreshes, mosaics rebuilding as tracks change -- and a hash-named file would
+    -- leave the superseded cover behind every time. Here the path never varies, so
+    -- refetching overwrites: the eviction and the replacement are the same
+    -- operation, and an orphan cannot exist. No TTL is involved; the index below is
+    -- what detects a change.
+    --
+    -- Returns the path to use as the row's icon, always non-nil: the shipped
+    -- placeholder when the playlist has no cover.
     -- Directory list for ensure_cache's single mkdir, so every art directory exists
     -- without a fork per draw: each kind's own cache and every rendition it keeps
     -- beside it, plus every rendition subdirectory of the flat pool.
@@ -513,16 +495,11 @@ return function(Util, ctx)
     function Util.art_index_put(kind, updates)
         local cfg = P.art_kinds[kind]
         if not cfg then return end
-        -- Under the lock, or the engine and a prefetch job merging at once each
-        -- write back the index they read and one of them loses its covers.
-        local idx = Util.locked("artidx:" .. kind, function()
-            local cur = disk_get(cfg.index) or {}
-            for k, v in pairs(updates) do
-                if v == false then cur[k] = nil else cur[k] = v end
-            end
-            disk_set(cfg.index, cur)
-            return cur
-        end)
+        local idx = disk_get(cfg.index) or {}
+        for k, v in pairs(updates) do
+            if v == false then idx[k] = nil else idx[k] = v end
+        end
+        disk_set(cfg.index, idx)
         Util._art_idx = Util._art_idx or {}
         Util._art_idx[kind] = idx
     end
@@ -641,14 +618,31 @@ return function(Util, ctx)
     -- promptly with no backdrop instead of making the user wait for one.
     Util.ART_DECOR = {attempts = 1, connect_timeout = 2, timeout = 4}
 
-    -- The view's own choice of cover, recorded so the context cover beside an
-    -- action menu is what the view chose rather than a second guess made by
-    -- re-resolving the item.
+    -- Unique path per call. A fixed /tmp/spoot_theme_<name>.rasi broke whenever a
+    -- view nested inside itself, and both callers can: a nested view_actions
+    -- overwrote the file and deleted it on exit, leaving the outer menu redrawing
+    -- against a missing -theme; a nested view_browse left the outer list wearing
+    -- the inner album's cover. A per-call sequence number isolates each one; the
+    -- startup sweep and clean_exit still glob these names.
+    -- The album and action views wear their subject's cover as the window's
+    -- BACKGROUND, and this used to bake that into a per-call .rasi in /tmp. Qt draws
+    -- the cover directly, so no file is needed -- but the art path this was given is
+    -- still the right one, chosen by the view itself. Recording it here means the
+    -- context cover beside an action menu is the view's OWN choice rather than a
+    -- second guess made by re-resolving the item, which is what Util.serve_ctx_art
+    -- had to do for everything else.
     -- `art_url` is where to GO AND GET IT if the path came back empty, which is what
     -- a caller asking cache-only gets on a first visit. Recorded rather than fetched
     -- here, so the menu goes out now and its backdrop follows -- see
     -- Util.serve_ctx_art, which runs after the rows.
     --
+    -- IT USED TO BE CALLED write_art_theme, and it used to earn the name: it wrote a
+    -- .rasi baking the cover in as the window's background-image and handed back the
+    -- path to it. With rofi gone it wrote no file, took a theme NAME it did nothing
+    -- with, and returned that name unchanged -- so four callers were holding a local
+    -- called `album_theme` whose value was the string "album", passing it as
+    -- `theme=`, and reading as though a theme were being built. What it does is
+    -- record the cover; that is now what it is called and all it takes.
     Util.serve_cover = function(art_path, art_url)
         Util.serve_ctx_path = (art_path ~= "" and art_path) or nil
         Util.serve_ctx_url = (not Util.serve_ctx_path) and art_url or nil
@@ -668,8 +662,11 @@ return function(Util, ctx)
 
     -- THUMBNAIL DRAW LOG
     --
-    -- One line per grid draw: what a draw DECIDED is the only evidence left once
-    -- the grid has moved on, so it is recorded as the draw happens.
+    -- One line per grid draw, because a grid cannot be examined after the fact: rofi
+    -- is handed its entries once, at exec, and scrolls inside its own process, so a
+    -- tile that came up as a placeholder stays one for the life of that window no
+    -- matter what lands on disk a moment later. What a draw DECIDED is therefore the
+    -- only evidence there is, and it has to be recorded as the draw happens.
     --
     -- Fields, in order (see Util.thumb_report, which is the reader):
     --   ts kind view items cursor cached missing sync_try sync_ok sync_fail
@@ -686,43 +683,37 @@ return function(Util, ctx)
             -- Tabs are the separator and a view key is arbitrary text.
             out[i] = tostring(v):gsub("[\t\n]", " ")
         end
-        -- Locked: the engine and the prefetch jobs all append here, and a line
-        -- written between the halving's read and its rewrite would be lost.
-        Util.locked("thumblog", function()
-            local f = io.open(P.thumb_log, "a")
-            if not f then return end
-            f:write(table.concat(out, "\t"), "\n")
-            local size = f:seek("end")
-            f:close()
-            if not size or size <= P.thumb_log_max then return end
-            -- Halve it rather than trimming one line per draw: the rewrite then
-            -- happens once every few thousand draws instead of on every one.
-            local raw = read_file(P.thumb_log)
-            if not raw then return end
-            local lines = {}
-            for line in raw:gmatch("[^\n]+") do lines[#lines+1] = line end
-            local keep = {}
-            for i = math.floor(#lines / 2) + 1, #lines do keep[#keep+1] = lines[i] end
-            write_file(P.thumb_log, table.concat(keep, "\n") .. "\n")
-        end)
+        local f = io.open(P.thumb_log, "a")
+        if not f then return end
+        f:write(table.concat(out, "\t"), "\n")
+        local size = f:seek("end")
+        f:close()
+        if not size or size <= P.thumb_log_max then return end
+        -- Halve it rather than trimming one line per draw: the rewrite then happens
+        -- once every few thousand draws instead of on every one past the cap.
+        local raw = read_file(P.thumb_log)
+        if not raw then return end
+        local lines = {}
+        for line in raw:gmatch("[^\n]+") do lines[#lines+1] = line end
+        local keep = {}
+        for i = math.floor(#lines / 2) + 1, #lines do keep[#keep+1] = lines[i] end
+        write_file(P.thumb_log, table.concat(keep, "\n") .. "\n")
     end
 
     -- Album-list thumbnails, reusing the shared 300px art cache (seed "1e02").
     -- Fetches the first THUMB_SYNC missing covers, detaches the rest, then appends
     -- "\0icon\x1f<path>" to every row with a path.
     --
-    -- A row whose cover is not on disk yet gets no icon (see the decoration loop
-    -- below); a fetch that failed stays in `missing`, re-statted every call, so
-    -- the next redraw retries.
+    -- Three tile states, once one indistinguishable black square:
+    --   * not fetched yet -- path emitted anyway so rofi loads it on scroll.
+    --   * fetch failed    -- stays in `missing` until a stat finds it, and that set
+    --     is re-statted every call, so the next redraw retries.
+    --   * no artwork      -- pointed at assets/noart.png rather than left iconless.
     --
     -- url -> path is memoised per list: this reruns on every redraw, and re-deriving
     -- it cost 1500 gsubs + 1500 stats per keypress on a large discography. Only
     -- covers still MISSING are re-statted, which preserves the retry above.
-    --
-    -- TWO slots, most recent first: going from a grid into one of its items and
-    -- back is the commonest walk there is, and a single slot re-resolved the
-    -- parent grid on every return.
-    Util._thumb_memo = {}
+    Util._thumb_memo = nil
     -- Resolves ONE item to the icon path it should show, plus the url/hash needed if
     -- that file still has to be fetched. This is the ONLY thing that differs between
     -- an album grid and a playlist grid -- the memo, the re-stat of missing covers,
@@ -771,7 +762,7 @@ return function(Util, ctx)
 
     -- `focus` is the row the menu is about to open on (0-based, same convention as
     -- ui_menu's `sel`). Covers are fetched outwards from there rather than from
-    -- the top of the list, because those are the ones about to be drawn -- see
+    -- the top of the list, because those are the ones rofi is about to render -- see
     -- the ordering below. `view` only names the draw in the log.
     Util.album_thumbs = function(entries, items, kind, focus, view)
         items = items or {}
@@ -789,17 +780,9 @@ return function(Util, ctx)
         -- this very table in place, and a memo keyed on identity alone would then
         -- hand every row below the removal the previous row's cover. `kind` is in the
         -- key too, so an album grid and a playlist grid cannot share a memo.
-        local slots, memo = Util._thumb_memo, nil
-        for si = 1, #slots do
-            local m = slots[si]
-            if m.items == items and m.n == n and m.kind == kind
-                    and m.first == items[1] and m.last == items[n] then
-                memo = m
-                if si ~= 1 then table.remove(slots, si); table.insert(slots, 1, m) end
-                break
-            end
-        end
-        if not memo then
+        local memo = Util._thumb_memo
+        if not (memo and memo.items == items and memo.n == n and memo.kind == kind
+                and memo.first == items[1] and memo.last == items[n]) then
             memo = {items = items, n = n, kind = kind, first = items[1], last = items[n],
                     paths = {}, urls = {}, hashes = {}, ids = {}, missing = {}}
             for i, it in ipairs(items) do
@@ -816,8 +799,7 @@ return function(Util, ctx)
                     memo.missing[#memo.missing + 1] = i
                 end
             end
-            table.insert(slots, 1, memo)
-            slots[3] = nil
+            Util._thumb_memo = memo
         end
         local paths = memo.paths
         local pending, still = {}, {}
@@ -840,7 +822,7 @@ return function(Util, ctx)
                 -- only for a file that is actually an image. This used to accept any
                 -- non-empty file, which is the one failure F5 could never repair: a
                 -- truncated or half-written cover read as cached, its real path went
-                -- to the UI, the decode failed, and because spoot believed that cover
+                -- to rofi, the decode failed, and because spoot believed that cover
                 -- was fine it was never re-fetched. Validating it here puts it back
                 -- in `pending` instead, where the next draw replaces it.
                 ok = Util._art_valid_file(p)
@@ -865,8 +847,8 @@ return function(Util, ctx)
             end
         end
         memo.missing = still
-        -- Every row that has no file right now. None of these may be named as an
-        -- icon (see the decoration loop). Rows fetched successfully just below drop
+        -- Every row that has no file right now. rofi must not be pointed at any of
+        -- these (see the decoration loop). Rows fetched successfully just below drop
         -- out of it.
         local blank = {}
         for _, pd in ipairs(pending) do blank[pd.row] = true end
@@ -901,12 +883,36 @@ return function(Util, ctx)
             end
             if #tail > 0 then tail_action = Util.spawn_art_prefetch(tail, kind) end
         end
-        -- NO ICON AT ALL for a cover that is not on disk yet. Never name a file
-        -- that does not exist: an Image reloads only when its `source` CHANGES, so
-        -- a path named before the file lands leaves it in Error, and the art event
-        -- that follows names the identical string and changes nothing. An empty
-        -- source lets the grid draw its own placeholder, and the art event then
-        -- names a path that IS a change.
+        -- NEVER name a file that is not on disk yet. rofi's icon fetcher caches by
+        -- path with no eviction, no invalidation and no retry anywhere in it: one
+        -- failed load stores a null surface against that path and every later render
+        -- of the row returns it, so the tile stays blank for the life of the window.
+        -- Proven directly -- a tile whose file appeared one second after the menu
+        -- opened was still empty two seconds later. That is the whole bug, including
+        -- the case where the artwork IS cached: skimming fast reaches rows the
+        -- prefetch has not written, rofi writes those paths off, and the covers that
+        -- land a moment later are never looked at again. Only a NEW rofi has a clean
+        -- icon cache, which is why refreshing was the only thing that worked.
+        --
+        -- So a row without a file yet gets the placeholder, which always exists and
+        -- always loads. The tile is then a deliberate render rather than a hole, and
+        -- nothing is poisoned: the next draw upgrades it to the real cover.
+        -- NO ICON AT ALL for a cover that is not on disk yet -- not the shipped
+        -- "no cover" graphic, which is what stood here.
+        --
+        -- The rule above it survives: never name a file that does not exist. It was
+        -- written for rofi's icon fetcher, which stored a null surface against the
+        -- path and returned it forever after, but QML has the same failure by a
+        -- different route -- an Image reloads when its `source` CHANGES, so naming a
+        -- path before the file lands leaves it in Error and the art event that
+        -- follows names the identical string and changes nothing.
+        --
+        -- Standing in a real picture was rofi's half of it, because a dmenu row
+        -- needed some icon or the grid reflowed. Here an absent icon is an empty
+        -- source, the grid draws its own placeholder behind it, and when the cover
+        -- lands the art event names a path that IS a change -- so it loads, and the
+        -- tile was never briefly wearing a graphic that says the album has no cover
+        -- when the truth is that it has one and it is on its way.
         local placeholders = 0
         for i, e in ipairs(entries or {}) do
             local p = paths[i]
