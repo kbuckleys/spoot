@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="zenworks.png">
+  <img src="spoot.png">
 </p>
 
 <h3 align="center">
