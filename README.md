@@ -1,7 +1,6 @@
-<p align="center"><picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/5b4d8a87-b8d6-4f07-941c-a3361f5ba01f">
-  <img src="https://github.com/user-attachments/assets/5b4d8a87-b8d6-4f07-941c-a3361f5ba01f" alt="spoot">
-</picture></p>
+<p align="center">
+  <img src="zenworks.png" alt="spoot" width="800">
+</p>
 
 <h3 align="center">
 <b>A keyboard-first Spotify client</b> --  Part of the <a href="https://github.com/kbuckleys/ZENWORKS">ZENWORKS</a> Suite
